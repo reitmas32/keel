@@ -11,6 +11,7 @@ such as Cursor, Gemini CLI or OpenCode.
 | --- | --- | --- |
 | [`keel-docs`](plugins/keel-docs/skills/keel-docs/SKILL.md) | Writes, extends and audits a repository's `docs/` so it builds with `keel docs` and follows the Foundathyon documentation standard | 0.1.0 |
 | [`keel-release`](plugins/keel-release/skills/keel-release/SKILL.md) | Cuts a release: proposes the next semantic version from the commits, bumps the version files `.keel` lists, runs the checks and `keel docs --check --strict`, and tags with `keel create-version` — asking before anything is pushed | 0.1.0 |
+| [`keel-setup`](plugins/keel-setup/skills/keel-setup/SKILL.md) | Prepares a repository for keel releases, or audits one: `.keel` from `keel init`, the Release workflow and keel-api's canonical `report-version.sh` that confirm every version to keel-api, `docs/releases.md`, `dist/` ignored, and the `KEEL_CI_TOKEN` credential — asking before CI or secrets change, and never tagging | 0.1.0 |
 
 ## Install
 
@@ -97,6 +98,7 @@ plugins/<plugin>/
     SKILL.md                        the skill: frontmatter, then instructions
     references/                     read on demand, so SKILL.md stays short
     scripts/                        run by the agent; standard library only
+    assets/                         templates and files copied into repositories as-is
 scripts/validate.py                 checks every rule below
 tests/                              tests for the skills' scripts
 ```

@@ -1,0 +1,83 @@
+name: Release
+
+# A version of this library is a tag, such as v1.4.0, which
+# `keel create-version` makes and pushes. This workflow checks the tagged
+# commit and reports the version to keel-api with the repository's CI
+# credential. keel's CLI reports the same version from the machine that tagged
+# it; keel-api joins the two reports into one record and counts this one as
+# the confirmation. A version the CLI reported and this workflow did not
+# confirm in time shows up in keel's admin as pending confirmation.
+#
+# It needs one secret, KEEL_CI_TOKEN: a CI credential (klc_…) for this
+# repository, from keel's admin under CI credentials. A KEEL_API_URL variable,
+# on the repository or the organization, overrides keel-api's address. See
+# docs/releases.md.
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  # Reports a tag again: one made before this workflow existed, or one whose
+  # run can no longer be re-run.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to check and report, such as v1.4.0
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# One run per tag. A second run of the same tag waits for the first instead of
+# racing it: both would report, and the order would decide the status.
+concurrency:
+  group: release-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: build
+        run: go build ./...
+
+      - name: vet
+        run: go vet ./...
+
+      - name: test
+        run: go test -race ./...
+
+  report:
+    name: report to keel-api
+    needs: verify
+    # Also when verify failed: a tag whose checks failed is still a version
+    # consumers can fetch, and keel must know it failed. Not when the run was
+    # cancelled, which concluded nothing.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      # The canonical script lives in keel-api, at scripts/ci, where it is
+      # tested against the API; this is a verbatim copy.
+      - name: report the version
+        env:
+          KEEL_API_URL: ${{ vars.KEEL_API_URL || 'https://keel.foundathyon.dev' }}
+          KEEL_CI_TOKEN: ${{ secrets.KEEL_CI_TOKEN }}
+          KEEL_TAG: ${{ inputs.tag || github.ref_name }}
+          KEEL_STATUS: ${{ needs.verify.result == 'success' && 'published' || 'failed' }}
+          KEEL_CHECKS: ${{ needs.verify.result }}
+        run: bash .github/scripts/report-version.sh
