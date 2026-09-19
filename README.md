@@ -10,6 +10,7 @@ such as Cursor, Gemini CLI or OpenCode.
 | Skill | What it does | Version |
 | --- | --- | --- |
 | [`keel-docs`](plugins/keel-docs/skills/keel-docs/SKILL.md) | Writes, extends and audits a repository's `docs/` so it builds with `keel docs` and follows the Foundathyon documentation standard | 0.1.0 |
+| [`keel-release`](plugins/keel-release/skills/keel-release/SKILL.md) | Cuts a release: proposes the next semantic version from the commits, bumps the version files `.keel` lists, runs the checks and `keel docs --check --strict`, and tags with `keel create-version` — asking before anything is pushed | 0.1.0 |
 
 ## Install
 

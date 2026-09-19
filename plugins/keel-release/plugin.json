@@ -1,0 +1,12 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "keel-release",
+  "version": "0.1.0",
+  "description": "Cut a release with keel: choose the next semantic version, bump the version files, pass the checks, and tag with `keel create-version` — asking before anything is pushed.",
+  "author": {
+    "name": "Foundathyon",
+    "url": "https://github.com/fundathyon"
+  },
+  "repository": "https://github.com/fundathyon/keel-ai-marketplace",
+  "keywords": ["release", "semver", "versioning", "tags", "keel"]
+}

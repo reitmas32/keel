@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "Foundathyon's skills for coding agents — one source for Claude Code, Codex and GitHub Copilot.",
-    "version": "0.1.0"
+    "version": "0.2.0"
   },
   "plugins": [
     {
@@ -16,6 +16,14 @@
       "version": "0.1.0",
       "category": "documentation",
       "keywords": ["documentation", "docs", "keel", "markdown"]
+    },
+    {
+      "name": "keel-release",
+      "source": "./plugins/keel-release",
+      "description": "Cut a release with keel: choose the next semantic version, bump the version files, pass the checks, and tag with `keel create-version` — asking before anything is pushed.",
+      "version": "0.1.0",
+      "category": "release",
+      "keywords": ["release", "semver", "versioning", "tags", "keel"]
     }
   ]
 }
