@@ -1,0 +1,21 @@
+{
+  "name": "keel",
+  "owner": {
+    "name": "Foundathyon",
+    "url": "https://github.com/fundathyon"
+  },
+  "metadata": {
+    "description": "Foundathyon's skills for coding agents — one source for Claude Code, Codex and GitHub Copilot.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "keel-docs",
+      "source": "./plugins/keel-docs",
+      "description": "Write, extend and audit docs/ so it builds with `keel docs` and follows the Foundathyon documentation standard.",
+      "version": "0.1.0",
+      "category": "documentation",
+      "keywords": ["documentation", "docs", "keel", "markdown"]
+    }
+  ]
+}
