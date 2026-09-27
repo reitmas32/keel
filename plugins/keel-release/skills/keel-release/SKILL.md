@@ -107,8 +107,8 @@ choose another.
    the tag. If `keel docs --help` does not list `--check`, use
    `keel docs --json --out "$(mktemp -d)/site"` instead.
 3. `keel create-version <version> --dry-run`. It runs every check the real run
-   will — GitHub remote, upstream, commits pushed, clean tree, tag free — and
-   changes nothing. With a release commit not yet pushed it reports `synced`
+   will — GitHub remote, upstream, branch on the remote and level with it,
+   clean tree, tag free — and changes nothing. With a release commit not yet pushed it reports `synced`
    as failing (`not_synced` in `--json`): that is the next step, not an error.
 
 Any other failure: stop, report it, ask.
@@ -149,7 +149,8 @@ With `--json`, the `error` field names the case.
 | `remote_not_github`, `no_remote` | keel releases to GitHub only | Tell the user; nothing to fix here |
 | `detached_head` | Not on a branch | Check out the release branch — ask first |
 | `no_upstream` | The branch tracks nothing | `git push -u <remote> <branch>` — ask first |
-| `not_synced` | HEAD has commits the remote has not seen | Step 5.1 — ask first. Behind as well: stop |
+| `no_remote_branch` | The remote has no branch of this name — never pushed as itself, or deleted after a merge | Never pushed: `git push -u <remote> <branch>` — ask first. Deleted: stop, ask whether to release from main |
+| `not_synced` | HEAD is ahead of, behind, or diverged from `<remote>/<branch>` (`ahead`, `behind` in `--json`) | Ahead only: step 5.1 — ask first. Behind or diverged: stop |
 | `fetch_failed` | The remote could not be reached | Check network and credentials, retry |
 | `tag_exists` | That version is taken | Choose the next version; never delete the tag |
 | `declined` (exit 130) | The dirty-tree question was answered no | Nothing changed: commit or stash, rerun |
