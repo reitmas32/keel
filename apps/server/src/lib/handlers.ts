@@ -1,7 +1,15 @@
-import { ciResultRequestSchema, createDeployRequestSchema, type Deploy, type DeployDetail } from "@keel/shared";
+import {
+  ciResultRequestSchema,
+  createDeployRequestSchema,
+  type Deploy,
+  type DeployDetail,
+  registerVersionRequestSchema,
+  VERSION_CI_STATUSES,
+  type VersionCiStatus,
+} from "@keel/shared";
 import type { z } from "zod";
 import type { AppContext } from "./context";
-import { recordCiResult, requestDeploy } from "./deploys";
+import { recordCiResult, registerVersion, requestDeploy } from "./deploys";
 import { DokployError } from "./dokploy";
 import { ApiError } from "./errors";
 import type { DeployRecord } from "./store";
@@ -69,6 +77,34 @@ export const handlers = {
       if (!scope) throw new ApiError(404, `El repo ${owner}/${name} no está vinculado a ningún scope.`);
       const services = ctx.store.listServices(scope.id).map((s) => ({ alias: s.alias }));
       return Response.json({ repo: scope.repo, services });
+    }),
+
+  registerVersion: (ctx: AppContext, request: Request) =>
+    handle(async () => {
+      const body = await parseBody(request, registerVersionRequestSchema);
+      return Response.json(registerVersion(ctx.store, body, ctx.now()), { status: 201 });
+    }),
+
+  listRepoVersions: (ctx: AppContext, owner: string, name: string, params: URLSearchParams) =>
+    handle(() => {
+      const scope = ctx.store.getScopeByRepo(`${owner}/${name}`);
+      if (!scope) throw new ApiError(404, `El repo ${owner}/${name} no está vinculado a ningún scope.`);
+
+      const limitParam = params.get("limit");
+      const limit = limitParam === null ? DEFAULT_LIST_LIMIT : Number(limitParam);
+      if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIST_LIMIT) {
+        throw new ApiError(400, `limit debe ser un entero entre 1 y ${MAX_LIST_LIMIT}.`);
+      }
+      const status = params.get("status");
+      if (status !== null && !VERSION_CI_STATUSES.includes(status as VersionCiStatus)) {
+        throw new ApiError(400, `status debe ser uno de: ${VERSION_CI_STATUSES.join(", ")}.`);
+      }
+
+      const versions = ctx.store.listVersions(scope.repo, {
+        limit,
+        ...(status !== null && { status: status as VersionCiStatus }),
+      });
+      return Response.json({ repo: scope.repo, versions });
     }),
 
   listRepoDeploys: (ctx: AppContext, owner: string, name: string, params: URLSearchParams) =>

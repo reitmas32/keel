@@ -1,4 +1,11 @@
-import { type CiResultRequest, type CreateDeployRequest, type DeployStatus, isTerminal } from "@keel/shared";
+import {
+  type CiResultRequest,
+  type CreateDeployRequest,
+  type DeployStatus,
+  isTerminal,
+  type RegisterVersionRequest,
+  type Version,
+} from "@keel/shared";
 import { ApiError } from "./errors";
 import type { DeployRecord, Store } from "./store";
 import { verifyToken } from "./tokens";
@@ -60,6 +67,10 @@ export function recordCiResult(
   }
 
   store.upsertCiResult({ ...req, receivedAt: now.toISOString() });
+  store.recordVersionCi(
+    { repo: req.repo, tag: req.tag, sha: req.sha, status: req.status, ...(req.runUrl && { runUrl: req.runUrl }) },
+    now,
+  );
 
   const to = ciOutcome(req.status);
   const updated = store
@@ -74,4 +85,15 @@ export function recordCiResult(
     )
     .filter((d): d is DeployRecord => d !== undefined);
   return { updated };
+}
+
+/**
+ * Registers a version `keel create-version` just pushed, so keel can show it as pending before its CI
+ * reports. Unauthenticated and informational: deploys still wait for the token-signed `ci-result`.
+ */
+export function registerVersion(store: Store, req: RegisterVersionRequest, now: Date): Version {
+  const scope = store.getScopeByRepo(req.repo);
+  if (!scope)
+    throw new ApiError(404, `El repo ${req.repo} no está vinculado a ningún scope en esta instancia de keel.`);
+  return store.registerVersion(req, now);
 }

@@ -48,6 +48,10 @@ export class DeployWorker {
 
   private expireWaiting(): void {
     const cutoff = this.now().getTime() - minutes(this.options.ciExpiryMinutes);
+    // Versions whose CI never reported, with the same deadline as the deploys waiting on them.
+    for (const v of this.store.expirePendingVersions(new Date(cutoff), this.now())) {
+      this.log(`versión ${v.repo}@${v.tag} expirada: su CI no avisó`);
+    }
     for (const d of this.store.listDeploys({ status: "waiting_ci" })) {
       if (Date.parse(d.createdAt) < cutoff) {
         this.store.transition(d.id, "expired", this.now(), {

@@ -1,6 +1,14 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { type CiResultRequest, canTransition, type Deploy, type DeployStatus, isTerminal } from "@keel/shared";
+import {
+  type CiResultRequest,
+  canTransition,
+  type Deploy,
+  type DeployStatus,
+  isTerminal,
+  type Version,
+  type VersionCiStatus,
+} from "@keel/shared";
 
 export interface Scope {
   id: string;
@@ -72,6 +80,19 @@ const toDeploy = (r: Row): DeployRecord => ({
   finishedAt: (r.finished_at as string | null) ?? null,
   createdAt: r.created_at as string,
   updatedAt: r.updated_at as string,
+});
+
+const toVersion = (r: Row): Version => ({
+  repo: r.repo as string,
+  tag: r.tag as string,
+  sha: r.sha as string,
+  branch: (r.branch as string | null) ?? null,
+  createdByName: (r.created_by_name as string | null) ?? null,
+  createdByEmail: (r.created_by_email as string | null) ?? null,
+  createdAt: r.created_at as string,
+  ciStatus: r.ci_status as VersionCiStatus,
+  ciFinishedAt: (r.ci_finished_at as string | null) ?? null,
+  runUrl: (r.run_url as string | null) ?? null,
 });
 
 /** `owner/name`, lowercased, so lookups ignore GitHub's case-insensitivity. */
@@ -177,6 +198,91 @@ export class Store {
       status: row.status as CiResult["status"],
       receivedAt: row.received_at as string,
     };
+  }
+
+  // --- versions ---
+
+  /**
+   * Records a version `keel create-version` just pushed, as `pending`. If keel already knows it (its CI
+   * reported first), only the fields it was missing are filled in: the CI outcome is never overwritten.
+   */
+  registerVersion(
+    input: { repo: string; tag: string; sha: string; branch?: string; createdByName?: string; createdByEmail?: string },
+    now: Date,
+  ): Version {
+    const repo = normalizeRepo(input.repo);
+    this.db
+      .prepare(
+        `INSERT INTO versions (repo, tag, sha, branch, created_by_name, created_by_email, created_at, ci_status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')
+         ON CONFLICT (repo, tag) DO UPDATE SET
+           branch = COALESCE(versions.branch, excluded.branch),
+           created_by_name = COALESCE(versions.created_by_name, excluded.created_by_name),
+           created_by_email = COALESCE(versions.created_by_email, excluded.created_by_email)`,
+      )
+      .run(
+        repo,
+        input.tag,
+        input.sha,
+        input.branch ?? null,
+        input.createdByName ?? null,
+        input.createdByEmail ?? null,
+        now.toISOString(),
+      );
+    return this.getVersion(repo, input.tag) as Version;
+  }
+
+  /** Stores a version's CI outcome, creating the version if `create-version` never registered it. */
+  recordVersionCi(
+    input: { repo: string; tag: string; sha: string; status: VersionCiStatus; runUrl?: string },
+    now: Date,
+  ): Version {
+    const repo = normalizeRepo(input.repo);
+    const ts = now.toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO versions (repo, tag, sha, created_at, ci_status, ci_finished_at, run_url)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (repo, tag) DO UPDATE SET
+           sha = excluded.sha,
+           ci_status = excluded.ci_status,
+           ci_finished_at = excluded.ci_finished_at,
+           run_url = COALESCE(excluded.run_url, versions.run_url)`,
+      )
+      .run(repo, input.tag, input.sha, ts, input.status, ts, input.runUrl ?? null);
+    return this.getVersion(repo, input.tag) as Version;
+  }
+
+  getVersion(repo: string, tag: string): Version | undefined {
+    const row = this.db.prepare("SELECT * FROM versions WHERE repo = ? AND tag = ?").get(normalizeRepo(repo), tag);
+    return row ? toVersion(row) : undefined;
+  }
+
+  /** Newest first. */
+  listVersions(repo: string, { limit = 20, status }: { limit?: number; status?: VersionCiStatus } = {}): Version[] {
+    const params: (string | number)[] = [normalizeRepo(repo)];
+    let where = "repo = ?";
+    if (status) {
+      where += " AND ci_status = ?";
+      params.push(status);
+    }
+    return this.db
+      .prepare(`SELECT * FROM versions WHERE ${where} ORDER BY created_at DESC, tag DESC LIMIT ?`)
+      .all(...params, limit)
+      .map(toVersion);
+  }
+
+  /** Marks as `expired` the versions still `pending` that were created before `cutoff`. Returns them. */
+  expirePendingVersions(cutoff: Date, now: Date): Version[] {
+    const stale = this.db
+      .prepare("SELECT * FROM versions WHERE ci_status = 'pending' AND created_at < ?")
+      .all(cutoff.toISOString())
+      .map(toVersion);
+    const update = this.db.prepare(
+      "UPDATE versions SET ci_status = 'expired', ci_finished_at = ? WHERE repo = ? AND tag = ? AND ci_status = 'pending'",
+    );
+    for (const v of stale) update.run(now.toISOString(), v.repo, v.tag);
+    return stale;
   }
 
   // --- deploys ---

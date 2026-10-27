@@ -50,6 +50,24 @@ CREATE TABLE IF NOT EXISTS deploys (
 
 CREATE INDEX IF NOT EXISTS deploys_status ON deploys (status, created_at);
 CREATE INDEX IF NOT EXISTS deploys_repo_sha ON deploys (repo, sha);
+
+-- v0.4.0: every version keel knows of, from \`keel create-version\` (pending) or from its CI result.
+CREATE TABLE IF NOT EXISTS versions (
+  repo             TEXT NOT NULL,
+  tag              TEXT NOT NULL,
+  sha              TEXT NOT NULL,
+  branch           TEXT,
+  created_by_name  TEXT,
+  created_by_email TEXT,
+  created_at       TEXT NOT NULL,
+  ci_status        TEXT NOT NULL,
+  ci_finished_at   TEXT,
+  run_url          TEXT,
+  PRIMARY KEY (repo, tag)
+);
+
+CREATE INDEX IF NOT EXISTS versions_repo_created ON versions (repo, created_at);
+CREATE INDEX IF NOT EXISTS versions_status ON versions (ci_status, created_at);
 `;
 
 /** Opens (creating if needed) the SQLite database and applies the schema. Use ":memory:" in tests. */
