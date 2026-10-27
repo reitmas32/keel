@@ -1,0 +1,22 @@
+# One keel instance per organization (e.g. one for Jalo, one for Konectus).
+# In Dokploy: create a Compose service, paste this file, set the variables in
+# the Environment tab and attach a domain to `keel` on port 3000.
+
+services:
+  keel:
+    # Published by keel's release workflow. Replace <owner> with the GitHub user/org that hosts keel.
+    image: ghcr.io/<owner>/keel-server:latest
+    restart: unless-stopped
+    environment:
+      DOKPLOY_URL: ${DOKPLOY_URL:?URL de tu Dokploy, p.ej. https://dokploy.konectus.internal}
+      DOKPLOY_API_KEY: ${DOKPLOY_API_KEY:?API key de Dokploy (Settings → Profile → API/CLI)}
+      KEEL_ADMIN_PASSWORD: ${KEEL_ADMIN_PASSWORD:?Contraseña del admin, mínimo 12 caracteres}
+      KEEL_CI_EXPIRY_MINUTES: ${KEEL_CI_EXPIRY_MINUTES:-60}
+      KEEL_DEPLOY_TIMEOUT_MINUTES: ${KEEL_DEPLOY_TIMEOUT_MINUTES:-15}
+    volumes:
+      - keel-data:/data
+    expose:
+      - "3000"
+
+volumes:
+  keel-data:
