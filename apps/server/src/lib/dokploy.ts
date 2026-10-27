@@ -21,6 +21,8 @@ export interface DokployClient {
     target: DokployTarget,
     since: Date,
   ): Promise<{ status: DokployDeploymentStatus; message?: string }>;
+  /** `project/environment/name` of the service, or undefined if Dokploy can't say. Never throws. */
+  describe(target: DokployTarget): Promise<string | undefined>;
 }
 
 export class DokployError extends Error {
@@ -77,6 +79,16 @@ interface DokployCompose {
   env: string | null;
 }
 
+/** The fields `describe()` reads; `application.one` and `compose.one` both carry them. */
+interface DokployNamed {
+  name?: string;
+  environment?: { name?: string; project?: { name?: string } };
+}
+
+/** How long a service's Dokploy name is reused before asking again. */
+const DESCRIBE_TTL_MS = 10 * 60_000;
+const DESCRIBE_TIMEOUT_MS = 3_000;
+
 interface DokployDeployment {
   status: string;
   createdAt: string;
@@ -90,6 +102,8 @@ export class HttpDokployClient implements DokployClient {
     private readonly apiKey: string,
     private readonly fetchImpl: typeof fetch = fetch,
   ) {}
+
+  private readonly names = new Map<string, { name: string | undefined; expires: number }>();
 
   deploy(target: DokployTarget, tag: string): Promise<string> {
     return target.kind === "compose"
@@ -115,6 +129,28 @@ export class HttpDokployClient implements DokployClient {
     if (latest.status === "error") return { status: "error", message: latest.errorMessage ?? undefined };
     if (latest.status === "cancelled") return { status: "error", message: "Dokploy canceló el deployment." };
     return { status: "running" };
+  }
+
+  async describe(target: DokployTarget): Promise<string | undefined> {
+    const key = `${target.kind}:${target.id}`;
+    const cached = this.names.get(key);
+    if (cached && cached.expires > Date.now()) return cached.name;
+    let name: string | undefined;
+    try {
+      // A slow Dokploy must not hold up `keel scopes`: past this, the service shows by its id.
+      const signal = AbortSignal.timeout(DESCRIBE_TIMEOUT_MS);
+      const service =
+        target.kind === "compose"
+          ? await this.get<DokployNamed>("compose.one", { composeId: target.id }, signal)
+          : await this.get<DokployNamed>("application.one", { applicationId: target.id }, signal);
+      const parts = [service.environment?.project?.name, service.environment?.name, service.name];
+      name = parts.every(Boolean) ? parts.join("/") : service.name;
+    } catch {
+      // Best effort: listing services must not fail because Dokploy is slow or down.
+      return cached?.name;
+    }
+    this.names.set(key, { name, expires: Date.now() + DESCRIBE_TTL_MS });
+    return name;
   }
 
   private async deployApplication(applicationId: string, tag: string): Promise<string> {
@@ -149,9 +185,9 @@ export class HttpDokployClient implements DokployClient {
     return `${tagVariable}=${tag}`;
   }
 
-  private async get<T>(procedure: string, query: Record<string, string>): Promise<T> {
+  private async get<T>(procedure: string, query: Record<string, string>, signal?: AbortSignal): Promise<T> {
     const url = `${this.endpoint(procedure)}?${new URLSearchParams(query)}`;
-    return this.request<T>(url, { method: "GET" });
+    return this.request<T>(url, { method: "GET", ...(signal && { signal }) });
   }
 
   private async post<T>(procedure: string, body: unknown): Promise<T> {

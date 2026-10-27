@@ -4,6 +4,7 @@ import {
   type Deploy,
   type DeployDetail,
   registerVersionRequestSchema,
+  type ServiceSummary,
   VERSION_CI_STATUSES,
   type VersionCiStatus,
 } from "@keel/shared";
@@ -72,10 +73,29 @@ export const handlers = {
     }),
 
   listServices: (ctx: AppContext, owner: string, name: string) =>
-    handle(() => {
+    handle(async () => {
       const scope = ctx.store.getScopeByRepo(`${owner}/${name}`);
       if (!scope) throw new ApiError(404, `El repo ${owner}/${name} no está vinculado a ningún scope.`);
-      const services = ctx.store.listServices(scope.id).map((s) => ({ alias: s.alias }));
+      const services: ServiceSummary[] = await Promise.all(
+        ctx.store.listServices(scope.id).map(async (s) => {
+          const [current] = ctx.store.listDeploys(
+            { serviceId: s.id, status: "deployed" },
+            { limit: 1, newestFirst: true },
+          );
+          const [last] = ctx.store.listDeploys({ serviceId: s.id }, { limit: 1, newestFirst: true });
+          return {
+            alias: s.alias,
+            kind: s.kind,
+            tagVariable: s.tagVariable,
+            dokployId: s.dokployId,
+            dokployUrl: s.dokployUrl,
+            dokployName:
+              (await ctx.dokploy.describe({ kind: s.kind, id: s.dokployId, tagVariable: s.tagVariable })) ?? null,
+            current: current ? toPublic(current) : null,
+            last: last ? toPublic(last) : null,
+          };
+        }),
+      );
       return Response.json({ repo: scope.repo, services });
     }),
 

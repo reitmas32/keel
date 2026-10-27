@@ -23,6 +23,13 @@ export class FakeDokploy implements DokployClient {
   async latestDeploymentStatus() {
     return { status: this.status, message: this.message };
   }
+
+  /** Dokploy names by service id; unknown ids describe as undefined, like an unreachable Dokploy. */
+  names = new Map<string, string>([["app123", "DEV/production/app"]]);
+
+  async describe(target: DokployTarget) {
+    return this.names.get(target.id);
+  }
 }
 
 export function createTestContext() {
@@ -55,6 +62,6 @@ export function createTestContext() {
     },
     clock.now(),
   );
-  const ctx = { store, worker, now: clock.now } as unknown as AppContext;
+  const ctx = { store, dokploy, worker, now: clock.now } as unknown as AppContext;
   return { ctx, store, dokploy, worker, clock, scope, service, ciToken };
 }

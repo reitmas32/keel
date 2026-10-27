@@ -210,3 +210,33 @@ describe("HttpDokployClient — deployment status", () => {
     });
   });
 });
+
+describe("HttpDokployClient — describe", () => {
+  const named = { name: "jalo-api", environment: { name: "staging", project: { name: "DEV" } } };
+
+  it("names a service as project/environment/name and caches it", async () => {
+    const calls: Call[] = [];
+    const client = new HttpDokployClient("https://d", "k", fakeFetch({ "compose.one": named }, calls));
+
+    expect(await client.describe(compose)).toBe("DEV/staging/jalo-api");
+    expect(await client.describe(compose)).toBe("DEV/staging/jalo-api");
+    expect(calls.map((c) => c.url)).toEqual(["/api/compose.one?composeId=cmp1"]);
+  });
+
+  it("asks application.one for an Application and falls back to the bare name", async () => {
+    const calls: Call[] = [];
+    const client = new HttpDokployClient("https://d", "k", fakeFetch({ "application.one": { name: "web" } }, calls));
+    expect(await client.describe(application)).toBe("web");
+    expect(calls[0]?.url).toBe("/api/application.one?applicationId=app1");
+  });
+
+  it("never throws: an unreachable or failing Dokploy describes as undefined", async () => {
+    const failing = new HttpDokployClient("https://d", "k", fakeFetch({}, []));
+    expect(await failing.describe(compose)).toBeUndefined();
+
+    const down = new HttpDokployClient("https://d", "k", (async () => {
+      throw new TypeError("fetch failed");
+    }) as typeof fetch);
+    expect(await down.describe(compose)).toBeUndefined();
+  });
+});

@@ -73,3 +73,19 @@ export interface DeployDetail extends Deploy {
   serviceKind: "application" | "compose" | null;
   tagVariable: string | null;
 }
+
+/** A service of a repo as `keel scopes` shows it. Servers before v0.5.0 only send `alias`. */
+export const serviceSummarySchema = z.object({
+  alias: z.string(),
+  kind: z.enum(["application", "compose"]).optional(),
+  tagVariable: z.string().nullable().optional(),
+  dokployId: z.string().optional(),
+  dokployUrl: z.string().optional(),
+  // `project/environment/name` as Dokploy calls it; null when Dokploy didn't answer.
+  dokployName: z.string().nullable().optional(),
+  // The newest deploy that reached `deployed`: what the service runs, as far as keel knows.
+  current: deploySchema.nullable().optional(),
+  // The newest deploy of any status.
+  last: deploySchema.nullable().optional(),
+});
+export type ServiceSummary = z.infer<typeof serviceSummarySchema>;

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { recordCiResult, requestDeploy } from "./deploys";
 import { handlers } from "./handlers";
 import { parseGithubRepoUrl } from "./scopes";
 import { createTestContext, SHA } from "./testing";
@@ -15,7 +16,12 @@ describe("API handlers", () => {
     const { ctx, ciToken } = createTestContext();
 
     const services = await handlers.listServices(ctx, "konectus-io", "app");
-    expect(await services.json()).toEqual({ repo: "konectus-io/app", services: [{ alias: "api-prod" }] });
+    expect(await services.json()).toMatchObject({
+      repo: "konectus-io/app",
+      services: [
+        { alias: "api-prod", kind: "application", dokployName: "DEV/production/app", current: null, last: null },
+      ],
+    });
 
     const created = await handlers.createDeploy(
       ctx,
@@ -76,5 +82,36 @@ describe("parseGithubRepoUrl", () => {
 
   it("rejects non-GitHub URLs", () => {
     expect(parseGithubRepoUrl("https://gitlab.com/konectus-io/app")).toBeUndefined();
+  });
+});
+
+describe("GET /repos/:owner/:name/services", () => {
+  it("adds each service's Dokploy name, current version and last deploy", async () => {
+    const { ctx, store, worker, dokploy, clock, ciToken } = createTestContext();
+    const deployReq = { repo: "konectus-io/app", tag: "v1.0.0", sha: SHA, service: "api-prod" };
+    recordCiResult(store, { ...deployReq, status: "success" }, ciToken, clock.now());
+    requestDeploy(store, deployReq, clock.now());
+    await worker.tick();
+    dokploy.status = "done";
+    await worker.tick();
+    clock.advanceMinutes(1);
+    const failing = { ...deployReq, tag: "v1.1.0", sha: "b".repeat(40) };
+    recordCiResult(store, { ...failing, status: "failure" }, ciToken, clock.now());
+    requestDeploy(store, failing, clock.now());
+
+    const body = await (await handlers.listServices(ctx, "konectus-io", "app")).json();
+    expect(body.services[0]).toMatchObject({
+      alias: "api-prod",
+      dokployName: "DEV/production/app",
+      current: { tag: "v1.0.0", status: "deployed" },
+      last: { tag: "v1.1.0", status: "ci_failed" },
+    });
+  });
+
+  it("still lists a service when Dokploy can't describe it", async () => {
+    const { ctx, dokploy } = createTestContext();
+    dokploy.names.clear();
+    const body = await (await handlers.listServices(ctx, "konectus-io", "app")).json();
+    expect(body.services[0]).toMatchObject({ alias: "api-prod", dokployName: null, dokployId: "app123" });
   });
 });

@@ -1,5 +1,5 @@
 import { openDb } from "./db";
-import { HttpDokployClient } from "./dokploy";
+import { type DokployClient, HttpDokployClient } from "./dokploy";
 import { type Env, loadEnv } from "./env";
 import { Store } from "./store";
 import { DeployWorker } from "./worker";
@@ -7,6 +7,7 @@ import { DeployWorker } from "./worker";
 export interface AppContext {
   env: Env;
   store: Store;
+  dokploy: DokployClient;
   worker: DeployWorker;
   now: () => Date;
 }
@@ -25,7 +26,7 @@ export function getContext(): AppContext {
       ciExpiryMinutes: env.KEEL_CI_EXPIRY_MINUTES,
       deployTimeoutMinutes: env.KEEL_DEPLOY_TIMEOUT_MINUTES,
     });
-    globalForKeel.keel = { env, store, worker, now: () => new Date() };
+    globalForKeel.keel = { env, store, dokploy, worker, now: () => new Date() };
   }
   return globalForKeel.keel;
 }
