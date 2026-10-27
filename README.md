@@ -32,7 +32,24 @@ keel use                         # elige la organización activa entre las confi
 keel create-version v1.4.0       # valida y publica el tag
 keel deploy                      # pregunta servicio y versión
 keel deploy -l -s api-prod       # despliega la última versión en api-prod
+keel deploys                     # deploys del repo: estado, cuándo terminaron y por qué fallaron
+keel deploys -s staging -n 50    # solo un servicio, hasta 50
+keel deploys d3f1                # detalle y línea de tiempo de un deploy (id o sus primeros caracteres)
+keel update                      # instala la última versión de la CLI publicada en GitHub
+keel update --check              # solo avisa si hay una versión nueva
 ```
+
+`keel deploys` muestra, del más reciente al más antiguo:
+
+```text
+  VERSIÓN   SERVICIO     ESTADO              PEDIDO      TERMINÓ     DURACIÓN   ID
+  v1.5.0    staging      ◌ esperando CI      hoy 15:28   —           14s…       511db4d8
+  v1.4.0    staging      ✔ desplegado        hoy 15:27   hoy 15:27   9s         2cf61934
+  v1.3.1    production   ✖ falló el deploy   hoy 15:27   hoy 15:27   6s         06e41709
+            └ Dokploy respondió 404 en /api/application.one: …
+```
+
+Con `--json` devuelve los datos sin formato, para scripts. Necesita un servidor keel v0.3.0 o posterior.
 
 La configuración vive en `~/.keel`:
 
