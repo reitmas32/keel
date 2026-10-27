@@ -35,6 +35,9 @@ keel versions                    # versiones del repo: rama, quién la creó y c
 keel deploy                      # pregunta servicio y versión
 keel deploy -l -s api-prod       # la versión más alta del repo, esté como esté su CI
 keel deploy -r -s api-prod       # la versión más alta cuyo CI pasó (--latest-ready)
+keel rollback -s api-prod        # vuelve a la versión que estaba desplegada antes en ese scope
+keel rollback -s api-prod --to v1.2.0  # a una versión anterior concreta que ya se desplegó ahí
+keel scopes                      # scopes del repo: su servicio en Dokploy y qué versión tiene cada uno
 keel deploys                     # deploys del repo: estado, cuándo terminaron y por qué fallaron
 keel deploys -s staging -n 50    # solo un servicio, hasta 50
 keel deploys d3f1                # detalle y línea de tiempo de un deploy (id o sus primeros caracteres)
@@ -92,6 +95,20 @@ Al publicar el tag, la registra en keel como pendiente, con su rama y quién la 
 | `-r` (`--latest-ready`) | la más alta cuyo CI pasó | producción y rollbacks |
 
 Antes de pedir el deploy dice qué versión eligió, quién la creó y cómo va su CI. Si con `-l` la versión la creó otra persona (otro `user.email`), pregunta antes de desplegarla; sin terminal interactiva solo lo avisa. Para crear y desplegar sin carreras con otros devs, usa `create-version -d`: despliega exactamente la versión que acabas de crear.
+
+`keel scopes` (alias `keel services`) lista los scopes vinculados al repo, que son los servicios a los que se despliega:
+
+```text
+  SCOPE   DOKPLOY                   TIPO      VERSIÓN ACTUAL   ÚLTIMO DEPLOY
+  prod    DEV/production/jalo-web   Compose   v0.1.2           ✔ hoy 15:59 · 1m 02s
+  stg     DEV/staging/jalo-web      Compose   v0.1.3           ✖ v0.1.4 falló el CI · hoy 15:11
+                                                               └ El CI de v0.1.4 terminó con failure.
+  2 scopes · despliega con `keel deploy -s <scope> -v <versión>`
+```
+
+La versión actual es la del último deploy exitoso. El nombre en Dokploy (`proyecto/entorno/servicio`) se muestra si keel puede leerlo; si no, aparece el id. Con `--json` devuelve los datos sin formato. Con un servidor anterior a v0.5.0 solo lista los nombres.
+
+`keel rollback -s <scope>` vuelve a desplegar la versión anterior que llegó a `deployed` en ese scope, saltándose las que fallaron, con el mismo commit con el que se desplegó. Con `--to` eliges una versión anterior concreta, que debe haberse desplegado ahí antes. Pide confirmación (o `-y` sin terminal interactiva) y no arranca si hay un deploy en curso en ese scope. Un segundo `rollback` deshace el primero: la versión anterior pasa a ser la que se reemplazó.
 
 ## Levantar una instancia del servidor en Dokploy
 
