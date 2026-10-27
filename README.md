@@ -21,7 +21,7 @@ Estados de un deploy: `waiting_ci → ci_passed → deploying → deployed`, con
 Requiere Node 22.5 o superior y git.
 
 ```bash
-npm i -g https://github.com/<owner>/keel/releases/latest/download/keel-cli.tgz
+npm i -g https://github.com/reitmas32/keel/releases/latest/download/keel-cli.tgz
 ```
 
 ## Uso de la CLI
@@ -56,7 +56,7 @@ La configuración vive en `~/.keel`:
 
 Una instancia por organización (p.ej. `keel.jalo…` y `keel.konectus…`).
 
-1. En Dokploy crea un servicio **Compose** con [`deploy/docker-compose.yml`](deploy/docker-compose.yml) (reemplaza `<owner>` en la imagen).
+1. En Dokploy crea un servicio **Compose** con [`deploy/docker-compose.yml`](deploy/docker-compose.yml).
 2. En la pestaña Environment define:
 
    | Variable                      | Requerida            | Descripción                                                  |
@@ -103,7 +103,7 @@ templates/      Workflow de GitHub para los repos que se despliegan con keel
 
 Para el servidor en local, copia `apps/server/.env.example` a `apps/server/.env` y ejecuta `pnpm --filter @keel/server dev`.
 
-Publicar una versión de keel: push de un tag `vX.Y.Z` → [`release.yml`](.github/workflows/release.yml) publica la imagen `ghcr.io/<owner>/keel-server` y el `keel-cli.tgz` en GitHub Releases.
+Publicar una versión de keel: push de un tag `vX.Y.Z` → [`release.yml`](.github/workflows/release.yml) publica la imagen `ghcr.io/reitmas32/keel-server` y el `keel-cli.tgz` en GitHub Releases.
 
 ## Limitaciones actuales
 

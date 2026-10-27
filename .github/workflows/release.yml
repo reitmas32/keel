@@ -1,7 +1,7 @@
 # Push a vX.Y.Z tag to publish:
-#   - the server image to ghcr.io/<owner>/keel-server:<tag> and :latest
+#   - the server image to ghcr.io/reitmas32/keel-server:<tag> and :latest
 #   - the CLI tarball as a GitHub Release asset (keel-cli.tgz), installable with
-#     npm i -g https://github.com/<owner>/keel/releases/latest/download/keel-cli.tgz
+#     npm i -g https://github.com/reitmas32/keel/releases/latest/download/keel-cli.tgz
 
 name: release
 

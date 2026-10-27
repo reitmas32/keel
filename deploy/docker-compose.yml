@@ -4,8 +4,8 @@
 
 services:
   keel:
-    # Published by keel's release workflow. Replace <owner> with the GitHub user/org that hosts keel.
-    image: ghcr.io/<owner>/keel-server:latest
+    # Published by keel's release workflow (.github/workflows/release.yml).
+    image: ghcr.io/reitmas32/keel-server:latest
     restart: unless-stopped
     environment:
       DOKPLOY_URL: ${DOKPLOY_URL:?URL de tu Dokploy, p.ej. https://dokploy.konectus.internal}
