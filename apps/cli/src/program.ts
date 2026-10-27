@@ -3,7 +3,9 @@ import { Command } from "commander";
 import pkg from "../package.json" with { type: "json" };
 import { createVersion } from "./commands/create-version.js";
 import { deploy } from "./commands/deploy.js";
+import { deploys } from "./commands/deploys.js";
 import { login } from "./commands/login.js";
+import { update } from "./commands/update.js";
 import { use } from "./commands/use.js";
 
 export function buildProgram(): Command {
@@ -51,6 +53,37 @@ export function buildProgram(): Command {
       const result = await deploy(opts);
       p.log.success(`Deploy ${result.id} encolado: ${result.tag} → ${result.service} (${result.status})`);
       if (result.status === "ci_failed") p.log.warn(result.error ?? "El CI de esta versión falló.");
+    });
+
+  program
+    .command("deploys")
+    .description("Muestra los deploys del repo actual: estado, cuándo terminaron y por qué fallaron")
+    .argument("[id]", "id (o sus primeros caracteres) de un deploy para ver su detalle")
+    .option("-s, --service <alias>", "solo los deploys de un servicio")
+    .option("-n, --limit <n>", "cuántos mostrar (por defecto 20, máximo 200)", (v) => Number(v))
+    .option("--json", "salida JSON para scripts")
+    .action(async (id: string | undefined, opts: { service?: string; limit?: number; json?: boolean }) => {
+      const output = await deploys({
+        ...opts,
+        ...(id && { id }),
+        color: process.stdout.isTTY === true && !process.env.NO_COLOR,
+      });
+      console.log(output);
+    });
+
+  program
+    .command("update")
+    .description("Actualiza la CLI a la última versión publicada en GitHub")
+    .option("--check", "solo revisa si hay una versión nueva, sin instalarla")
+    .action(async (opts: { check?: boolean }) => {
+      const result = await update({ currentVersion: pkg.version, ...opts, log: (m) => p.log.step(m) });
+      if (result.status === "up-to-date") p.log.success(`keel ${result.current} ya es la última versión.`);
+      if (result.status === "available") {
+        p.log.info(
+          `Hay una versión nueva: ${result.latest} (tienes ${result.current}). Instálala con \`keel update\`.`,
+        );
+      }
+      if (result.status === "updated") p.log.success(`keel actualizado: ${result.current} → ${result.latest}.`);
     });
 
   return program;

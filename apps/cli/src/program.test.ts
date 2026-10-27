@@ -4,6 +4,6 @@ import { buildProgram } from "./program.js";
 describe("keel program", () => {
   it("registers the four commands", () => {
     const names = buildProgram().commands.map((c) => c.name());
-    expect(names).toEqual(["login", "use", "create-version", "deploy"]);
+    expect(names).toEqual(["login", "use", "create-version", "deploy", "deploys", "update"]);
   });
 });
