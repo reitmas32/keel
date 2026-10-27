@@ -1,4 +1,4 @@
-import type { CreateDeployRequest, Deploy } from "@keel/shared";
+import type { CreateDeployRequest, Deploy, DeployDetail } from "@keel/shared";
 import { KeelError } from "./errors.js";
 
 /** Client for a keel API instance (the org's `apiUrl`). */
@@ -19,6 +19,20 @@ export class KeelApi {
 
   getDeploy(id: string): Promise<Deploy> {
     return this.request<Deploy>("GET", `/deploys/${encodeURIComponent(id)}`);
+  }
+
+  async listDeploys(repo: string, options: { service?: string; limit?: number } = {}): Promise<Deploy[]> {
+    const query = new URLSearchParams();
+    if (options.service) query.set("service", options.service);
+    if (options.limit) query.set("limit", String(options.limit));
+    const suffix = query.size ? `?${query}` : "";
+    const body = await this.request<{ deploys: Deploy[] }>("GET", `/repos/${repo}/deploys${suffix}`);
+    return body.deploys;
+  }
+
+  /** One deploy of `repo` by its id or a unique prefix of it (at least 4 characters). */
+  getRepoDeploy(repo: string, idPrefix: string): Promise<DeployDetail> {
+    return this.request<DeployDetail>("GET", `/repos/${repo}/deploys/${encodeURIComponent(idPrefix)}`);
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
