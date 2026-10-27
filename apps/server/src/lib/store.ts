@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { type CiResultRequest, canTransition, type Deploy, type DeployStatus } from "@keel/shared";
+import { type CiResultRequest, canTransition, type Deploy, type DeployStatus, isTerminal } from "@keel/shared";
 
 export interface Scope {
   id: string;
@@ -34,6 +34,8 @@ export interface CiResult {
 export interface DeployRecord extends Deploy {
   serviceId: string;
   deployStartedAt: string | null;
+  ciPassedAt: string | null;
+  finishedAt: string | null;
 }
 
 type Row = Record<string, unknown>;
@@ -66,6 +68,8 @@ const toDeploy = (r: Row): DeployRecord => ({
   status: r.status as DeployStatus,
   error: (r.error as string | null) ?? null,
   deployStartedAt: (r.deploy_started_at as string | null) ?? null,
+  ciPassedAt: (r.ci_passed_at as string | null) ?? null,
+  finishedAt: (r.finished_at as string | null) ?? null,
   createdAt: r.created_at as string,
   updatedAt: r.updated_at as string,
 });
@@ -185,8 +189,9 @@ export class Store {
     const ts = now.toISOString();
     this.db
       .prepare(
-        `INSERT INTO deploys (id, repo, tag, sha, service_id, service_alias, status, error, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO deploys (id, repo, tag, sha, service_id, service_alias, status, error, ci_passed_at, finished_at,
+           created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -197,6 +202,9 @@ export class Store {
         input.service.alias,
         input.status,
         input.error ?? null,
+        // A deploy can be born already past CI when the Action reported before `keel deploy` ran.
+        input.status === "ci_passed" ? ts : null,
+        isTerminal(input.status) ? ts : null,
         ts,
         ts,
       );
@@ -229,6 +237,14 @@ export class Store {
       .map(toDeploy);
   }
 
+  /** Deploys of a repo whose id starts with `prefix`, like git's short commit hashes. */
+  findDeploysByPrefix(repo: string, prefix: string): DeployRecord[] {
+    return this.db
+      .prepare("SELECT * FROM deploys WHERE repo = ? AND id LIKE ? ORDER BY created_at DESC LIMIT 10")
+      .all(normalizeRepo(repo), `${prefix.replace(/[%_]/g, "")}%`)
+      .map(toDeploy);
+  }
+
   /** Moves a deploy to `to` only if the state machine allows it; returns the updated record or undefined. */
   transition(
     id: string,
@@ -240,13 +256,16 @@ export class Store {
     if (!current || !canTransition(current.status, to)) return undefined;
     const result = this.db
       .prepare(
-        `UPDATE deploys SET status = ?, error = ?, deploy_started_at = COALESCE(?, deploy_started_at), updated_at = ?
+        `UPDATE deploys SET status = ?, error = ?, deploy_started_at = COALESCE(?, deploy_started_at),
+           ci_passed_at = COALESCE(?, ci_passed_at), finished_at = COALESCE(?, finished_at), updated_at = ?
          WHERE id = ? AND status = ?`,
       )
       .run(
         to,
         extra.error ?? null,
         extra.deployStartedAt?.toISOString() ?? null,
+        to === "ci_passed" ? now.toISOString() : null,
+        isTerminal(to) ? now.toISOString() : null,
         now.toISOString(),
         id,
         current.status,

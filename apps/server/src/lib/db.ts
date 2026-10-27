@@ -42,6 +42,8 @@ CREATE TABLE IF NOT EXISTS deploys (
   status            TEXT NOT NULL,
   error             TEXT,
   deploy_started_at TEXT,
+  ci_passed_at      TEXT,
+  finished_at       TEXT,
   created_at        TEXT NOT NULL,
   updated_at        TEXT NOT NULL
 );
@@ -68,4 +70,13 @@ function migrate(db: DatabaseSync): void {
     .map((c) => c.name);
   // v0.2.0: Compose services store the env variable that holds their image tag.
   if (!serviceColumns.includes("tag_variable")) db.exec("ALTER TABLE services ADD COLUMN tag_variable TEXT");
+
+  const deployColumns = db
+    .prepare("PRAGMA table_info(deploys)")
+    .all()
+    .map((c) => c.name);
+  // v0.3.0: when the CI was approved and when the deploy reached a final state, for `keel deploys`.
+  for (const column of ["ci_passed_at", "finished_at"]) {
+    if (!deployColumns.includes(column)) db.exec(`ALTER TABLE deploys ADD COLUMN ${column} TEXT`);
+  }
 }

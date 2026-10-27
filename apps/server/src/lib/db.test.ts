@@ -33,6 +33,11 @@ describe("openDb", () => {
 
     const store = new Store(openDb(path));
     expect(store.getService("sv1")).toMatchObject({ alias: "prod", kind: "application", tagVariable: null });
+    const deployColumns = new DatabaseSync(path)
+      .prepare("PRAGMA table_info(deploys)")
+      .all()
+      .map((c) => c.name);
+    expect(deployColumns).toEqual(expect.arrayContaining(["ci_passed_at", "finished_at"]));
     // Opening again must not try to add the column twice.
     expect(() => openDb(path).close()).not.toThrow();
   });

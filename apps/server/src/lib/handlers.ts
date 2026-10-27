@@ -1,4 +1,4 @@
-import { ciResultRequestSchema, createDeployRequestSchema, type Deploy } from "@keel/shared";
+import { ciResultRequestSchema, createDeployRequestSchema, type Deploy, type DeployDetail } from "@keel/shared";
 import type { z } from "zod";
 import type { AppContext } from "./context";
 import { recordCiResult, requestDeploy } from "./deploys";
@@ -7,7 +7,11 @@ import { ApiError } from "./errors";
 import type { DeployRecord } from "./store";
 import { bearerToken } from "./tokens";
 
-const toPublic = ({ serviceId: _s, deployStartedAt: _d, ...deploy }: DeployRecord): Deploy => deploy;
+const toPublic = ({ serviceId: _s, ...deploy }: DeployRecord): Deploy => deploy;
+
+const DEFAULT_LIST_LIMIT = 20;
+const MAX_LIST_LIMIT = 200;
+const MIN_ID_PREFIX = 4;
 
 async function parseBody<T extends z.ZodType>(request: Request, schema: T): Promise<z.infer<T>> {
   let json: unknown;
@@ -65,5 +69,62 @@ export const handlers = {
       if (!scope) throw new ApiError(404, `El repo ${owner}/${name} no está vinculado a ningún scope.`);
       const services = ctx.store.listServices(scope.id).map((s) => ({ alias: s.alias }));
       return Response.json({ repo: scope.repo, services });
+    }),
+
+  listRepoDeploys: (ctx: AppContext, owner: string, name: string, params: URLSearchParams) =>
+    handle(() => {
+      const scope = ctx.store.getScopeByRepo(`${owner}/${name}`);
+      if (!scope) throw new ApiError(404, `El repo ${owner}/${name} no está vinculado a ningún scope.`);
+
+      const limitParam = params.get("limit");
+      const limit = limitParam === null ? DEFAULT_LIST_LIMIT : Number(limitParam);
+      if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIST_LIMIT) {
+        throw new ApiError(400, `limit debe ser un entero entre 1 y ${MAX_LIST_LIMIT}.`);
+      }
+
+      const alias = params.get("service");
+      let serviceId: string | undefined;
+      if (alias) {
+        const service = ctx.store.getServiceByAlias(scope.id, alias);
+        if (!service) {
+          const available = ctx.store.listServices(scope.id).map((s) => s.alias);
+          throw new ApiError(
+            404,
+            `El servicio ${alias} no existe en ${scope.repo}. Disponibles: ${available.join(", ") || "ninguno"}.`,
+          );
+        }
+        serviceId = service.id;
+      }
+
+      const deploys = ctx.store.listDeploys(
+        { repo: scope.repo, ...(serviceId && { serviceId }) },
+        { limit, newestFirst: true },
+      );
+      return Response.json({ repo: scope.repo, deploys: deploys.map(toPublic) });
+    }),
+
+  getRepoDeploy: (ctx: AppContext, owner: string, name: string, idPrefix: string) =>
+    handle(() => {
+      const scope = ctx.store.getScopeByRepo(`${owner}/${name}`);
+      if (!scope) throw new ApiError(404, `El repo ${owner}/${name} no está vinculado a ningún scope.`);
+      if (idPrefix.length < MIN_ID_PREFIX) {
+        throw new ApiError(400, `Usa al menos ${MIN_ID_PREFIX} caracteres del id del deploy.`);
+      }
+
+      const matches = ctx.store.findDeploysByPrefix(scope.repo, idPrefix.toLowerCase());
+      if (matches.length === 0) throw new ApiError(404, `No hay ningún deploy ${idPrefix} en ${scope.repo}.`);
+      if (matches.length > 1) {
+        const ids = matches.map((d) => `${d.id.slice(0, 8)} (${d.tag} → ${d.service})`).join(", ");
+        throw new ApiError(409, `${idPrefix} coincide con varios deploys: ${ids}. Usa más caracteres.`);
+      }
+
+      const deploy = matches[0] as DeployRecord;
+      const service = ctx.store.getService(deploy.serviceId);
+      const detail: DeployDetail = {
+        ...toPublic(deploy),
+        serviceKind: service?.kind ?? null,
+        tagVariable: service?.tagVariable ?? null,
+      };
+      return Response.json(detail);
     }),
 };

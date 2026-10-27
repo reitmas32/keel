@@ -29,5 +29,15 @@ export const deploySchema = z.object({
   error: z.string().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
+  // Milestones (ISO dates). Optional because keel servers before v0.3.0 don't send them.
+  ciPassedAt: z.string().nullable().optional(),
+  deployStartedAt: z.string().nullable().optional(),
+  finishedAt: z.string().nullable().optional(),
 });
 export type Deploy = z.infer<typeof deploySchema>;
+
+/** A deploy plus the service details `keel deploys <id>` shows. */
+export interface DeployDetail extends Deploy {
+  serviceKind: "application" | "compose" | null;
+  tagVariable: string | null;
+}
