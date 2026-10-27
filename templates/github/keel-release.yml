@@ -73,7 +73,7 @@ jobs:
             --arg status "$status" \
             '{repo: $repo, sha: $sha, tag: $tag, status: $status}')
           curl --fail-with-body --silent --show-error \
-            --retry 5 --retry-all-errors --retry-delay 5 \
+            --retry 5 --retry-connrefused --retry-delay 5 \
             -X POST "${KEEL_API_URL%/}/ci-result" \
             -H "Authorization: Bearer ${DEPLOY_API_TOKEN}" \
             -H "Content-Type: application/json" \
