@@ -63,7 +63,7 @@ En Dokploy: **Project → Create Service → Compose**. Ponle de nombre `keel` (
 ```yaml
 services:
   keel:
-    image: docker.io/getfoundathyon/keel-api:v0.1.0
+    image: docker.io/getfoundathyon/keel-api:v0.2.0
     restart: unless-stopped
     environment:
       DOKPLOY_URL: ${DOKPLOY_URL:?URL de tu Dokploy, p.ej. https://dokploy.konectus.internal}
@@ -80,7 +80,7 @@ volumes:
   keel-data:
 ```
 
-- Usa una versión fija (`:v0.1.0`) en lugar de `:latest`, así un redeploy no cambia de versión sin que lo decidas. Para actualizar keel, cambia la tag y redespliega.
+- Usa una versión fija (`:v0.2.0`) en lugar de `:latest`, así un redeploy no cambia de versión sin que lo decidas. Para actualizar keel, cambia la tag y redespliega.
 - `keel-data` es un volumen con nombre: la base (scopes, servicios, tokens de CI e historial) sobrevive a redeploys y actualizaciones de la imagen.
 - `expose` solo abre el puerto 3000 dentro de la red de Docker; el acceso desde fuera lo da el dominio del paso 3. No publiques el puerto con `ports`.
 
@@ -133,12 +133,19 @@ Debe devolver `{"ok":true}`. El admin queda en `https://keel.konectus.com/` (ent
 
 1. Entra al admin (`https://<dominio>/`) con `KEEL_ADMIN_PASSWORD`.
 2. **Nuevo scope**: pega la URL del repo de GitHub. Copia el token de CI que aparece (solo se muestra una vez).
-3. En el scope, **vincula servicios** de Dokploy: un alias (lo que eliges en `keel deploy`, p.ej. `api-prod`) y la URL del servicio copiada del dashboard de Dokploy (`…/services/application/<id>`).
+3. En el scope, **vincula servicios** de Dokploy: un alias (lo que eliges en `keel deploy`, p.ej. `api-prod`) y la URL del servicio copiada del dashboard de Dokploy (`…/services/application/<id>` o `…/services/compose/<id>`). Para un Compose puedes indicar la variable del tag; si la dejas vacía es `DOCKER_TAG`.
 4. En el repo de GitHub:
    - Copia [`templates/github/keel-release.yml`](templates/github/keel-release.yml) a `.github/workflows/` y reemplaza el paso `Test` por tus tests.
    - Variable `KEEL_API_URL` = `https://<dominio>/api`.
    - Secret `DEPLOY_API_TOKEN` = el token de CI del scope.
-5. En Dokploy, el servicio debe ser una **Application** con proveedor **Docker** apuntando a `ghcr.io/<owner>/<repo>:<algún tag>`. keel solo cambia el tag. Si el paquete de GHCR es privado, configura usuario y token de registry en la aplicación; keel los conserva.
+5. Prepara el servicio en Dokploy según su tipo:
+
+   | Tipo        | Requisito                                                                                                       | Qué hace keel al desplegar `v1.4.0`                                              |
+   | ----------- | --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+   | Application | Proveedor **Docker** con imagen `<registry>/<owner>/<repo>:<algún tag>`                                          | Cambia la imagen a `…:v1.4.0` y despliega (conserva usuario y token de registry) |
+   | Compose     | La imagen usa la variable del tag (`image: ${DOCKER_IMAGE}:${DOCKER_TAG}`) y esa variable está en Environment | Pone `DOCKER_TAG=v1.4.0` en Environment, sin tocar el resto, y redespliega       |
+
+   En un Compose, todos los servicios que usan esa variable se actualizan juntos. Si la variable no está definida en el Environment, keel no despliega y marca el deploy como fallido con el motivo.
 
 ## Desarrollo
 
@@ -176,7 +183,7 @@ El token se crea en Docker Hub → Account settings → Personal access tokens.
 
 ## Limitaciones actuales
 
-- Solo servicios de Dokploy tipo Application con proveedor Docker (Compose aún no).
+- Application solo con proveedor Docker; Compose solo si la imagen toma el tag de una variable de su Environment.
 - `POST /api/deploys` no tiene autenticación: cualquiera que alcance la API puede pedir un deploy (solo se ejecuta si el CI de ese commit pasó).
 - El worker corre dentro del proceso de Next.js: una sola réplica por instancia.
 - Las carpetas `github.com:<org>` de `~/.keel` no son válidas en Windows.
