@@ -29,7 +29,25 @@ describe("scopes", () => {
     expect(add("Worker", appUrl("w1")).alias).toBe("worker");
     expect(() => add("api prod", appUrl("x"))).toThrow(/alias/);
     expect(() => add("web", "https://dokploy.example.com/dashboard/projects")).toThrow(/URL de servicio/);
-    expect(() => add("web", "https://dokploy.example.com/dashboard/project/p/services/compose/c1")).toThrow(/Compose/);
     expect(() => add("api-prod", appUrl("other"))).toThrow(/Ya existe/);
+  });
+
+  it("links a Compose with DOCKER_TAG by default or a custom tag variable", () => {
+    const { store, clock, scope } = createTestContext();
+    const composeUrl = (id: string) => `https://dokploy.example.com/dashboard/project/p/services/compose/${id}`;
+    const add = (alias: string, dokployUrl: string, tagVariable?: string) =>
+      addService(store, scope, { alias, dokployUrl, ...(tagVariable !== undefined && { tagVariable }) }, clock.now());
+
+    expect(add("staging", composeUrl("c1"))).toMatchObject({
+      kind: "compose",
+      dokployId: "c1",
+      tagVariable: "DOCKER_TAG",
+    });
+    expect(add("prod", composeUrl("c2"), " API_TAG ")).toMatchObject({ tagVariable: "API_TAG" });
+    expect(add("blank", composeUrl("c3"), "")).toMatchObject({ tagVariable: "DOCKER_TAG" });
+    expect(() => add("bad", composeUrl("c4"), "DOCKER-TAG")).toThrow(/Variable de tag inválida/);
+    // An Application keeps its tag in the image, so a tag variable is ignored.
+    expect(add("app", appUrl("a1"), "DOCKER_TAG")).toMatchObject({ kind: "application", tagVariable: null });
+    expect(store.getService(add("again", composeUrl("c5")).id)?.tagVariable).toBe("DOCKER_TAG");
   });
 });

@@ -1,4 +1,4 @@
-import { parseDokployServiceUrl } from "./dokploy";
+import { DEFAULT_TAG_VARIABLE, parseDokployServiceUrl } from "./dokploy";
 import { ApiError } from "./errors";
 import type { Scope, Service, Store } from "./store";
 import { generateCiToken } from "./tokens";
@@ -31,11 +31,12 @@ export function rotateCiToken(store: Store, scopeId: string): string {
 }
 
 const ALIAS_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export function addService(
   store: Store,
   scope: Scope,
-  input: { alias: string; dokployUrl: string },
+  input: { alias: string; dokployUrl: string; tagVariable?: string },
   now: Date,
 ): Service {
   const alias = input.alias.trim().toLowerCase();
@@ -46,17 +47,29 @@ export function addService(
   if (!parsed) {
     throw new ApiError(
       400,
-      "URL de servicio de Dokploy inválida. Copia la URL del servicio desde el dashboard (…/services/application/<id>).",
+      "URL de servicio de Dokploy inválida. Copia la URL del servicio desde el dashboard (…/services/application/<id> o …/services/compose/<id>).",
     );
   }
-  if (parsed.kind !== "application") {
-    throw new ApiError(400, "Por ahora keel solo soporta servicios de tipo Application (no Compose).");
+  // Only a Compose needs it: an Application's tag lives in its Docker image, not in an env variable.
+  let tagVariable: string | null = null;
+  if (parsed.kind === "compose") {
+    tagVariable = input.tagVariable?.trim() || DEFAULT_TAG_VARIABLE;
+    if (!ENV_NAME_PATTERN.test(tagVariable)) {
+      throw new ApiError(400, `Variable de tag inválida: ${tagVariable}. Usa un nombre de variable como DOCKER_TAG.`);
+    }
   }
   if (store.getServiceByAlias(scope.id, alias)) {
     throw new ApiError(409, `Ya existe un servicio con alias ${alias} en ${scope.repo}.`);
   }
   return store.addService(
-    { scopeId: scope.id, alias, dokployUrl: input.dokployUrl.trim(), kind: parsed.kind, dokployId: parsed.id },
+    {
+      scopeId: scope.id,
+      alias,
+      dokployUrl: input.dokployUrl.trim(),
+      kind: parsed.kind,
+      dokployId: parsed.id,
+      tagVariable,
+    },
     now,
   );
 }

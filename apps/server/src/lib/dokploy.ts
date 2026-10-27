@@ -2,16 +2,33 @@ import type { ServiceKind } from "./store";
 
 export type DokployDeploymentStatus = "pending" | "running" | "done" | "error";
 
+/** The Dokploy service a keel service points at. */
+export interface DokployTarget {
+  kind: ServiceKind;
+  id: string;
+  /** Compose only: env variable that holds the image tag, e.g. `DOCKER_TAG`. */
+  tagVariable: string | null;
+}
+
 export interface DokployClient {
-  /** Points the application at `<image>:<tag>` and triggers a deploy. Returns the new image. */
-  deployImageTag(applicationId: string, tag: string): Promise<string>;
-  /** Status of the newest deployment created at or after `since`; `pending` if Dokploy hasn't created it yet. */
-  latestDeploymentStatus(applicationId: string, since: Date): Promise<DokployDeploymentStatus>;
+  /**
+   * Points the service at `tag` and triggers a deploy: an Application gets `<image>:<tag>`, a Compose
+   * gets `<tagVariable>=<tag>` in its env. Returns a short description of what changed.
+   */
+  deploy(target: DokployTarget, tag: string): Promise<string>;
+  /** Newest deployment created at or after `since`; `pending` if Dokploy hasn't created it yet. */
+  latestDeploymentStatus(
+    target: DokployTarget,
+    since: Date,
+  ): Promise<{ status: DokployDeploymentStatus; message?: string }>;
 }
 
 export class DokployError extends Error {
   override name = "DokployError";
 }
+
+/** Default env variable a Compose uses for its image tag (`image: ${DOCKER_IMAGE}:${DOCKER_TAG}`). */
+export const DEFAULT_TAG_VARIABLE = "DOCKER_TAG";
 
 /**
  * Extracts the service id from a Dokploy dashboard URL, e.g.
@@ -37,6 +54,15 @@ export function withImageTag(image: string, tag: string): string {
   return `${repository}:${tag}`;
 }
 
+/**
+ * Sets `name=value` in a dotenv block, leaving every other line (comments, order, other variables) untouched.
+ * Returns undefined when the variable isn't defined, so callers don't silently add one the Compose never reads.
+ */
+export function setEnvVariable(env: string, name: string, value: string): string | undefined {
+  const line = new RegExp(`^(\\s*(?:export\\s+)?${name}\\s*=).*$`, "m");
+  return line.test(env) ? env.replace(line, `$1${value}`) : undefined;
+}
+
 interface DokployApplication {
   applicationId: string;
   sourceType: string;
@@ -46,9 +72,15 @@ interface DokployApplication {
   registryUrl: string | null;
 }
 
+interface DokployCompose {
+  composeId: string;
+  env: string | null;
+}
+
 interface DokployDeployment {
   status: string;
   createdAt: string;
+  errorMessage?: string | null;
 }
 
 /** Talks to the Dokploy REST API (`/api/<router>.<procedure>`) with an API key. */
@@ -59,7 +91,33 @@ export class HttpDokployClient implements DokployClient {
     private readonly fetchImpl: typeof fetch = fetch,
   ) {}
 
-  async deployImageTag(applicationId: string, tag: string): Promise<string> {
+  deploy(target: DokployTarget, tag: string): Promise<string> {
+    return target.kind === "compose"
+      ? this.deployCompose(target.id, target.tagVariable ?? DEFAULT_TAG_VARIABLE, tag)
+      : this.deployApplication(target.id, tag);
+  }
+
+  async latestDeploymentStatus(
+    target: DokployTarget,
+    since: Date,
+  ): Promise<{ status: DokployDeploymentStatus; message?: string }> {
+    const deployments =
+      target.kind === "compose"
+        ? await this.get<DokployDeployment[]>("deployment.allByCompose", { composeId: target.id })
+        : await this.get<DokployDeployment[]>("deployment.all", { applicationId: target.id });
+    // Small allowance for clock skew between keel and Dokploy.
+    const threshold = since.getTime() - 5_000;
+    const latest = deployments
+      .filter((d) => Date.parse(d.createdAt) >= threshold)
+      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0];
+    if (!latest) return { status: "pending" };
+    if (latest.status === "done") return { status: "done" };
+    if (latest.status === "error") return { status: "error", message: latest.errorMessage ?? undefined };
+    if (latest.status === "cancelled") return { status: "error", message: "Dokploy canceló el deployment." };
+    return { status: "running" };
+  }
+
+  private async deployApplication(applicationId: string, tag: string): Promise<string> {
     const app = await this.get<DokployApplication>("application.one", { applicationId });
     if (app.sourceType !== "docker" || !app.dockerImage) {
       throw new DokployError(
@@ -74,20 +132,21 @@ export class HttpDokployClient implements DokployClient {
       password: app.password,
       registryUrl: app.registryUrl,
     });
-    await this.post("application.deploy", { applicationId });
+    await this.post("application.deploy", { applicationId, title: `keel ${tag}` });
     return dockerImage;
   }
 
-  async latestDeploymentStatus(applicationId: string, since: Date): Promise<DokployDeploymentStatus> {
-    const deployments = await this.get<DokployDeployment[]>("deployment.all", { applicationId });
-    // Small allowance for clock skew between keel and Dokploy.
-    const threshold = since.getTime() - 5_000;
-    const latest = deployments
-      .filter((d) => Date.parse(d.createdAt) >= threshold)
-      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0];
-    if (!latest) return "pending";
-    if (latest.status === "done" || latest.status === "error" || latest.status === "running") return latest.status;
-    return "running";
+  private async deployCompose(composeId: string, tagVariable: string, tag: string): Promise<string> {
+    const compose = await this.get<DokployCompose>("compose.one", { composeId });
+    const env = setEnvVariable(compose.env ?? "", tagVariable, tag);
+    if (env === undefined) {
+      throw new DokployError(
+        `El Compose ${composeId} no define ${tagVariable} en su Environment. Agrégala (p.ej. ${tagVariable}=latest) y úsala en la imagen: image: <imagen>:\${${tagVariable}}.`,
+      );
+    }
+    await this.post("compose.saveEnvironment", { composeId, env });
+    await this.post("compose.deploy", { composeId, title: `keel ${tag}` });
+    return `${tagVariable}=${tag}`;
   }
 
   private async get<T>(procedure: string, query: Record<string, string>): Promise<T> {

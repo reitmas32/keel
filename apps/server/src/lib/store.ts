@@ -18,6 +18,8 @@ export interface Service {
   dokployUrl: string;
   kind: ServiceKind;
   dokployId: string;
+  /** Compose only: env variable keel sets to the version tag before redeploying. */
+  tagVariable: string | null;
   createdAt: string;
 }
 
@@ -50,6 +52,7 @@ const toService = (r: Row): Service => ({
   dokployUrl: r.dokploy_url as string,
   kind: r.kind as ServiceKind,
   dokployId: r.dokploy_id as string,
+  tagVariable: (r.tag_variable as string | null) ?? null,
   createdAt: r.created_at as string,
 });
 
@@ -116,7 +119,7 @@ export class Store {
     const service: Service = { ...input, id: randomUUID(), createdAt: now.toISOString() };
     this.db
       .prepare(
-        "INSERT INTO services (id, scope_id, alias, dokploy_url, kind, dokploy_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO services (id, scope_id, alias, dokploy_url, kind, dokploy_id, tag_variable, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
       )
       .run(
         service.id,
@@ -125,6 +128,7 @@ export class Store {
         service.dokployUrl,
         service.kind,
         service.dokployId,
+        service.tagVariable,
         service.createdAt,
       );
     return service;

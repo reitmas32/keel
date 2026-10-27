@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS services (
   dokploy_url TEXT NOT NULL,
   kind        TEXT NOT NULL,
   dokploy_id  TEXT NOT NULL,
+  tag_variable TEXT,
   created_at  TEXT NOT NULL,
   UNIQUE (scope_id, alias)
 );
@@ -55,5 +56,16 @@ export function openDb(path: string): DatabaseSync {
   const db = new DatabaseSync(path);
   db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
   db.exec(SCHEMA);
+  migrate(db);
   return db;
+}
+
+/** Brings databases created by older keel versions up to the current schema. Each step is idempotent. */
+function migrate(db: DatabaseSync): void {
+  const serviceColumns = db
+    .prepare("PRAGMA table_info(services)")
+    .all()
+    .map((c) => c.name);
+  // v0.2.0: Compose services store the env variable that holds their image tag.
+  if (!serviceColumns.includes("tag_variable")) db.exec("ALTER TABLE services ADD COLUMN tag_variable TEXT");
 }

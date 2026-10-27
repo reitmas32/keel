@@ -1,6 +1,6 @@
 import type { AppContext } from "./context";
 import { openDb } from "./db";
-import type { DokployClient, DokployDeploymentStatus } from "./dokploy";
+import type { DokployClient, DokployDeploymentStatus, DokployTarget } from "./dokploy";
 import { addService, createScope } from "./scopes";
 import { Store } from "./store";
 import { DeployWorker } from "./worker";
@@ -9,18 +9,19 @@ export const SHA = "a".repeat(40);
 
 /** Records calls and returns a scripted deployment status. */
 export class FakeDokploy implements DokployClient {
-  deployed: { applicationId: string; tag: string }[] = [];
+  deployed: { target: DokployTarget; tag: string }[] = [];
   status: DokployDeploymentStatus = "running";
+  message: string | undefined;
   failWith: string | undefined;
 
-  async deployImageTag(applicationId: string, tag: string) {
+  async deploy(target: DokployTarget, tag: string) {
     if (this.failWith) throw new Error(this.failWith);
-    this.deployed.push({ applicationId, tag });
-    return `ghcr.io/konectus-io/app:${tag}`;
+    this.deployed.push({ target, tag });
+    return target.kind === "compose" ? `${target.tagVariable}=${tag}` : `ghcr.io/konectus-io/app:${tag}`;
   }
 
   async latestDeploymentStatus() {
-    return this.status;
+    return { status: this.status, message: this.message };
   }
 }
 

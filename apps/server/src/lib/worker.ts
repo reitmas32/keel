@@ -1,5 +1,5 @@
-import type { DokployClient } from "./dokploy";
-import type { DeployRecord, Store } from "./store";
+import type { DokployClient, DokployDeploymentStatus, DokployTarget } from "./dokploy";
+import type { DeployRecord, Service, Store } from "./store";
 
 export interface WorkerOptions {
   /** How long a deploy may sit in `waiting_ci` before it expires. */
@@ -11,6 +11,12 @@ export interface WorkerOptions {
 }
 
 const minutes = (n: number) => n * 60_000;
+
+const targetOf = (service: Service): DokployTarget => ({
+  kind: service.kind,
+  id: service.dokployId,
+  tagVariable: service.tagVariable,
+});
 
 /** Advances queued deploys. `tick()` is idempotent and safe to call on an interval. */
 export class DeployWorker {
@@ -71,8 +77,8 @@ export class DeployWorker {
       return;
     }
     try {
-      const image = await this.dokploy.deployImageTag(service.dokployId, d.tag);
-      this.log(`deploy ${d.id}: ${service.alias} → ${image}`);
+      const change = await this.dokploy.deploy(targetOf(service), d.tag);
+      this.log(`deploy ${d.id}: ${service.alias} → ${change}`);
     } catch (error) {
       this.fail(d, (error as Error).message);
     }
@@ -86,9 +92,10 @@ export class DeployWorker {
         this.fail(d, "El servicio ya no existe.");
         continue;
       }
-      let status: Awaited<ReturnType<DokployClient["latestDeploymentStatus"]>>;
+      let status: DokployDeploymentStatus;
+      let message: string | undefined;
       try {
-        status = await this.dokploy.latestDeploymentStatus(service.dokployId, startedAt);
+        ({ status, message } = await this.dokploy.latestDeploymentStatus(targetOf(service), startedAt));
       } catch (error) {
         // Transient: keep polling until the timeout below decides.
         this.log(`deploy ${d.id}: no se pudo consultar Dokploy: ${(error as Error).message}`);
@@ -98,7 +105,7 @@ export class DeployWorker {
         this.store.transition(d.id, "deployed", this.now());
         this.log(`deploy ${d.id} completado`);
       } else if (status === "error") {
-        this.fail(d, "Dokploy reportó un error en el deployment. Revisa los logs del servicio.");
+        this.fail(d, message || "Dokploy reportó un error en el deployment. Revisa los logs del servicio.");
       } else if (this.now().getTime() - startedAt.getTime() > minutes(this.options.deployTimeoutMinutes)) {
         this.fail(d, `Dokploy no terminó el deployment en ${this.options.deployTimeoutMinutes} min.`);
       }

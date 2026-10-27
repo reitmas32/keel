@@ -18,7 +18,9 @@ describe("DeployWorker", () => {
     recordCiResult(store, ciReq, ciToken, clock.now());
     await worker.tick();
     expect(store.getDeploy(id)?.status).toBe("deploying");
-    expect(dokploy.deployed).toEqual([{ applicationId: "app123", tag: "v1.0.0" }]);
+    expect(dokploy.deployed).toEqual([
+      { target: { kind: "application", id: "app123", tagVariable: null }, tag: "v1.0.0" },
+    ]);
 
     dokploy.status = "done";
     await worker.tick();
@@ -47,8 +49,9 @@ describe("DeployWorker", () => {
     const b = requestDeploy(errored.store, deployReq, errored.clock.now());
     await errored.worker.tick();
     errored.dokploy.status = "error";
+    errored.dokploy.message = "pull access denied";
     await errored.worker.tick();
-    expect(errored.store.getDeploy(b.id)?.status).toBe("deploy_failed");
+    expect(errored.store.getDeploy(b.id)).toMatchObject({ status: "deploy_failed", error: "pull access denied" });
   });
 
   it("fails a deployment that exceeds the timeout", async () => {
@@ -86,5 +89,29 @@ describe("DeployWorker", () => {
     await worker.tick();
     expect(store.getDeploy(first.id)?.status).toBe("deployed");
     expect(store.getDeploy(second.id)?.status).toBe("deploying");
+  });
+
+  it("deploys a Compose service by its tag variable", async () => {
+    const { store, worker, dokploy, clock, ciToken, scope } = createTestContext();
+    addService(
+      store,
+      scope,
+      {
+        alias: "staging",
+        dokployUrl: "http://dokploy.jalocompany.internal/dashboard/project/p/environment/e/services/compose/cmp1",
+      },
+      clock.now(),
+    );
+    recordCiResult(store, ciReq, ciToken, clock.now());
+    const { id } = requestDeploy(store, { ...deployReq, service: "staging" }, clock.now());
+
+    await worker.tick();
+    expect(dokploy.deployed).toEqual([
+      { target: { kind: "compose", id: "cmp1", tagVariable: "DOCKER_TAG" }, tag: "v1.0.0" },
+    ]);
+
+    dokploy.status = "done";
+    await worker.tick();
+    expect(store.getDeploy(id)?.status).toBe("deployed");
   });
 });
