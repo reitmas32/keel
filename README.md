@@ -103,7 +103,19 @@ templates/      Workflow de GitHub para los repos que se despliegan con keel
 
 Para el servidor en local, copia `apps/server/.env.example` a `apps/server/.env` y ejecuta `pnpm --filter @keel/server dev`.
 
-Publicar una versión de keel: push de un tag `vX.Y.Z` → [`release.yml`](.github/workflows/release.yml) publica la imagen `ghcr.io/reitmas32/keel-server` y el `keel-cli.tgz` en GitHub Releases.
+### Publicar una versión de keel
+
+Push de un tag `vX.Y.Z` → [`release.yml`](.github/workflows/release.yml) corre lint, typecheck y tests, publica la imagen del servidor en Docker Hub (`<DOCKERHUB_IMAGE>:vX.Y.Z` y `:latest`, linux/amd64) y adjunta `keel-cli.tgz` al GitHub Release.
+
+Configuración del repo (Settings → Secrets and variables → Actions):
+
+| Tipo      | Nombre               | Valor                                                        |
+| --------- | -------------------- | ------------------------------------------------------------ |
+| Variable  | `DOCKERHUB_IMAGE`    | `getfoundathyon/keel-api`                                    |
+| Secret    | `DOCKERHUB_USERNAME` | `getfoundathyon`                                             |
+| Secret    | `DOCKERHUB_TOKEN`    | Personal access token de Docker Hub con permiso Read & Write |
+
+El token se crea en Docker Hub → Account settings → Personal access tokens.
 
 ## Limitaciones actuales
 

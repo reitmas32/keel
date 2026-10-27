@@ -4,8 +4,9 @@
 
 services:
   keel:
-    # Published by keel's release workflow (.github/workflows/release.yml).
-    image: ghcr.io/reitmas32/keel-server:latest
+    # Published to Docker Hub by keel's release workflow (.github/workflows/release.yml).
+    # Pin a version (e.g. :v1.0.0) instead of :latest for reproducible deploys.
+    image: docker.io/getfoundathyon/keel-api:latest
     restart: unless-stopped
     environment:
       DOKPLOY_URL: ${DOKPLOY_URL:?URL de tu Dokploy, p.ej. https://dokploy.konectus.internal}
