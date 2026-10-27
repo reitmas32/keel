@@ -1,0 +1,80 @@
+# Copy to .github/workflows/keel-release.yml in each repo deployed with keel.
+#
+# Runs on the tag pushed by `keel create-version`, builds and pushes the image
+# to GHCR as ghcr.io/<owner>/<repo>:<tag>, then reports the result to keel so it
+# can deploy whatever `keel deploy` queued for this commit.
+#
+# Repo (or org) settings:
+#   Variables → KEEL_API_URL      e.g. https://keel.konectus.internal/api
+#   Secrets   → DEPLOY_API_TOKEN  the CI token shown in the keel admin for this repo
+
+name: keel release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Replace with this project's own test command(s).
+      - name: Test
+        run: echo "Reemplaza este paso por los tests del proyecto"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image name
+        id: image
+        # GHCR requires lowercase repository names.
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.image.outputs.name }}:${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  notify-keel:
+    needs: build
+    # Always report, so keel marks the deploy as failed instead of waiting until it expires.
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report CI result to keel
+        env:
+          KEEL_API_URL: ${{ vars.KEEL_API_URL }}
+          DEPLOY_API_TOKEN: ${{ secrets.DEPLOY_API_TOKEN }}
+          RESULT: ${{ needs.build.result }}
+        run: |
+          case "$RESULT" in
+            success) status=success ;;
+            cancelled) status=cancelled ;;
+            *) status=failure ;;
+          esac
+          payload=$(jq -n \
+            --arg repo "$GITHUB_REPOSITORY" \
+            --arg sha "$GITHUB_SHA" \
+            --arg tag "$GITHUB_REF_NAME" \
+            --arg status "$status" \
+            '{repo: $repo, sha: $sha, tag: $tag, status: $status}')
+          curl --fail-with-body --silent --show-error \
+            --retry 5 --retry-all-errors --retry-delay 5 \
+            -X POST "${KEEL_API_URL%/}/ci-result" \
+            -H "Authorization: Bearer ${DEPLOY_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "$payload"
