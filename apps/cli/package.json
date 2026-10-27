@@ -1,0 +1,29 @@
+{
+  "name": "@keel/cli",
+  "version": "0.0.0",
+  "description": "keel CLI: crea versiones y dispara deploys hacia Dokploy",
+  "type": "module",
+  "bin": {
+    "keel": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "tsup": "^9.0.0"
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.8.1",
+    "@keel/shared": "workspace:*",
+    "commander": "^15.0.0",
+    "zod": "^4.6.7"
+  }
+}
