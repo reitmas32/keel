@@ -46,7 +46,12 @@ export async function addServiceAction(scopeId: string, _state: FormState, form:
     const { store, now } = getContext();
     const scope = store.getScope(scopeId);
     if (!scope) throw new ApiError(404, "Scope no encontrado.");
-    addService(store, scope, { alias: field(form, "alias"), dokployUrl: field(form, "dokployUrl") }, now());
+    addService(
+      store,
+      scope,
+      { alias: field(form, "alias"), dokployUrl: field(form, "dokployUrl"), tagVariable: field(form, "tagVariable") },
+      now(),
+    );
     revalidatePath(`/scopes/${scopeId}`);
     return {};
   });

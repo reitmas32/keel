@@ -71,8 +71,12 @@ export function AddServiceForm({ scopeId }: { scopeId: string }) {
             name="dokployUrl"
             required
             type="url"
-            placeholder="https://dokploy…/dashboard/project/…/services/application/…"
+            placeholder="https://dokploy…/dashboard/project/…/services/compose/…"
           />
+        </label>
+        <label style={{ flex: "0 1 180px" }}>
+          Variable del tag (Compose)
+          <input name="tagVariable" placeholder="DOCKER_TAG" pattern="[A-Za-z_][A-Za-z0-9_]*" />
         </label>
         <button type="submit" disabled={pending}>
           {pending ? "Vinculando…" : "Vincular"}

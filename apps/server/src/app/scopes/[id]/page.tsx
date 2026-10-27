@@ -51,7 +51,9 @@ export default async function ScopePage({ params }: { params: Promise<{ id: stri
               <thead>
                 <tr>
                   <th>Alias</th>
-                  <th>Application ID</th>
+                  <th>Tipo</th>
+                  <th>ID en Dokploy</th>
+                  <th>Cómo despliega</th>
                   <th />
                 </tr>
               </thead>
@@ -63,8 +65,18 @@ export default async function ScopePage({ params }: { params: Promise<{ id: stri
                         {service.alias}
                       </a>
                     </td>
+                    <td>{service.kind === "compose" ? "Compose" : "Application"}</td>
                     <td>
                       <code>{service.dokployId}</code>
+                    </td>
+                    <td className="muted" style={{ fontSize: 13 }}>
+                      {service.kind === "compose" ? (
+                        <code>{service.tagVariable}=&lt;versión&gt;</code>
+                      ) : (
+                        <>
+                          imagen <code>:&lt;versión&gt;</code>
+                        </>
+                      )}
                     </td>
                     <td style={{ textAlign: "right" }}>
                       <form action={deleteServiceAction}>
@@ -82,7 +94,13 @@ export default async function ScopePage({ params }: { params: Promise<{ id: stri
         <AddServiceForm scopeId={scope.id} />
         <p className="muted" style={{ fontSize: 13 }}>
           El alias es lo que eliges en <code>keel deploy</code>. Copia la URL del servicio desde el dashboard de
-          Dokploy.
+          Dokploy. En un <strong>Application</strong> keel cambia el tag de su imagen Docker. En un{" "}
+          <strong>Compose</strong> cambia la variable del tag (por defecto <code>DOCKER_TAG</code>) en su Environment y
+          lo redespliega: la imagen debe usarla, p.ej.{" "}
+          <code>
+            image: ${"{DOCKER_IMAGE}"}:${"{DOCKER_TAG}"}
+          </code>
+          .
         </p>
       </section>
 
