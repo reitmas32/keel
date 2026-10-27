@@ -18,7 +18,7 @@ const BADGE: Record<DeployStatus, string> = {
 };
 
 const formatDate = (iso: string) =>
-  new Date(iso).toLocaleString("es-MX", { dateStyle: "short", timeStyle: "short", timeZone: "UTC" }) + " UTC";
+  `${new Date(iso).toLocaleString("es-MX", { dateStyle: "short", timeStyle: "short", timeZone: "UTC" })} UTC`;
 
 export default async function ScopePage({ params }: { params: Promise<{ id: string }> }) {
   await requireAdmin();
