@@ -5,8 +5,8 @@
 services:
   keel:
     # Published to Docker Hub by keel's release workflow (.github/workflows/release.yml).
-    # Pin a version (e.g. :v1.0.0) instead of :latest for reproducible deploys.
-    image: docker.io/getfoundathyon/keel-api:latest
+    # Pinned so a redeploy never changes version on its own; bump the tag to upgrade.
+    image: docker.io/getfoundathyon/keel-api:v0.1.0
     restart: unless-stopped
     environment:
       DOKPLOY_URL: ${DOKPLOY_URL:?URL de tu Dokploy, p.ej. https://dokploy.konectus.internal}

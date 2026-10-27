@@ -54,21 +54,78 @@ La configuración vive en `~/.keel`:
 
 ## Levantar una instancia del servidor en Dokploy
 
-Una instancia por organización (p.ej. `keel.jalo…` y `keel.konectus…`).
+La API, el admin y el worker corren en **una sola imagen** (`getfoundathyon/keel-api`) y en un solo contenedor: comparten la base SQLite del volumen `/data`. Levanta una instancia por organización (p.ej. `keel.jalo…` y `keel.konectus…`).
 
-1. En Dokploy crea un servicio **Compose** con [`deploy/docker-compose.yml`](deploy/docker-compose.yml).
-2. En la pestaña Environment define:
+### 1. Crea el servicio Compose
 
-   | Variable                      | Requerida            | Descripción                                                  |
-   | ----------------------------- | -------------------- | ------------------------------------------------------------ |
-   | `DOKPLOY_URL`                 | sí                   | URL de tu Dokploy, p.ej. `https://dokploy.konectus.internal` |
-   | `DOKPLOY_API_KEY`             | sí                   | API key de Dokploy (Settings → Profile → API/CLI)            |
-   | `KEEL_ADMIN_PASSWORD`         | sí                   | Contraseña del admin, mínimo 12 caracteres                   |
-   | `KEEL_CI_EXPIRY_MINUTES`      | no (60)              | Minutos que un deploy espera al CI antes de expirar          |
-   | `KEEL_DEPLOY_TIMEOUT_MINUTES` | no (15)              | Minutos que Dokploy tiene para terminar un deployment        |
-   | `KEEL_DB_PATH`                | no (`/data/keel.db`) | Ruta de la base SQLite dentro del contenedor                 |
+En Dokploy: **Project → Create Service → Compose**. Ponle de nombre `keel` (o `keel-konectus`), y en **General → Provider** elige **Raw** y pega este compose (es el mismo que [`deploy/docker-compose.yml`](deploy/docker-compose.yml)):
 
-3. Asigna un dominio al servicio `keel`, puerto 3000. La API queda en `https://<dominio>/api`.
+```yaml
+services:
+  keel:
+    image: docker.io/getfoundathyon/keel-api:v0.1.0
+    restart: unless-stopped
+    environment:
+      DOKPLOY_URL: ${DOKPLOY_URL:?URL de tu Dokploy, p.ej. https://dokploy.konectus.internal}
+      DOKPLOY_API_KEY: ${DOKPLOY_API_KEY:?API key de Dokploy (Settings → Profile → API/CLI)}
+      KEEL_ADMIN_PASSWORD: ${KEEL_ADMIN_PASSWORD:?Contraseña del admin, mínimo 12 caracteres}
+      KEEL_CI_EXPIRY_MINUTES: ${KEEL_CI_EXPIRY_MINUTES:-60}
+      KEEL_DEPLOY_TIMEOUT_MINUTES: ${KEEL_DEPLOY_TIMEOUT_MINUTES:-15}
+    volumes:
+      - keel-data:/data
+    expose:
+      - "3000"
+
+volumes:
+  keel-data:
+```
+
+- Usa una versión fija (`:v0.1.0`) en lugar de `:latest`, así un redeploy no cambia de versión sin que lo decidas. Para actualizar keel, cambia la tag y redespliega.
+- `keel-data` es un volumen con nombre: la base (scopes, servicios, tokens de CI e historial) sobrevive a redeploys y actualizaciones de la imagen.
+- `expose` solo abre el puerto 3000 dentro de la red de Docker; el acceso desde fuera lo da el dominio del paso 3. No publiques el puerto con `ports`.
+
+### 2. Define las variables de entorno
+
+En la pestaña **Environment** del servicio pega las variables (Dokploy las escribe en el `.env` del compose):
+
+```env
+DOKPLOY_URL=https://dokploy.konectus.internal
+DOKPLOY_API_KEY=<api key de Dokploy>
+KEEL_ADMIN_PASSWORD=<contraseña larga y aleatoria>
+```
+
+| Variable                      | Requerida            | Descripción                                                  |
+| ----------------------------- | -------------------- | ------------------------------------------------------------ |
+| `DOKPLOY_URL`                 | sí                   | URL de tu Dokploy, p.ej. `https://dokploy.konectus.internal` |
+| `DOKPLOY_API_KEY`             | sí                   | API key de Dokploy (Settings → Profile → API/CLI)            |
+| `KEEL_ADMIN_PASSWORD`         | sí                   | Contraseña del admin, mínimo 12 caracteres                   |
+| `KEEL_CI_EXPIRY_MINUTES`      | no (60)              | Minutos que un deploy espera al CI antes de expirar          |
+| `KEEL_DEPLOY_TIMEOUT_MINUTES` | no (15)              | Minutos que Dokploy tiene para terminar un deployment        |
+| `KEEL_DB_PATH`                | no (`/data/keel.db`) | Ruta de la base SQLite dentro del contenedor                 |
+
+Si falta una variable requerida, el deploy del compose falla mostrando su descripción. Para generar la contraseña: `openssl rand -base64 24`.
+
+Después pulsa **Deploy**.
+
+### 3. Asigna el dominio
+
+En la pestaña **Domains** → **Add Domain**:
+
+| Campo          | Valor                          |
+| -------------- | ------------------------------ |
+| Service Name   | `keel`                         |
+| Host           | `keel.konectus.com`            |
+| Path           | `/`                            |
+| Container Port | `3000`                         |
+| HTTPS          | activado, con Let's Encrypt    |
+
+Vuelve a pulsar **Deploy** para que Dokploy aplique el dominio. Comprueba que responde:
+
+```bash
+curl https://keel.konectus.com/api/health
+```
+
+Debe devolver `{"ok":true}`. El admin queda en `https://keel.konectus.com/` (entra con `KEEL_ADMIN_PASSWORD`) y la API en `https://keel.konectus.com/api`, que es la URL que usas en `keel login` y en la variable `KEEL_API_URL` de cada repo.
 
 > La GitHub Action tiene que poder llegar a `https://<dominio>/api/ci-result`. Con runners hospedados por GitHub, el dominio debe ser público (el resto de la API y el admin pueden protegerse aparte); si keel solo es accesible en una red interna, usa runners self-hosted dentro de esa red.
 
