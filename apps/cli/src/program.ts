@@ -5,6 +5,8 @@ import { createVersion } from "./commands/create-version.js";
 import { deploy } from "./commands/deploy.js";
 import { deploys } from "./commands/deploys.js";
 import { login } from "./commands/login.js";
+import { rollback } from "./commands/rollback.js";
+import { scopes } from "./commands/scopes.js";
 import { update } from "./commands/update.js";
 import { use } from "./commands/use.js";
 import { versions } from "./commands/versions.js";
@@ -82,6 +84,36 @@ export function buildProgram(): Command {
       const d = result.deploy;
       p.log.success(`Deploy ${d.id} encolado: ${d.tag} → ${d.service} (${d.status})`);
       if (d.status === "ci_failed") p.log.warn(d.error ?? "El CI de esta versión falló.");
+    });
+
+  program
+    .command("rollback")
+    .description("Vuelve un scope a la versión que tenía antes (o a --to <versión> ya desplegada ahí)")
+    .option("-s, --service <scope>", "scope del repo; si se omite, se pregunta")
+    .option("--to <tag>", "versión a la que volver; debe haberse desplegado antes en ese scope")
+    .option("-y, --yes", "no pedir confirmación (obligatorio sin terminal interactiva)")
+    .action(async (opts: { service?: string; to?: string; yes?: boolean }) => {
+      const interactive = process.stdin.isTTY === true && process.stdout.isTTY === true;
+      const result = await rollback({
+        ...opts,
+        ...(interactive && {
+          confirm: async (message: string) => (await p.confirm({ message, initialValue: false })) === true,
+        }),
+      });
+      const d = result.deploy;
+      p.log.success(
+        `Rollback encolado: ${result.service} ${result.from.tag} → ${result.to.tag} (deploy ${d.id.slice(0, 8)}, ${d.status})`,
+      );
+    });
+
+  program
+    .command("scopes")
+    .alias("services")
+    .description("Muestra los scopes del repo actual: su servicio en Dokploy, la versión que corren y su último deploy")
+    .option("--json", "salida JSON para scripts")
+    .action(async (opts: { json?: boolean }) => {
+      const output = await scopes({ ...opts, color: process.stdout.isTTY === true && !process.env.NO_COLOR });
+      console.log(output);
     });
 
   program

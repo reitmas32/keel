@@ -3,6 +3,7 @@ import type {
   Deploy,
   DeployDetail,
   RegisterVersionRequest,
+  ServiceSummary,
   Version,
   VersionCiStatus,
 } from "@keel/shared";
@@ -16,8 +17,13 @@ export class KeelApi {
   ) {}
 
   async listServices(repo: string): Promise<string[]> {
-    const body = await this.request<{ services: { alias: string }[] }>("GET", `/repos/${repo}/services`);
-    return body.services.map((s) => s.alias);
+    return (await this.listServiceSummaries(repo)).map((s) => s.alias);
+  }
+
+  /** The repo's services with their details; servers before v0.5.0 only fill in `alias`. */
+  async listServiceSummaries(repo: string): Promise<ServiceSummary[]> {
+    const body = await this.request<{ services: ServiceSummary[] }>("GET", `/repos/${repo}/services`);
+    return body.services;
   }
 
   createDeploy(request: CreateDeployRequest): Promise<Deploy> {

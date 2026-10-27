@@ -1,4 +1,5 @@
-import type { Version } from "@keel/shared";
+import { createHash } from "node:crypto";
+import type { Deploy, ServiceSummary, Version } from "@keel/shared";
 
 export interface FakeKeelRequest {
   method: string;
@@ -13,6 +14,10 @@ export interface FakeKeel {
   versions: Map<string, Version>;
   /** Make POST /deploys fail with this keel error. */
   failDeploysWith?: string;
+  /** What GET /services answers; defaults to `api-prod` and `worker` with only their alias. */
+  services: ServiceSummary[];
+  /** Deploy history for GET /repos/.../deploys, newest first. */
+  deploys: Deploy[];
 }
 
 const API = "https://keel.konectus.internal/api";
@@ -25,6 +30,8 @@ export function createFakeKeel({ legacy = false }: { legacy?: boolean } = {}): F
   const keel: FakeKeel = {
     requests: [],
     versions: new Map(),
+    services: [{ alias: "api-prod" }, { alias: "worker" }],
+    deploys: [],
     fetch: (async (input: string | URL | Request, init?: RequestInit) => {
       const path = input.toString().replace(API, "");
       const method = init?.method ?? "GET";
@@ -33,7 +40,14 @@ export function createFakeKeel({ legacy = false }: { legacy?: boolean } = {}): F
 
       const notFound = () => new Response("<!DOCTYPE html><title>404</title>", { status: 404 });
       if (path === "/repos/konectus-io/app/services") {
-        return Response.json({ repo: "konectus-io/app", services: [{ alias: "api-prod" }, { alias: "worker" }] });
+        return Response.json({ repo: "konectus-io/app", services: keel.services });
+      }
+      if (path.startsWith("/repos/konectus-io/app/deploys")) {
+        const service = new URL(`http://x${path}`).searchParams.get("service");
+        return Response.json({
+          repo: "konectus-io/app",
+          deploys: keel.deploys.filter((d) => !service || d.service === service),
+        });
       }
       if (path === "/deploys" && method === "POST") {
         if (keel.failDeploysWith) return Response.json({ error: keel.failDeploysWith }, { status: 409 });
@@ -81,6 +95,30 @@ export function knownVersion(tag: string, sha: string, overrides: Partial<Versio
     ciStatus: "success",
     ciFinishedAt: "2026-10-27T12:05:00.000Z",
     runUrl: null,
+    ...overrides,
+  };
+}
+
+/** A deploy as keel returns it; `finishedAt` defaults to a few minutes after `createdAt`. */
+export function pastDeploy(
+  id: string,
+  tag: string,
+  service: string,
+  createdAt: string,
+  overrides: Partial<Deploy> = {},
+): Deploy {
+  return {
+    id,
+    repo: "konectus-io/app",
+    tag,
+    // A real-looking commit per tag, so rollbacks can be checked against it.
+    sha: createHash("sha1").update(tag).digest("hex"),
+    service,
+    status: "deployed",
+    error: null,
+    createdAt,
+    updatedAt: createdAt,
+    finishedAt: new Date(Date.parse(createdAt) + 62_000).toISOString(),
     ...overrides,
   };
 }

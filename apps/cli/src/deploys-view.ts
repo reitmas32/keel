@@ -18,7 +18,7 @@ interface StatusStyle {
 }
 
 // Every icon is one terminal column wide so the table stays aligned.
-const STATUS: Record<DeployStatus, StatusStyle> = {
+export const STATUS: Record<DeployStatus, StatusStyle> = {
   waiting_ci: { icon: "◌", label: "esperando CI", paint: (c) => c.gray },
   ci_passed: { icon: "◌", label: "CI ok, en cola", paint: (c) => c.blue },
   deploying: { icon: "●", label: "en curso", paint: (c) => c.yellow },
@@ -70,7 +70,7 @@ export function formatDuration(ms: number): string {
 }
 
 /** When the deploy reached its final state; servers before v0.3.0 only tell it through `updatedAt`. */
-const finishedAt = (d: Deploy): string | null => d.finishedAt ?? (isTerminal(d.status) ? d.updatedAt : null);
+export const finishedAt = (d: Deploy): string | null => d.finishedAt ?? (isTerminal(d.status) ? d.updatedAt : null);
 
 const elapsed = (from: string, to: string | Date) =>
   (typeof to === "string" ? Date.parse(to) : to.getTime()) - Date.parse(from);
