@@ -1,4 +1,4 @@
-import type { DeployStatus } from "@keel/shared";
+import type { DeployStatus, VersionCiStatus } from "@keel/shared";
 import { headers } from "next/headers";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -17,6 +17,14 @@ const BADGE: Record<DeployStatus, string> = {
   expired: "err",
 };
 
+const VERSION_BADGE: Record<VersionCiStatus, string> = {
+  pending: "",
+  success: "ok",
+  failure: "err",
+  cancelled: "err",
+  expired: "err",
+};
+
 const formatDate = (iso: string) =>
   `${new Date(iso).toLocaleString("es-MX", { dateStyle: "short", timeStyle: "short", timeZone: "UTC" })} UTC`;
 
@@ -28,6 +36,7 @@ export default async function ScopePage({ params }: { params: Promise<{ id: stri
 
   const services = store.listServices(scope.id);
   const deploys = store.listDeploys({ repo: scope.repo }, { limit: 20, newestFirst: true });
+  const versions = store.listVersions(scope.repo, { limit: 20 });
   const h = await headers();
   const apiUrl = `${h.get("x-forwarded-proto") ?? "http"}://${h.get("host")}/api`;
 
@@ -111,6 +120,55 @@ export default async function ScopePage({ params }: { params: Promise<{ id: stri
           <code>Authorization: Bearer $DEPLOY_API_TOKEN</code>.
         </p>
         <RotateTokenForm scopeId={scope.id} />
+      </section>
+
+      <section className="card">
+        <h2>Versiones</h2>
+        {versions.length === 0 ? (
+          <p className="muted">
+            Sin versiones todavía. Aparecen al crearlas con <code>keel create-version</code> o cuando su CI avisa.
+          </p>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Versión</th>
+                  <th>Rama</th>
+                  <th>Creada por</th>
+                  <th>CI</th>
+                  <th>Creada</th>
+                </tr>
+              </thead>
+              <tbody>
+                {versions.map((v) => (
+                  <tr key={v.tag}>
+                    <td>
+                      <code>{v.tag}</code>
+                    </td>
+                    <td>{v.branch ? <code>{v.branch}</code> : <span className="muted">—</span>}</td>
+                    <td>{v.createdByName ?? v.createdByEmail ?? <span className="muted">—</span>}</td>
+                    <td>
+                      {v.runUrl ? (
+                        <a
+                          href={v.runUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className={`badge ${VERSION_BADGE[v.ciStatus]}`}
+                        >
+                          {v.ciStatus}
+                        </a>
+                      ) : (
+                        <span className={`badge ${VERSION_BADGE[v.ciStatus]}`}>{v.ciStatus}</span>
+                      )}
+                    </td>
+                    <td className="muted">{formatDate(v.createdAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
 
       <section className="card">
