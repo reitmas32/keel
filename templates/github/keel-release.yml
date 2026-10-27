@@ -10,6 +10,7 @@
 
 name: keel release
 
+# Tags from any branch: keel lets a version be created wherever it is pushed and in sync.
 on:
   push:
     tags: ["v*.*.*"]
@@ -71,7 +72,8 @@ jobs:
             --arg sha "$GITHUB_SHA" \
             --arg tag "$GITHUB_REF_NAME" \
             --arg status "$status" \
-            '{repo: $repo, sha: $sha, tag: $tag, status: $status}')
+            --arg run_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            '{repo: $repo, sha: $sha, tag: $tag, status: $status, runUrl: $run_url}')
           curl --fail-with-body --silent --show-error \
             --retry 5 --retry-connrefused --retry-delay 5 \
             -X POST "${KEEL_API_URL%/}/ci-result" \

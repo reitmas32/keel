@@ -29,9 +29,12 @@ npm i -g https://github.com/reitmas32/keel/releases/latest/download/keel-cli.tgz
 ```bash
 keel login                       # pide la org (github.com:konectus-io) y la URL de su API
 keel use                         # elige la organización activa entre las configuradas
-keel create-version v1.4.0       # valida y publica el tag
+keel create-version v1.4.0       # valida y publica el tag (desde cualquier rama)
+keel create-version v1.4.0 -d stg  # además pide el deploy de esa misma versión a stg
+keel versions                    # versiones del repo: rama, quién la creó y cómo terminó su CI
 keel deploy                      # pregunta servicio y versión
-keel deploy -l -s api-prod       # despliega la última versión en api-prod
+keel deploy -l -s api-prod       # la versión más alta del repo, esté como esté su CI
+keel deploy -r -s api-prod       # la versión más alta cuyo CI pasó (--latest-ready)
 keel deploys                     # deploys del repo: estado, cuándo terminaron y por qué fallaron
 keel deploys -s staging -n 50    # solo un servicio, hasta 50
 keel deploys d3f1                # detalle y línea de tiempo de un deploy (id o sus primeros caracteres)
@@ -60,14 +63,35 @@ La configuración vive en `~/.keel`:
 └── github.com:konectus-io/config.json   # { "org": "...", "apiUrl": "https://..." }
 ```
 
-`keel create-version` se detiene sin crear nada si:
+`keel create-version` funciona **desde cualquier rama**: el CI corre sobre el tag y la versión se puede desplegar igual. Se detiene sin crear nada si:
 
 - el `origin` del repo no pertenece a la organización activa,
-- la rama local y su remota no apuntan al mismo commit (local adelantada, atrasada o divergente),
+- la rama local y su remota no apuntan al mismo commit (local adelantada, atrasada o divergente, o la rama nunca se subió),
 - el tag ya existe en el remoto (o en local),
-- la versión no es semver con prefijo `v` (`v1.4.0`, `v2.0.0-rc.1`).
+- la versión no es semver con prefijo `v` (`v1.4.0`, `v2.0.0-rc.1`),
+- con `-d <servicio>`, el servicio no está vinculado al repo (se revisa antes de crear el tag).
 
-`keel deploy` usa la misma validación de organización. `-l` toma el tag semver más alto del remoto; `-s` y `-v` evitan las preguntas.
+Al publicar el tag, la registra en keel como pendiente, con su rama y quién la creó (`user.name` y `user.email` de git). Si keel no responde o es anterior a v0.4.0, la versión se publica igual y keel la conoce cuando llega el resultado de su CI.
+
+`keel versions` muestra cada versión con su ciclo de CI: `◌ CI en curso` mientras corre, `✔ CI ok`, `✖ CI falló`, `✖ CI cancelado`, o `◷ sin resultado del CI` si no avisó en `KEEL_CI_EXPIRY_MINUTES`. Las que no pasaron muestran el link a su run.
+
+```text
+  VERSIÓN   RAMA           CREADA POR   CREADA      CI           DURACIÓN DEL CI
+  v1.1.0    main           Bruno        hoy 16:35   ✖ CI falló   12s
+            └ https://github.com/konectus-io/app/actions/runs/102
+  v1.0.0    hotfix/login   Ana          hoy 16:35   ✔ CI ok      26s
+  2 versiones · última lista para desplegar: v1.0.0
+```
+
+`keel deploy` usa la misma validación de organización y elige la versión así:
+
+| Opción | Versión | Para qué |
+| --- | --- | --- |
+| `-v v1.4.0` | esa | lo más seguro: no depende de qué más se haya publicado |
+| `-l` | el tag semver más alto del remoto, esté como esté su CI | probar lo último en staging |
+| `-r` (`--latest-ready`) | la más alta cuyo CI pasó | producción y rollbacks |
+
+Antes de pedir el deploy dice qué versión eligió, quién la creó y cómo va su CI. Si con `-l` la versión la creó otra persona (otro `user.email`), pregunta antes de desplegarla; sin terminal interactiva solo lo avisa. Para crear y desplegar sin carreras con otros devs, usa `create-version -d`: despliega exactamente la versión que acabas de crear.
 
 ## Levantar una instancia del servidor en Dokploy
 
