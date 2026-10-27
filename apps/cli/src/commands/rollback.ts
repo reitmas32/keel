@@ -21,6 +21,8 @@ export interface RollbackOptions {
   home?: string;
   fetch?: typeof fetch;
   now?: Date;
+  /** Time zone the confirmation shows dates in; the machine's by default. */
+  timeZone?: string;
 }
 
 export interface RollbackResult {
@@ -46,6 +48,7 @@ export async function rollback({
   home = keelHome(),
   fetch: fetchImpl,
   now = new Date(),
+  timeZone,
 }: RollbackOptions): Promise<RollbackResult> {
   const { org, repo } = await resolveRepo(cwd, home, "hacer rollback");
   const api = new KeelApi(org.apiUrl, fetchImpl);
@@ -88,7 +91,7 @@ export async function rollback({
     }
   }
 
-  const deployedAt = formatWhen(previous.finishedAt ?? previous.updatedAt, { now, color: false });
+  const deployedAt = formatWhen(previous.finishedAt ?? previous.updatedAt, { now, timeZone, color: false });
   const message = `Rollback de ${target}: ${current.tag} → ${previous.tag} (desplegada ${deployedAt}). ¿Continuar?`;
   if (!yes) {
     if (!confirm)

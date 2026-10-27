@@ -8,7 +8,7 @@ let keel: FakeKeel;
 
 const now = new Date("2026-10-27T18:00:00Z");
 const run = (opts: Parameters<typeof rollback>[0]) =>
-  rollback({ cwd: fx.work, home: fx.home, fetch: keel.fetch, now, ...opts });
+  rollback({ cwd: fx.work, home: fx.home, fetch: keel.fetch, now, timeZone: "America/Mexico_City", ...opts });
 const deployRequest = () => keel.requests.find((r) => r.method === "POST" && r.path === "/deploys");
 
 beforeEach(async () => {
