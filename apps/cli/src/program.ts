@@ -7,6 +7,8 @@ import { deploys } from "./commands/deploys.js";
 import { login } from "./commands/login.js";
 import { update } from "./commands/update.js";
 import { use } from "./commands/use.js";
+import { versions } from "./commands/versions.js";
+import { describeVersion } from "./versions-view.js";
 
 export function buildProgram(): Command {
   const program = new Command()
@@ -31,15 +33,27 @@ export function buildProgram(): Command {
     .command("create-version")
     .description("Valida el repo y crea + publica un tag de versión")
     .argument("<version>", "versión semver, p.ej. v1.0.0")
-    .action(async (version: string) => {
+    .option("-d, --deploy <alias>", "después de crearla, despliega esta misma versión en ese servicio")
+    .action(async (version: string, opts: { deploy?: string }) => {
       const spinner = p.spinner();
       spinner.start(`Validando y creando ${version}`);
+      let result: Awaited<ReturnType<typeof createVersion>>;
       try {
-        const result = await createVersion({ version });
-        spinner.stop(`${result.tag} publicado en ${result.repo} (${result.branch} @ ${result.sha.slice(0, 7)})`);
+        result = await createVersion({ version, ...(opts.deploy && { deploy: opts.deploy }) });
       } catch (error) {
         spinner.error("No se creó la versión");
         throw error;
+      }
+      spinner.stop(`${result.tag} publicado en ${result.repo} (${result.branch} @ ${result.sha.slice(0, 7)})`);
+      if (result.registerWarning) p.log.warn(result.registerWarning);
+      if (result.deploy) {
+        const d = result.deploy;
+        p.log.success(`Deploy ${d.id} encolado: ${d.tag} → ${d.service} (${d.status})`);
+      } else if (result.deployError) {
+        p.log.error(result.deployError);
+        process.exitCode = 1;
+      } else {
+        p.log.info(`Para desplegarla: keel deploy -s <servicio> -v ${result.tag}`);
       }
     });
 
@@ -48,11 +62,36 @@ export function buildProgram(): Command {
     .description("Solicita el deploy de una versión a un servicio de Dokploy")
     .option("-s, --service <alias>", "servicio de Dokploy; si se omite, se pregunta")
     .option("-v, --version <tag>", "versión a desplegar; si se omite, se pregunta")
-    .option("-l, --latest", "usa la última versión creada")
-    .action(async (opts: { service?: string; version?: string; latest?: boolean }) => {
-      const result = await deploy(opts);
-      p.log.success(`Deploy ${result.id} encolado: ${result.tag} → ${result.service} (${result.status})`);
-      if (result.status === "ci_failed") p.log.warn(result.error ?? "El CI de esta versión falló.");
+    .option("-l, --latest", "usa la versión más alta del repo, esté como esté su CI")
+    .option("-r, --latest-ready", "usa la versión más alta cuyo CI pasó")
+    .action(async (opts: { service?: string; version?: string; latest?: boolean; latestReady?: boolean }) => {
+      const interactive = process.stdin.isTTY === true && process.stdout.isTTY === true;
+      const result = await deploy({
+        ...opts,
+        ...(interactive && {
+          confirm: async (message: string) => {
+            const answer = await p.confirm({ message, initialValue: false });
+            return answer === true;
+          },
+        }),
+      });
+      if (result.version) p.log.info(describeVersion(result.version, { now: new Date(), color: false }));
+      if (result.createdByOther && !interactive) {
+        p.log.warn("La creó otra persona. Si querías la tuya, despliégala con -v <versión>.");
+      }
+      const d = result.deploy;
+      p.log.success(`Deploy ${d.id} encolado: ${d.tag} → ${d.service} (${d.status})`);
+      if (d.status === "ci_failed") p.log.warn(d.error ?? "El CI de esta versión falló.");
+    });
+
+  program
+    .command("versions")
+    .description("Muestra las versiones del repo actual: quién las creó, desde qué rama y cómo terminó su CI")
+    .option("-n, --limit <n>", "cuántas mostrar (por defecto 20, máximo 200)", (v) => Number(v))
+    .option("--json", "salida JSON para scripts")
+    .action(async (opts: { limit?: number; json?: boolean }) => {
+      const output = await versions({ ...opts, color: process.stdout.isTTY === true && !process.env.NO_COLOR });
+      console.log(output);
     });
 
   program

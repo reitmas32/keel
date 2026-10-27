@@ -85,3 +85,17 @@ export async function localTagExists(cwd: string, tag: string): Promise<boolean>
     return false;
   }
 }
+
+/** `user.name` and `user.email` from git, to record who created a version. Missing values stay undefined. */
+export async function gitIdentity(cwd: string): Promise<{ name?: string; email?: string }> {
+  const read = async (key: string) => {
+    try {
+      const { stdout } = await exec("git", ["config", "--get", key], { cwd });
+      return stdout.trim() || undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const [name, email] = await Promise.all([read("user.name"), read("user.email")]);
+  return { ...(name && { name }), ...(email && { email }) };
+}

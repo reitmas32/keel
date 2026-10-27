@@ -1,5 +1,12 @@
-import type { CreateDeployRequest, Deploy, DeployDetail } from "@keel/shared";
-import { KeelError } from "./errors.js";
+import type {
+  CreateDeployRequest,
+  Deploy,
+  DeployDetail,
+  RegisterVersionRequest,
+  Version,
+  VersionCiStatus,
+} from "@keel/shared";
+import { KeelApiError, KeelError } from "./errors.js";
 
 /** Client for a keel API instance (the org's `apiUrl`). */
 export class KeelApi {
@@ -30,6 +37,29 @@ export class KeelApi {
     return body.deploys;
   }
 
+  /** Registers a version `create-version` just pushed. Throws KeelApiError (`unsupported`) on servers < v0.4.0. */
+  registerVersion(request: RegisterVersionRequest): Promise<Version> {
+    return this.request<Version>("POST", "/versions", request);
+  }
+
+  /** Newest first. Returns undefined when the server is older than v0.4.0 and doesn't track versions. */
+  async listVersions(
+    repo: string,
+    options: { limit?: number; status?: VersionCiStatus } = {},
+  ): Promise<Version[] | undefined> {
+    const query = new URLSearchParams();
+    if (options.limit) query.set("limit", String(options.limit));
+    if (options.status) query.set("status", options.status);
+    const suffix = query.size ? `?${query}` : "";
+    try {
+      const body = await this.request<{ versions: Version[] }>("GET", `/repos/${repo}/versions${suffix}`);
+      return body.versions;
+    } catch (error) {
+      if (error instanceof KeelApiError && error.unsupported) return undefined;
+      throw error;
+    }
+  }
+
   /** One deploy of `repo` by its id or a unique prefix of it (at least 4 characters). */
   getRepoDeploy(repo: string, idPrefix: string): Promise<DeployDetail> {
     return this.request<DeployDetail>("GET", `/repos/${repo}/deploys/${encodeURIComponent(idPrefix)}`);
@@ -49,7 +79,12 @@ export class KeelApi {
     }
     const json = (await response.json().catch(() => undefined)) as (T & { error?: string }) | undefined;
     if (!response.ok) {
-      throw new KeelError(json?.error ?? `La API de keel respondió ${response.status} en ${path}.`);
+      const fromKeel = typeof json?.error === "string";
+      throw new KeelApiError(
+        json?.error ?? `La API de keel respondió ${response.status} en ${path}.`,
+        response.status,
+        fromKeel,
+      );
     }
     return json as T;
   }
