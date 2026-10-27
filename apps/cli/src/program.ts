@@ -1,5 +1,6 @@
 import * as p from "@clack/prompts";
 import { Command } from "commander";
+import pkg from "../package.json" with { type: "json" };
 import { createVersion } from "./commands/create-version.js";
 import { deploy } from "./commands/deploy.js";
 import { login } from "./commands/login.js";
@@ -9,7 +10,7 @@ export function buildProgram(): Command {
   const program = new Command()
     .name("keel")
     .description("Crea versiones y dispara deploys hacia Dokploy")
-    .version("0.0.0");
+    .version(pkg.version);
 
   program
     .command("login")

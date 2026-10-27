@@ -18,11 +18,11 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@keel/shared": "workspace:*",
     "tsup": "^9.0.0"
   },
   "dependencies": {
     "@clack/prompts": "^1.8.1",
-    "@keel/shared": "workspace:*",
     "commander": "^15.0.0",
     "zod": "^4.6.7"
   }
