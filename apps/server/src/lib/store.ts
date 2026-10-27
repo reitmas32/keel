@@ -204,7 +204,11 @@ export class Store {
     return row ? toDeploy(row) : undefined;
   }
 
-  listDeploys(filter: { status?: DeployStatus; repo?: string; sha?: string; serviceId?: string } = {}, limit = 100) {
+  /** Oldest first by default (queue order); pass `newestFirst` for history views. */
+  listDeploys(
+    filter: { status?: DeployStatus; repo?: string; sha?: string; serviceId?: string } = {},
+    { limit = 100, newestFirst = false }: { limit?: number; newestFirst?: boolean } = {},
+  ) {
     const conditions: [string, string | undefined][] = [
       ["status = ?", filter.status],
       ["repo = ?", filter.repo && normalizeRepo(filter.repo)],
@@ -214,7 +218,7 @@ export class Store {
     const active = conditions.filter((c): c is [string, string] => Boolean(c[1]));
     const where = active.map(([sql]) => sql);
     const params = active.map(([, value]) => value);
-    const sql = `SELECT * FROM deploys ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at LIMIT ?`;
+    const sql = `SELECT * FROM deploys ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at ${newestFirst ? "DESC" : "ASC"} LIMIT ?`;
     return this.db
       .prepare(sql)
       .all(...params, limit)
