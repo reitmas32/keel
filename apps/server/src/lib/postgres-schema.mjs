@@ -16,6 +16,59 @@ export const POSTGRES_NOW_ISO = `to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T
 /** Key of the advisory lock that serializes migrations when several replicas start at once. */
 export const MIGRATION_LOCK_KEY = 0x6b65656c; // "keel"
 
+// Renames for migration 3, written as DO blocks that check the current shape first, so a retry is harmless like the
+// IF NOT EXISTS of the others. Names are keel's own identifiers, never user input.
+
+/** @param {string} from @param {string} to */
+function renameTable(from, to) {
+  return `DO $$ BEGIN
+    IF to_regclass('${from}') IS NOT NULL AND to_regclass('${to}') IS NULL THEN
+      ALTER TABLE ${from} RENAME TO ${to};
+    END IF;
+  END $$`;
+}
+
+/** @param {string} table @param {string} from @param {string} to */
+function renameColumn(table, from, to) {
+  return `DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_schema = current_schema() AND table_name = '${table}' AND column_name = '${from}') THEN
+      ALTER TABLE ${table} RENAME COLUMN ${from} TO ${to};
+    END IF;
+  END $$`;
+}
+
+/**
+ * Renames the constraints of `table` that Postgres named after its old table and column names (`<table>_pkey`,
+ * `<table>_<column>_fkey`, `<table>_<columns>_key` and, since Postgres 18, `<table>_<column>_not_null`). Renaming a
+ * primary key or unique constraint renames its index too.
+ *
+ * @param {string} table
+ * @param {string} oldPrefix the table's name when Postgres named its constraints
+ * @param {string} newPrefix
+ * @param {Record<string, string>} columns old column name to new one
+ */
+function renameConstraints(table, oldPrefix, newPrefix, columns) {
+  const replaceColumns = Object.entries(columns)
+    .map(([from, to]) => `\n      renamed := replace(renamed, '_${from}_', '_${to}_');`)
+    .join("");
+  return `DO $$
+  DECLARE
+    r record;
+    renamed text;
+  BEGIN
+    FOR r IN SELECT conname FROM pg_constraint WHERE conrelid = to_regclass('${table}') LOOP
+      renamed := r.conname;
+      IF starts_with(renamed, '${oldPrefix}_') THEN
+        renamed := '${newPrefix}' || substr(renamed, ${oldPrefix.length + 1});
+      END IF;${replaceColumns}
+      IF renamed <> r.conname THEN
+        EXECUTE format('ALTER TABLE %I RENAME CONSTRAINT %I TO %I', '${table}', r.conname, renamed);
+      END IF;
+    END LOOP;
+  END $$`;
+}
+
 /**
  * Ordered migrations. Each one runs once, inside a transaction, and is recorded in `schema_migrations`.
  * Statements use IF NOT EXISTS so a half-applied database can be retried. Append new versions; never edit old ones.
@@ -153,6 +206,29 @@ export const POSTGRES_MIGRATIONS = [
       `UPDATE api_tokens SET member_id = '${BOOTSTRAP_ADMIN.id}' WHERE member_id IS NULL`,
     ],
   },
+  {
+    version: 3,
+    name: "apps y scopes (antes scopes y servicios)",
+    // The names swap, so `scopes` becomes `apps` before `services` becomes `scopes`. Postgres keeps foreign keys
+    // pointing at the renamed tables and columns; the constraints (and the indexes behind primary keys and unique
+    // constraints) are renamed to match, `apps`' first so `scopes_pkey` is free for the new `scopes`.
+    statements: [
+      renameTable("scopes", "apps"),
+      renameTable("services", "scopes"),
+      renameTable("service_locks", "scope_locks"),
+      renameColumn("scopes", "scope_id", "app_id"),
+      renameColumn("deploys", "service_id", "scope_id"),
+      renameColumn("deploys", "service_alias", "scope_alias"),
+      renameColumn("scope_locks", "service_id", "scope_id"),
+      renameColumn("member_grants", "service_pattern", "scope_pattern"),
+      renameColumn("audit_log", "service", "scope"),
+      renameConstraints("apps", "scopes", "apps", {}),
+      renameConstraints("scopes", "services", "scopes", { scope_id: "app_id" }),
+      renameConstraints("deploys", "deploys", "deploys", { service_id: "scope_id", service_alias: "scope_alias" }),
+      renameConstraints("scope_locks", "service_locks", "scope_locks", { service_id: "scope_id" }),
+      renameConstraints("member_grants", "member_grants", "member_grants", { service_pattern: "scope_pattern" }),
+    ],
+  },
 ];
 
 /**
@@ -170,8 +246,8 @@ export function bootstrapAdminSql(createdAtSql) {
 
 /** keel's tables in foreign-key order: a table only references tables before it. */
 export const TABLES = [
+  "apps",
   "scopes",
-  "services",
   "ci_results",
   "deploys",
   "versions",
@@ -179,7 +255,7 @@ export const TABLES = [
   "member_grants",
   "invites",
   "api_tokens",
-  "service_locks",
+  "scope_locks",
   "audit_log",
 ];
 

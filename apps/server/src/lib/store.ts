@@ -12,21 +12,21 @@ import {
 import type { Db, Row, SqlValue } from "./db";
 import { BOOTSTRAP_ADMIN } from "./postgres-schema.mjs";
 
-export interface Scope {
+export interface App {
   id: string;
   name: string;
   repo: string;
   createdAt: string;
 }
 
-export type ServiceKind = "application" | "compose";
+export type ScopeKind = "application" | "compose";
 
-export interface Service {
+export interface Scope {
   id: string;
-  scopeId: string;
+  appId: string;
   alias: string;
   dokployUrl: string;
-  kind: ServiceKind;
+  kind: ScopeKind;
   dokployId: string;
   /** Compose only: env variable keel sets to the version tag before redeploying. */
   tagVariable: string | null;
@@ -41,8 +41,9 @@ export interface CiResult {
   receivedAt: string;
 }
 
-export interface DeployRecord extends Deploy {
-  serviceId: string;
+/** A deploy as stored. The API adds `service` (the old name of `scope`) when it returns one. */
+export interface DeployRecord extends Omit<Deploy, "service"> {
+  scopeId: string;
   deployStartedAt: string | null;
   ciPassedAt: string | null;
   finishedAt: string | null;
@@ -83,7 +84,7 @@ export interface MemberGrant {
   id: string;
   memberId: string;
   repoPattern: string;
-  servicePattern: string;
+  scopePattern: string;
   role: Role;
   createdAt: string;
 }
@@ -102,37 +103,39 @@ export interface AuditEntry {
   actorMemberId: string | null;
   action: string;
   repo: string | null;
-  service: string | null;
+  scope: string | null;
   /** Parsed from the JSON column. Never holds secrets. */
   details: Record<string, unknown> | null;
 }
 
 export interface AuditFilter {
   repo?: string | undefined;
+  /** A scope alias. */
+  scope?: string | undefined;
   actor?: string | undefined;
 }
 
-export interface ServiceLockRecord {
-  serviceId: string;
+export interface ScopeLockRecord {
+  scopeId: string;
   reason: string;
   /** API token name, `admin` from the admin UI, or null without a token. */
   lockedBy: string | null;
   createdAt: string;
 }
 
-const toScope = (r: Row): Scope => ({
+const toApp = (r: Row): App => ({
   id: r.id as string,
   name: r.name as string,
   repo: r.repo as string,
   createdAt: r.created_at as string,
 });
 
-const toService = (r: Row): Service => ({
+const toScope = (r: Row): Scope => ({
   id: r.id as string,
-  scopeId: r.scope_id as string,
+  appId: r.app_id as string,
   alias: r.alias as string,
   dokployUrl: r.dokploy_url as string,
-  kind: r.kind as ServiceKind,
+  kind: r.kind as ScopeKind,
   dokployId: r.dokploy_id as string,
   tagVariable: (r.tag_variable as string | null) ?? null,
   createdAt: r.created_at as string,
@@ -143,8 +146,8 @@ const toDeploy = (r: Row): DeployRecord => ({
   repo: r.repo as string,
   tag: r.tag as string,
   sha: r.sha as string,
-  serviceId: r.service_id as string,
-  service: r.service_alias as string,
+  scopeId: r.scope_id as string,
+  scope: r.scope_alias as string,
   status: r.status as DeployStatus,
   error: (r.error as string | null) ?? null,
   deployStartedAt: (r.deploy_started_at as string | null) ?? null,
@@ -179,7 +182,7 @@ const toGrant = (r: Row): MemberGrant => ({
   id: r.id as string,
   memberId: r.member_id as string,
   repoPattern: r.repo_pattern as string,
-  servicePattern: r.service_pattern as string,
+  scopePattern: r.scope_pattern as string,
   role: r.role as Role,
   createdAt: r.created_at as string,
 });
@@ -198,7 +201,7 @@ const toAudit = (r: Row): AuditEntry => {
     actorMemberId: (r.actor_member_id as string | null) ?? null,
     action: r.action as string,
     repo: (r.repo as string | null) ?? null,
-    service: (r.service as string | null) ?? null,
+    scope: (r.scope as string | null) ?? null,
     details,
   };
 };
@@ -206,8 +209,8 @@ const toAudit = (r: Row): AuditEntry => {
 /** Lowercased and trimmed: emails compare without case. */
 export const normalizeEmail = (email: string) => email.trim().toLowerCase();
 
-const toServiceLock = (r: Row): ServiceLockRecord => ({
-  serviceId: r.service_id as string,
+const toScopeLock = (r: Row): ScopeLockRecord => ({
+  scopeId: r.scope_id as string,
   reason: r.reason as string,
   lockedBy: (r.locked_by as string | null) ?? null,
   createdAt: r.created_at as string,
@@ -247,7 +250,7 @@ export class Store {
    * row lock (`FOR NO KEY UPDATE`, which doesn't block inserts that reference the row); SQLite needs nothing, since
    * its transactions already run one at a time.
    */
-  private async lockRow(table: "scopes" | "services", id: string): Promise<void> {
+  private async lockRow(table: "apps" | "scopes", id: string): Promise<void> {
     if (this.db.dialect === "postgres")
       await this.db.get(`SELECT id FROM ${table} WHERE id = ? FOR NO KEY UPDATE`, [id]);
   }
@@ -256,8 +259,8 @@ export class Store {
    * Inside a transaction, serializes the work on one repo's deploys: queuing a deploy and applying a CI result take
    * this lock, so a deploy can't be queued as `waiting_ci` right after its CI result was applied and stay stuck.
    */
-  lockScope(scopeId: string): Promise<void> {
-    return this.lockRow("scopes", scopeId);
+  lockAppRow(appId: string): Promise<void> {
+    return this.lockRow("apps", appId);
   }
 
   /** Insertion order among deploys created in the same millisecond: SQLite's rowid, Postgres's `seq` column. */
@@ -265,22 +268,69 @@ export class Store {
     return this.db.dialect === "postgres" ? "seq" : "rowid";
   }
 
+  // --- apps ---
+
+  async createApp(input: { name: string; repo: string; ciTokenHash: string }, now: Date): Promise<App> {
+    const app = { id: randomUUID(), name: input.name, repo: normalizeRepo(input.repo), createdAt: now.toISOString() };
+    await this.db.run("INSERT INTO apps (id, name, repo, ci_token_hash, created_at) VALUES (?, ?, ?, ?, ?)", [
+      app.id,
+      app.name,
+      app.repo,
+      input.ciTokenHash,
+      app.createdAt,
+    ]);
+    return app;
+  }
+
+  async listApps(): Promise<App[]> {
+    return (await this.db.all("SELECT * FROM apps ORDER BY name")).map(toApp);
+  }
+
+  async getApp(id: string): Promise<App | undefined> {
+    const row = await this.db.get("SELECT * FROM apps WHERE id = ?", [id]);
+    return row ? toApp(row) : undefined;
+  }
+
+  async getAppByRepo(repo: string): Promise<App | undefined> {
+    const row = await this.db.get("SELECT * FROM apps WHERE repo = ?", [normalizeRepo(repo)]);
+    return row ? toApp(row) : undefined;
+  }
+
+  async getCiTokenHash(appId: string): Promise<string | undefined> {
+    const row = await this.db.get("SELECT ci_token_hash FROM apps WHERE id = ?", [appId]);
+    return row?.ci_token_hash as string | undefined;
+  }
+
+  async setCiTokenHash(appId: string, hash: string): Promise<void> {
+    await this.db.run("UPDATE apps SET ci_token_hash = ? WHERE id = ?", [hash, appId]);
+  }
+
+  async deleteApp(id: string): Promise<void> {
+    await this.db.run("DELETE FROM apps WHERE id = ?", [id]);
+  }
+
   // --- scopes ---
 
-  async createScope(input: { name: string; repo: string; ciTokenHash: string }, now: Date): Promise<Scope> {
-    const scope = { id: randomUUID(), name: input.name, repo: normalizeRepo(input.repo), createdAt: now.toISOString() };
-    await this.db.run("INSERT INTO scopes (id, name, repo, ci_token_hash, created_at) VALUES (?, ?, ?, ?, ?)", [
-      scope.id,
-      scope.name,
-      scope.repo,
-      input.ciTokenHash,
-      scope.createdAt,
-    ]);
+  async addScope(input: Omit<Scope, "id" | "createdAt">, now: Date): Promise<Scope> {
+    const scope: Scope = { ...input, id: randomUUID(), createdAt: now.toISOString() };
+    await this.db.run(
+      "INSERT INTO scopes (id, app_id, alias, dokploy_url, kind, dokploy_id, tag_variable, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      [
+        scope.id,
+        scope.appId,
+        scope.alias,
+        scope.dokployUrl,
+        scope.kind,
+        scope.dokployId,
+        scope.tagVariable,
+        scope.createdAt,
+      ],
+    );
     return scope;
   }
 
-  async listScopes(): Promise<Scope[]> {
-    return (await this.db.all("SELECT * FROM scopes ORDER BY name")).map(toScope);
+  async listScopes(appId: string): Promise<Scope[]> {
+    return (await this.db.all("SELECT * FROM scopes WHERE app_id = ? ORDER BY alias", [appId])).map(toScope);
   }
 
   async getScope(id: string): Promise<Scope | undefined> {
@@ -288,85 +338,38 @@ export class Store {
     return row ? toScope(row) : undefined;
   }
 
-  async getScopeByRepo(repo: string): Promise<Scope | undefined> {
-    const row = await this.db.get("SELECT * FROM scopes WHERE repo = ?", [normalizeRepo(repo)]);
+  async getScopeByAlias(appId: string, alias: string): Promise<Scope | undefined> {
+    const row = await this.db.get("SELECT * FROM scopes WHERE app_id = ? AND alias = ?", [appId, alias]);
     return row ? toScope(row) : undefined;
-  }
-
-  async getCiTokenHash(scopeId: string): Promise<string | undefined> {
-    const row = await this.db.get("SELECT ci_token_hash FROM scopes WHERE id = ?", [scopeId]);
-    return row?.ci_token_hash as string | undefined;
-  }
-
-  async setCiTokenHash(scopeId: string, hash: string): Promise<void> {
-    await this.db.run("UPDATE scopes SET ci_token_hash = ? WHERE id = ?", [hash, scopeId]);
   }
 
   async deleteScope(id: string): Promise<void> {
     await this.db.run("DELETE FROM scopes WHERE id = ?", [id]);
   }
 
-  // --- services ---
+  // --- scope locks ---
 
-  async addService(input: Omit<Service, "id" | "createdAt">, now: Date): Promise<Service> {
-    const service: Service = { ...input, id: randomUUID(), createdAt: now.toISOString() };
-    await this.db.run(
-      "INSERT INTO services (id, scope_id, alias, dokploy_url, kind, dokploy_id, tag_variable, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-      [
-        service.id,
-        service.scopeId,
-        service.alias,
-        service.dokployUrl,
-        service.kind,
-        service.dokployId,
-        service.tagVariable,
-        service.createdAt,
-      ],
-    );
-    return service;
+  async getScopeLock(scopeId: string): Promise<ScopeLockRecord | undefined> {
+    const row = await this.db.get("SELECT * FROM scope_locks WHERE scope_id = ?", [scopeId]);
+    return row ? toScopeLock(row) : undefined;
   }
 
-  async listServices(scopeId: string): Promise<Service[]> {
-    return (await this.db.all("SELECT * FROM services WHERE scope_id = ? ORDER BY alias", [scopeId])).map(toService);
-  }
-
-  async getService(id: string): Promise<Service | undefined> {
-    const row = await this.db.get("SELECT * FROM services WHERE id = ?", [id]);
-    return row ? toService(row) : undefined;
-  }
-
-  async getServiceByAlias(scopeId: string, alias: string): Promise<Service | undefined> {
-    const row = await this.db.get("SELECT * FROM services WHERE scope_id = ? AND alias = ?", [scopeId, alias]);
-    return row ? toService(row) : undefined;
-  }
-
-  async deleteService(id: string): Promise<void> {
-    await this.db.run("DELETE FROM services WHERE id = ?", [id]);
-  }
-
-  // --- service locks ---
-
-  async getServiceLock(serviceId: string): Promise<ServiceLockRecord | undefined> {
-    const row = await this.db.get("SELECT * FROM service_locks WHERE service_id = ?", [serviceId]);
-    return row ? toServiceLock(row) : undefined;
-  }
-
-  /** Locks a service. Locking it again replaces the reason and who locked it, keeping the original date. */
-  async lockService(
-    input: { serviceId: string; reason: string; lockedBy: string | null },
+  /** Locks a scope. Locking it again replaces the reason and who locked it, keeping the original date. */
+  async lockScope(
+    input: { scopeId: string; reason: string; lockedBy: string | null },
     now: Date,
-  ): Promise<ServiceLockRecord> {
+  ): Promise<ScopeLockRecord> {
     await this.db.run(
-      `INSERT INTO service_locks (service_id, reason, locked_by, created_at) VALUES (?, ?, ?, ?)
-       ON CONFLICT (service_id) DO UPDATE SET reason = excluded.reason, locked_by = excluded.locked_by`,
-      [input.serviceId, input.reason, input.lockedBy, now.toISOString()],
+      `INSERT INTO scope_locks (scope_id, reason, locked_by, created_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT (scope_id) DO UPDATE SET reason = excluded.reason, locked_by = excluded.locked_by`,
+      [input.scopeId, input.reason, input.lockedBy, now.toISOString()],
     );
-    return (await this.getServiceLock(input.serviceId)) as ServiceLockRecord;
+    return (await this.getScopeLock(input.scopeId)) as ScopeLockRecord;
   }
 
-  /** Returns whether the service was locked. */
-  async unlockService(serviceId: string): Promise<boolean> {
-    return (await this.db.run("DELETE FROM service_locks WHERE service_id = ?", [serviceId])).changes > 0;
+  /** Returns whether the scope was locked. */
+  async unlockScope(scopeId: string): Promise<boolean> {
+    return (await this.db.run("DELETE FROM scope_locks WHERE scope_id = ?", [scopeId])).changes > 0;
   }
 
   // --- API tokens ---
@@ -504,20 +507,20 @@ export class Store {
   // --- member grants ---
 
   async addGrant(
-    input: { memberId: string; repoPattern: string; servicePattern: string; role: Role },
+    input: { memberId: string; repoPattern: string; scopePattern: string; role: Role },
     now: Date,
   ): Promise<MemberGrant> {
     const grant: MemberGrant = { ...input, id: randomUUID(), createdAt: now.toISOString() };
     await this.db.run(
-      "INSERT INTO member_grants (id, member_id, repo_pattern, service_pattern, role, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-      [grant.id, grant.memberId, grant.repoPattern, grant.servicePattern, grant.role, grant.createdAt],
+      "INSERT INTO member_grants (id, member_id, repo_pattern, scope_pattern, role, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+      [grant.id, grant.memberId, grant.repoPattern, grant.scopePattern, grant.role, grant.createdAt],
     );
     return grant;
   }
 
   async listGrants(memberId: string): Promise<MemberGrant[]> {
     const rows = await this.db.all(
-      "SELECT * FROM member_grants WHERE member_id = ? ORDER BY repo_pattern, service_pattern, created_at",
+      "SELECT * FROM member_grants WHERE member_id = ? ORDER BY repo_pattern, scope_pattern, created_at",
       [memberId],
     );
     return rows.map(toGrant);
@@ -574,13 +577,13 @@ export class Store {
       actorMemberId?: string | null;
       action: string;
       repo?: string | null;
-      service?: string | null;
+      scope?: string | null;
       details?: Record<string, unknown> | null;
     },
     now: Date,
   ): Promise<void> {
     await this.db.run(
-      "INSERT INTO audit_log (id, at, actor, actor_member_id, action, repo, service, details) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO audit_log (id, at, actor, actor_member_id, action, repo, scope, details) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
       [
         randomUUID(),
         now.toISOString(),
@@ -588,7 +591,7 @@ export class Store {
         entry.actorMemberId ?? null,
         entry.action,
         entry.repo ? normalizeRepo(entry.repo) : null,
-        entry.service ?? null,
+        entry.scope ?? null,
         entry.details ? JSON.stringify(entry.details) : null,
       ],
     );
@@ -605,6 +608,10 @@ export class Store {
       conditions.push("repo = ?");
       params.push(normalizeRepo(filter.repo));
     }
+    if (filter.scope) {
+      conditions.push("scope = ?");
+      params.push(filter.scope);
+    }
     if (filter.actor) {
       conditions.push("actor = ?");
       params.push(filter.actor);
@@ -618,11 +625,16 @@ export class Store {
     return rows.map(toAudit);
   }
 
-  /** The repos and actors that appear in the audit log, for its filters. */
-  async auditFacets(): Promise<{ repos: string[]; actors: string[] }> {
+  /** The repos, scopes and actors that appear in the audit log, for its filters. */
+  async auditFacets(): Promise<{ repos: string[]; scopes: string[]; actors: string[] }> {
     const repos = await this.db.all("SELECT DISTINCT repo FROM audit_log WHERE repo IS NOT NULL ORDER BY repo");
+    const scopes = await this.db.all("SELECT DISTINCT scope FROM audit_log WHERE scope IS NOT NULL ORDER BY scope");
     const actors = await this.db.all("SELECT DISTINCT actor FROM audit_log ORDER BY actor");
-    return { repos: repos.map((r) => r.repo as string), actors: actors.map((r) => r.actor as string) };
+    return {
+      repos: repos.map((r) => r.repo as string),
+      scopes: scopes.map((r) => r.scope as string),
+      actors: actors.map((r) => r.actor as string),
+    };
   }
 
   // --- CI results ---
@@ -747,7 +759,7 @@ export class Store {
       repo: string;
       tag: string;
       sha: string;
-      service: Service;
+      scope: Scope;
       status: DeployStatus;
       error?: string;
       requestedBy?: string | null;
@@ -757,7 +769,7 @@ export class Store {
     const id = randomUUID();
     const ts = now.toISOString();
     await this.db.run(
-      `INSERT INTO deploys (id, repo, tag, sha, service_id, service_alias, status, error, ci_passed_at, finished_at,
+      `INSERT INTO deploys (id, repo, tag, sha, scope_id, scope_alias, status, error, ci_passed_at, finished_at,
          requested_by, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
@@ -765,8 +777,8 @@ export class Store {
         normalizeRepo(input.repo),
         input.tag,
         input.sha,
-        input.service.id,
-        input.service.alias,
+        input.scope.id,
+        input.scope.alias,
         input.status,
         input.error ?? null,
         // A deploy can be born already past CI when the Action reported before `keel deploy` ran.
@@ -787,14 +799,14 @@ export class Store {
 
   /** Oldest first by default (queue order); pass `newestFirst` for history views. */
   async listDeploys(
-    filter: { status?: DeployStatus; repo?: string; sha?: string; serviceId?: string } = {},
+    filter: { status?: DeployStatus; repo?: string; sha?: string; scopeId?: string } = {},
     { limit = 100, newestFirst = false }: { limit?: number; newestFirst?: boolean } = {},
   ): Promise<DeployRecord[]> {
     const conditions: [string, string | undefined][] = [
       ["status = ?", filter.status],
       ["repo = ?", filter.repo && normalizeRepo(filter.repo)],
       ["sha = ?", filter.sha],
-      ["service_id = ?", filter.serviceId],
+      ["scope_id = ?", filter.scopeId],
     ];
     const active = conditions.filter((c): c is [string, string] => Boolean(c[1]));
     const where = active.map(([sql]) => sql);
@@ -846,14 +858,14 @@ export class Store {
   }
 
   /**
-   * Claims a `ci_passed` deploy for the worker: moves it to `deploying` unless its service already has a deploy
+   * Claims a `ci_passed` deploy for the worker: moves it to `deploying` unless its scope already has a deploy
    * `deploying`. Returns the claimed record, or undefined when someone else got there first. Runs in a transaction
-   * with the service row locked, so replicas claiming deploys of the same service take turns and only one runs.
+   * with the scope row locked, so replicas claiming deploys of the same scope take turns and only one runs.
    */
-  async claimDeploy(id: string, serviceId: string, now: Date): Promise<DeployRecord | undefined> {
+  async claimDeploy(id: string, scopeId: string, now: Date): Promise<DeployRecord | undefined> {
     return this.transaction(async (tx) => {
-      await tx.lockRow("services", serviceId);
-      const [busy] = await tx.listDeploys({ serviceId, status: "deploying" }, { limit: 1 });
+      await tx.lockRow("scopes", scopeId);
+      const [busy] = await tx.listDeploys({ scopeId, status: "deploying" }, { limit: 1 });
       if (busy) return undefined;
       return tx.transition(id, "deploying", now, { deployStartedAt: now });
     });

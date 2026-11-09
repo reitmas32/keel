@@ -52,10 +52,10 @@ fn gh(args: &[&str], cwd: &Path) -> Option<String> {
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
 }
 
-/// The admin URL for an API URL: same origin, `/scopes`.
+/// Where apps are created in keel's admin: same origin as the API, `/apps`.
 pub fn admin_url(api_url: &str) -> String {
     url::Url::parse(api_url)
-        .map(|u| format!("{}/scopes", u.origin().ascii_serialization()))
+        .map(|u| format!("{}/apps", u.origin().ascii_serialization()))
         .unwrap_or_else(|_| api_url.to_owned())
 }
 
@@ -115,22 +115,22 @@ pub async fn init(ctx: &Ctx, check: bool, force: bool) -> Result<()> {
         }
     }
 
-    // 2. The repo is a scope in keel.
+    // 2. The repo is an app in keel, with scopes.
     let org = config::active_org(&ctx.home, ctx.org.as_deref());
     let keel = match &org {
         Err(error) => {
             problems.push(format!("{error:#}"));
             json!({"linked": null})
         }
-        Ok(org) => match KeelApi::for_org(org)?.list_services(&repo).await {
-            Ok(services) => {
-                if services.is_empty() {
+        Ok(org) => match KeelApi::for_org(org)?.list_scopes(&repo).await {
+            Ok(scopes) => {
+                if scopes.is_empty() {
                     problems.push(format!(
-                        "{repo} no tiene servicios de Dokploy vinculados: agrégalos en {}.",
+                        "La app {repo} no tiene scopes: agrégalos en {}.",
                         admin_url(&org.api_url)
                     ));
                 }
-                json!({"linked": true, "api_url": org.api_url, "scopes": services})
+                json!({"linked": true, "api_url": org.api_url, "scopes": scopes})
             }
             Err(error)
                 if !is_unsupported(&error)
@@ -138,7 +138,7 @@ pub async fn init(ctx: &Ctx, check: bool, force: bool) -> Result<()> {
                         == 404 =>
             {
                 problems.push(format!(
-                    "{repo} no está vinculado en keel: crea su scope en {} y guarda el token de CI que te muestra.",
+                    "{repo} no está vinculado en keel: crea la app en {} y guarda el token de CI que te muestra.",
                     admin_url(&org.api_url)
                 ));
                 json!({"linked": false, "api_url": org.api_url, "admin": admin_url(&org.api_url)})
@@ -160,7 +160,7 @@ pub async fn init(ctx: &Ctx, check: bool, force: bool) -> Result<()> {
             let has_token = secrets.iter().any(|s| s == "DEPLOY_API_TOKEN");
             if !has_token {
                 problems.push(format!(
-                    "Falta el secret DEPLOY_API_TOKEN en {repo}: `gh secret set DEPLOY_API_TOKEN --repo {repo}` con el token de CI del scope."
+                    "Falta el secret DEPLOY_API_TOKEN en {repo}: `gh secret set DEPLOY_API_TOKEN --repo {repo}` con el token de CI de la app."
                 ));
             }
             let has_url = variables
@@ -227,11 +227,11 @@ fn print_report(report: &Value) {
     println!("{line}");
     match report["keel"]["linked"].as_bool() {
         Some(true) => println!(
-            "{} vinculado en keel ({} scope(s))",
+            "{} app vinculada en keel ({} scope(s))",
             c.green("✔"),
             report["keel"]["scopes"].as_array().map_or(0, Vec::len)
         ),
-        Some(false) => println!("{} no vinculado en keel", c.red("✖")),
+        Some(false) => println!("{} app no vinculada en keel", c.red("✖")),
         None => println!("{} keel sin comprobar", c.yellow("▲")),
     }
     if report["github"]["checked"] == true {
@@ -280,7 +280,7 @@ mod tests {
         );
         assert_eq!(
             admin_url("https://keel.acme.dev/api"),
-            "https://keel.acme.dev/scopes"
+            "https://keel.acme.dev/apps"
         );
         assert!(WORKFLOW.contains("ci-result"));
     }

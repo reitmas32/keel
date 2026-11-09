@@ -1,30 +1,30 @@
 import { describe, expect, it } from "vitest";
-import { addService, createScope, rotateCiToken } from "./scopes";
+import { addScope, createApp, rotateCiToken } from "./apps";
 import { createTestContext } from "./testing";
 import { verifyToken } from "./tokens";
 
 const appUrl = (id: string) => `https://dokploy.example.com/dashboard/project/p/services/application/${id}`;
 
-describe("scopes", () => {
-  it("stores only the token hash and rejects a second scope for the same repo", async () => {
-    const { store, clock, scope, ciToken } = await createTestContext();
-    expect(verifyToken(ciToken, (await store.getCiTokenHash(scope.id)) as string)).toBe(true);
+describe("apps", () => {
+  it("stores only the token hash and rejects a second app for the same repo", async () => {
+    const { store, clock, app, ciToken } = await createTestContext();
+    expect(verifyToken(ciToken, (await store.getCiTokenHash(app.id)) as string)).toBe(true);
     await expect(
-      createScope(store, { name: "", repoUrl: "git@github.com:Konectus-IO/app.git" }, clock.now()),
+      createApp(store, { name: "", repoUrl: "git@github.com:Konectus-IO/app.git" }, clock.now()),
     ).rejects.toThrow(/ya está vinculado/);
   });
 
   it("invalidates the old token on rotation", async () => {
-    const { store, scope, ciToken } = await createTestContext();
-    const next = await rotateCiToken(store, scope.id);
-    const hash = (await store.getCiTokenHash(scope.id)) as string;
+    const { store, app, ciToken } = await createTestContext();
+    const next = await rotateCiToken(store, app.id);
+    const hash = (await store.getCiTokenHash(app.id)) as string;
     expect(verifyToken(next, hash)).toBe(true);
     expect(verifyToken(ciToken, hash)).toBe(false);
   });
 
-  it("validates service alias, URL, kind and uniqueness", async () => {
-    const { store, clock, scope } = await createTestContext();
-    const add = (alias: string, dokployUrl: string) => addService(store, scope, { alias, dokployUrl }, clock.now());
+  it("validates scope alias, URL, kind and uniqueness", async () => {
+    const { store, clock, app } = await createTestContext();
+    const add = (alias: string, dokployUrl: string) => addScope(store, app, { alias, dokployUrl }, clock.now());
 
     expect((await add("Worker", appUrl("w1"))).alias).toBe("worker");
     await expect(add("api prod", appUrl("x"))).rejects.toThrow(/alias/);
@@ -33,10 +33,10 @@ describe("scopes", () => {
   });
 
   it("links a Compose with DOCKER_TAG by default or a custom tag variable", async () => {
-    const { store, clock, scope } = await createTestContext();
+    const { store, clock, app } = await createTestContext();
     const composeUrl = (id: string) => `https://dokploy.example.com/dashboard/project/p/services/compose/${id}`;
     const add = (alias: string, dokployUrl: string, tagVariable?: string) =>
-      addService(store, scope, { alias, dokployUrl, ...(tagVariable !== undefined && { tagVariable }) }, clock.now());
+      addScope(store, app, { alias, dokployUrl, ...(tagVariable !== undefined && { tagVariable }) }, clock.now());
 
     expect(await add("staging", composeUrl("c1"))).toMatchObject({
       kind: "compose",
@@ -48,6 +48,6 @@ describe("scopes", () => {
     await expect(add("bad", composeUrl("c4"), "DOCKER-TAG")).rejects.toThrow(/Variable de tag inválida/);
     // An Application keeps its tag in the image, so a tag variable is ignored.
     expect(await add("app", appUrl("a1"), "DOCKER_TAG")).toMatchObject({ kind: "application", tagVariable: null });
-    expect((await store.getService((await add("again", composeUrl("c5"))).id))?.tagVariable).toBe("DOCKER_TAG");
+    expect((await store.getScope((await add("again", composeUrl("c5"))).id))?.tagVariable).toBe("DOCKER_TAG");
   });
 });

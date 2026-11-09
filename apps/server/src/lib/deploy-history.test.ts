@@ -4,7 +4,7 @@ import { recordCiResult, requestDeploy } from "./deploys";
 import { handlers } from "./handlers";
 import { apiRequest, createTestContext, SHA } from "./testing";
 
-const deployReq = { repo: "konectus-io/app", tag: "v1.0.0", sha: SHA, service: "api-prod" };
+const deployReq = { repo: "konectus-io/app", tag: "v1.0.0", sha: SHA, scope: "api-prod" };
 const ciReq = { repo: "konectus-io/app", tag: "v1.0.0", sha: SHA, status: "success" as const };
 const get = (query = "") => apiRequest(query && `?${query}`);
 
@@ -53,12 +53,12 @@ describe("deploy milestones", () => {
 });
 
 describe("GET /api/repos/:owner/:name/deploys", () => {
-  it("lists newest first, filters by service and honours the limit", async () => {
-    const { ctx, store, clock, scope } = await createTestContext();
-    const { addService } = await import("./scopes");
-    await addService(
+  it("lists newest first, filters by scope and honours the limit", async () => {
+    const { ctx, store, clock, app } = await createTestContext();
+    const { addScope } = await import("./apps");
+    await addScope(
       store,
-      scope,
+      app,
       { alias: "worker", dokployUrl: "https://dokploy.example.com/dashboard/project/p/services/application/w1" },
       clock.now(),
     );
@@ -66,28 +66,28 @@ describe("GET /api/repos/:owner/:name/deploys", () => {
     clock.advanceMinutes(1);
     await requestDeploy(store, { ...deployReq, tag: "v1.1.0", sha: "b".repeat(40) }, clock.now());
     clock.advanceMinutes(1);
-    await requestDeploy(store, { ...deployReq, service: "worker" }, clock.now());
+    await requestDeploy(store, { ...deployReq, scope: "worker" }, clock.now());
 
     const all = (await (await handlers.listRepoDeploys(ctx, get(), "Konectus-IO", "app")).json()) as {
       deploys: Deploy[];
     };
-    expect(all.deploys.map((d) => `${d.tag} ${d.service}`)).toEqual([
+    expect(all.deploys.map((d) => `${d.tag} ${d.scope}`)).toEqual([
       "v1.0.0 worker",
       "v1.1.0 api-prod",
       "v1.0.0 api-prod",
     ]);
-    expect(all.deploys[0]).not.toHaveProperty("serviceId");
+    expect(all.deploys[0]).not.toHaveProperty("scopeId");
 
     const filtered = (await (
-      await handlers.listRepoDeploys(ctx, get("service=api-prod&limit=1"), "konectus-io", "app")
+      await handlers.listRepoDeploys(ctx, get("scope=api-prod&limit=1"), "konectus-io", "app")
     ).json()) as { deploys: Deploy[] };
     expect(filtered.deploys.map((d) => d.tag)).toEqual(["v1.1.0"]);
   });
 
-  it("rejects unknown repos and services and bad limits", async () => {
+  it("rejects unknown repos and scopes and bad limits", async () => {
     const { ctx } = await createTestContext();
     expect((await handlers.listRepoDeploys(ctx, get(), "other", "repo")).status).toBe(404);
-    const unknown = await handlers.listRepoDeploys(ctx, get("service=nope"), "konectus-io", "app");
+    const unknown = await handlers.listRepoDeploys(ctx, get("scope=nope"), "konectus-io", "app");
     expect(unknown.status).toBe(404);
     expect((await unknown.json()).error).toMatch(/Disponibles: api-prod/);
     expect((await handlers.listRepoDeploys(ctx, get("limit=0"), "konectus-io", "app")).status).toBe(400);
@@ -96,13 +96,13 @@ describe("GET /api/repos/:owner/:name/deploys", () => {
 });
 
 describe("GET /api/repos/:owner/:name/deploys/:id", () => {
-  it("finds a deploy by a unique id prefix and adds the service details", async () => {
+  it("finds a deploy by a unique id prefix and adds the scope details", async () => {
     const { ctx, store, clock } = await createTestContext();
     const { id } = await requestDeploy(store, deployReq, clock.now());
 
     const response = await handlers.getRepoDeploy(ctx, get(), "konectus-io", "app", id.slice(0, 8).toUpperCase());
     const detail = (await response.json()) as DeployDetail;
-    expect(detail).toMatchObject({ id, serviceKind: "application", tagVariable: null });
+    expect(detail).toMatchObject({ id, scopeKind: "application", tagVariable: null });
   });
 
   it("asks for more characters when the prefix is short or ambiguous", async () => {
@@ -122,8 +122,8 @@ describe("GET /api/repos/:owner/:name/deploys/:id", () => {
 
   it("does not leak deploys of other repos", async () => {
     const { ctx, store, clock } = await createTestContext();
-    const { createScope } = await import("./scopes");
-    await createScope(store, { name: "other", repoUrl: "konectus-io/other" }, clock.now());
+    const { createApp } = await import("./apps");
+    await createApp(store, { name: "other", repoUrl: "konectus-io/other" }, clock.now());
     const { id } = await requestDeploy(store, deployReq, clock.now());
     expect((await handlers.getRepoDeploy(ctx, get(), "konectus-io", "other", id)).status).toBe(404);
   });

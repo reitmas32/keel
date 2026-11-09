@@ -64,14 +64,14 @@ pub enum Command {
     },
     /// Instancias de Dokploy configuradas.
     Targets,
-    /// Hacia dónde apunta esta carpeta: org y repo de keel, e instancia de Dokploy.
+    /// Hacia dónde apunta esta carpeta: org y app de keel, e instancia de Dokploy.
     #[command(visible_alias = "remote")]
     Context(Target),
     /// Comprueba keel (API) y Dokploy (DNS, panel, key, versión, inventario).
     Doctor(Target),
-    /// Estado del repo: scopes, versión actual, último deploy, CI y Dokploy.
+    /// Estado de la app: sus scopes, versión actual, último deploy, CI y Dokploy.
     Status(Target),
-    /// Quién eres para keel: tu nombre, rol y permisos por scope.
+    /// Quién eres para keel: tu nombre, rol y permisos por app y scope.
     Whoami,
     /// Actualiza keel al último binario publicado en GitHub.
     Update {
@@ -103,8 +103,8 @@ pub enum Command {
     /// Pide el deploy de una versión a un scope (espera al CI en el servidor).
     Deploy {
         /// Scope; si se omite, se pregunta.
-        #[arg(short = 's', long = "service", value_name = "SCOPE")]
-        service: Option<String>,
+        #[arg(short = 's', long = "scope", alias = "service", value_name = "SCOPE")]
+        scope: Option<String>,
         /// Versión a desplegar; si se omite, se pregunta.
         #[arg(short = 'v', long = "version", value_name = "TAG")]
         version: Option<String>,
@@ -125,8 +125,8 @@ pub enum Command {
     /// Vuelve un scope a la versión que tenía antes (o a --to, ya desplegada ahí).
     Rollback {
         /// Scope; si se omite, se pregunta.
-        #[arg(short = 's', long = "service", value_name = "SCOPE")]
-        service: Option<String>,
+        #[arg(short = 's', long = "scope", alias = "service", value_name = "SCOPE")]
+        scope: Option<String>,
         /// Versión a la que volver; debe haberse desplegado antes en ese scope.
         #[arg(long, value_name = "TAG")]
         to: Option<String>,
@@ -161,8 +161,8 @@ pub enum Command {
     /// Commits y PRs entre lo que corre un scope y una versión (por defecto la más nueva).
     Changes {
         /// Scope; si se omite, se pregunta.
-        #[arg(short = 's', long = "service", value_name = "SCOPE")]
-        service: Option<String>,
+        #[arg(short = 's', long = "scope", alias = "service", value_name = "SCOPE")]
+        scope: Option<String>,
         /// Versión con la que comparar; por defecto el tag semver más alto.
         #[arg(short = 'v', long = "version", value_name = "TAG")]
         version: Option<String>,
@@ -170,8 +170,8 @@ pub enum Command {
     /// Congela los deploys de un scope (incidente, freeze de releases) con un motivo.
     Lock {
         /// Scope; si se omite, se pregunta.
-        #[arg(short = 's', long = "service", value_name = "SCOPE")]
-        service: Option<String>,
+        #[arg(short = 's', long = "scope", alias = "service", value_name = "SCOPE")]
+        scope: Option<String>,
         /// Motivo, visible en `keel scopes` y en el error de quien intente desplegar.
         #[arg(short = 'm', long = "message", value_name = "MOTIVO")]
         message: Option<String>,
@@ -179,10 +179,10 @@ pub enum Command {
     /// Vuelve a permitir deploys en un scope bloqueado con `keel lock`.
     Unlock {
         /// Scope; si se omite, se pregunta.
-        #[arg(short = 's', long = "service", value_name = "SCOPE")]
-        service: Option<String>,
+        #[arg(short = 's', long = "scope", alias = "service", value_name = "SCOPE")]
+        scope: Option<String>,
     },
-    /// Prepara el repo para keel: workflow de release, vínculo en keel y secrets de GitHub.
+    /// Prepara el repo para keel: workflow de release, app en keel y secrets de GitHub.
     Init {
         /// Solo revisa; sale con código 2 si falta algo.
         #[arg(long)]
@@ -198,16 +198,17 @@ pub enum Command {
         #[command(flatten)]
         scope: SkillsScope,
     },
-    /// Scopes del repo: su servicio en Dokploy, la versión que corren y su último deploy.
-    #[command(visible_alias = "services")]
+    /// Scopes de la app: a qué aplicación o compose de Dokploy apunta cada uno, la
+    /// versión que corren y su último deploy.
+    #[command(alias = "services")]
     Scopes,
-    /// Deploys del repo, o el detalle de uno (con --log, su log de Dokploy).
+    /// Deploys de la app, o el detalle de uno (con --log, su log de Dokploy).
     Deploys {
         /// Id (o sus primeros caracteres) de un deploy.
         id: Option<String>,
         /// Solo los deploys de este scope.
-        #[arg(short = 's', long = "service", value_name = "SCOPE")]
-        service: Option<String>,
+        #[arg(short = 's', long = "scope", alias = "service", value_name = "SCOPE")]
+        scope: Option<String>,
         /// Cuántos mostrar (20 por defecto, 200 como máximo).
         #[arg(short = 'n', long)]
         limit: Option<u32>,
@@ -220,8 +221,8 @@ pub enum Command {
     /// Logs de un scope (redactados), por su nombre en keel.
     Logs {
         /// Scope; si se omite, se pregunta.
-        #[arg(short = 's', long = "service", value_name = "SCOPE")]
-        service: Option<String>,
+        #[arg(short = 's', long = "scope", alias = "service", value_name = "SCOPE")]
+        scope: Option<String>,
         /// Contenedor del Compose (web, worker…).
         #[arg(long)]
         container: Option<String>,
@@ -396,7 +397,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         } => kc::create_version(&ctx, &version, deploy.as_deref(), wait).await,
         Command::Versions { limit } => kc::versions(&ctx, limit).await,
         Command::Deploy {
-            service,
+            scope,
             version,
             latest,
             latest_ready,
@@ -406,7 +407,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             kc::deploy(
                 &ctx,
                 DeployArgs {
-                    service,
+                    scope,
                     version,
                     latest,
                     latest_ready,
@@ -417,11 +418,11 @@ pub async fn run(cli: Cli) -> Result<()> {
             .await
         }
         Command::Rollback {
-            service,
+            scope,
             to,
             yes,
             wait,
-        } => kc::rollback(&ctx, service, to, yes, wait).await,
+        } => kc::rollback(&ctx, scope, to, yes, wait).await,
         Command::Promote {
             from,
             to,
@@ -443,9 +444,9 @@ pub async fn run(cli: Cli) -> Result<()> {
             )
             .await
         }
-        Command::Changes { service, version } => ops::changes(&ctx, service, version).await,
-        Command::Lock { service, message } => ops::lock(&ctx, service, message).await,
-        Command::Unlock { service } => ops::unlock(&ctx, service).await,
+        Command::Changes { scope, version } => ops::changes(&ctx, scope, version).await,
+        Command::Lock { scope, message } => ops::lock(&ctx, scope, message).await,
+        Command::Unlock { scope } => ops::unlock(&ctx, scope).await,
         Command::Init { check, force } => crate::keel::init::init(&ctx, check, force).await,
         Command::Skills { command, scope } => {
             let action = match command {
@@ -472,13 +473,13 @@ pub async fn run(cli: Cli) -> Result<()> {
         Command::Scopes => kc::scopes(&ctx).await,
         Command::Deploys {
             id,
-            service,
+            scope,
             limit,
             log,
             target,
-        } => kc::deploys(&ctx, id, service, limit, log, config_arg, &target).await,
+        } => kc::deploys(&ctx, id, scope, limit, log, config_arg, &target).await,
         Command::Logs {
-            service,
+            scope,
             container,
             follow,
             tail,
@@ -489,7 +490,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             kc::logs(
                 &ctx,
                 LogsArgs {
-                    service,
+                    scope,
                     container,
                     follow,
                     tail,
@@ -793,7 +794,12 @@ mod tests {
         assert!(parse(&["rollback", "-s", "api-prod", "--to", "v1.2.0", "-y"]).is_ok());
         assert!(parse(&["deploys", "d3f1", "--log"]).is_ok());
         assert!(parse(&["deploys", "-s", "staging", "-n", "50"]).is_ok());
+        assert!(parse(&["scopes", "--json"]).is_ok());
         assert!(parse(&["services", "--json"]).is_ok());
+        assert!(parse(&["deploy", "--scope", "prod", "-l"]).is_ok());
+        // The pre-0.3.0 flag keeps working for scripts.
+        assert!(parse(&["deploy", "--service", "prod", "-l"]).is_ok());
+        assert!(parse(&["logs", "--service", "prod"]).is_ok());
         assert!(parse(&["remote"]).is_ok());
         assert!(parse(&["login", "--token", "keel_pat_x"]).is_ok());
         assert!(

@@ -5,7 +5,8 @@ import type { Db, Row, SqlValue } from "./db";
 import { BOOTSTRAP_ADMIN, bootstrapAdminSql } from "./postgres-schema.mjs";
 
 const SCHEMA = `
-CREATE TABLE IF NOT EXISTS scopes (
+-- v0.7.0: an app is a linked GitHub repo (the \`scopes\` table before v0.7.0).
+CREATE TABLE IF NOT EXISTS apps (
   id            TEXT PRIMARY KEY,
   name          TEXT NOT NULL,
   repo          TEXT NOT NULL UNIQUE,
@@ -13,16 +14,18 @@ CREATE TABLE IF NOT EXISTS scopes (
   created_at    TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS services (
-  id          TEXT PRIMARY KEY,
-  scope_id    TEXT NOT NULL REFERENCES scopes(id) ON DELETE CASCADE,
-  alias       TEXT NOT NULL,
-  dokploy_url TEXT NOT NULL,
-  kind        TEXT NOT NULL,
-  dokploy_id  TEXT NOT NULL,
+-- v0.7.0: a scope is a deploy target of an app, pointing at a Dokploy application or compose (the \`services\` table
+-- before v0.7.0).
+CREATE TABLE IF NOT EXISTS scopes (
+  id           TEXT PRIMARY KEY,
+  app_id       TEXT NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
+  alias        TEXT NOT NULL,
+  dokploy_url  TEXT NOT NULL,
+  kind         TEXT NOT NULL,
+  dokploy_id   TEXT NOT NULL,
   tag_variable TEXT,
-  created_at  TEXT NOT NULL,
-  UNIQUE (scope_id, alias)
+  created_at   TEXT NOT NULL,
+  UNIQUE (app_id, alias)
 );
 
 CREATE TABLE IF NOT EXISTS ci_results (
@@ -39,8 +42,8 @@ CREATE TABLE IF NOT EXISTS deploys (
   repo              TEXT NOT NULL,
   tag               TEXT NOT NULL,
   sha               TEXT NOT NULL,
-  service_id        TEXT NOT NULL REFERENCES services(id) ON DELETE CASCADE,
-  service_alias     TEXT NOT NULL,
+  scope_id          TEXT NOT NULL REFERENCES scopes(id) ON DELETE CASCADE,
+  scope_alias       TEXT NOT NULL,
   status            TEXT NOT NULL,
   error             TEXT,
   deploy_started_at TEXT,
@@ -72,7 +75,7 @@ CREATE TABLE IF NOT EXISTS versions (
 CREATE INDEX IF NOT EXISTS versions_repo_created ON versions (repo, created_at);
 CREATE INDEX IF NOT EXISTS versions_status ON versions (ci_status, created_at);
 
--- v0.7.0: people who use keel, with a role and per-repo/service grants. Only a scrypt hash of the password is stored.
+-- v0.6.0: people who use keel, with a role and per-repo/scope grants. Only a scrypt hash of the password is stored.
 CREATE TABLE IF NOT EXISTS members (
   id            TEXT PRIMARY KEY,
   name          TEXT NOT NULL,
@@ -85,17 +88,17 @@ CREATE TABLE IF NOT EXISTS members (
 );
 
 CREATE TABLE IF NOT EXISTS member_grants (
-  id              TEXT PRIMARY KEY,
-  member_id       TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
-  repo_pattern    TEXT NOT NULL DEFAULT '*',
-  service_pattern TEXT NOT NULL DEFAULT '*',
-  role            TEXT NOT NULL,
-  created_at      TEXT NOT NULL
+  id            TEXT PRIMARY KEY,
+  member_id     TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+  repo_pattern  TEXT NOT NULL DEFAULT '*',
+  scope_pattern TEXT NOT NULL DEFAULT '*',
+  role          TEXT NOT NULL,
+  created_at    TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS member_grants_member ON member_grants (member_id);
 
--- v0.7.0: one-time links to set a password. Only the sha256 of the token is stored.
+-- v0.6.0: one-time links to set a password. Only the sha256 of the token is stored.
 CREATE TABLE IF NOT EXISTS invites (
   token_hash TEXT PRIMARY KEY,
   member_id  TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
@@ -105,8 +108,8 @@ CREATE TABLE IF NOT EXISTS invites (
 
 CREATE INDEX IF NOT EXISTS invites_member ON invites (member_id);
 
--- v0.6.0: personal API tokens for the CLI. Only the sha256 of the token is stored.
--- v0.7.0: owned by a member (member_id) and optionally capped below the owner's role (max_role).
+-- v0.6.0: personal API tokens for the CLI, owned by a member (member_id) and optionally capped below the owner's role
+-- (max_role). Only the sha256 of the token is stored.
 CREATE TABLE IF NOT EXISTS api_tokens (
   id           TEXT PRIMARY KEY,
   name         TEXT NOT NULL,
@@ -117,15 +120,15 @@ CREATE TABLE IF NOT EXISTS api_tokens (
   max_role     TEXT
 );
 
--- v0.6.0: a locked service refuses new deploys until someone unlocks it.
-CREATE TABLE IF NOT EXISTS service_locks (
-  service_id TEXT PRIMARY KEY REFERENCES services(id) ON DELETE CASCADE,
+-- v0.6.0: a locked scope refuses new deploys until someone unlocks it (\`service_locks\` before v0.7.0).
+CREATE TABLE IF NOT EXISTS scope_locks (
+  scope_id   TEXT PRIMARY KEY REFERENCES scopes(id) ON DELETE CASCADE,
   reason     TEXT NOT NULL,
   locked_by  TEXT,
   created_at TEXT NOT NULL
 );
 
--- v0.7.0: every change made through the API or the admin, and who made it.
+-- v0.6.0: every change made through the API or the admin, and who made it.
 CREATE TABLE IF NOT EXISTS audit_log (
   id              TEXT PRIMARY KEY,
   at              TEXT NOT NULL,
@@ -133,7 +136,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
   actor_member_id TEXT REFERENCES members(id) ON DELETE SET NULL,
   action          TEXT NOT NULL,
   repo            TEXT,
-  service         TEXT,
+  scope           TEXT,
   details         TEXT
 );
 
@@ -141,31 +144,72 @@ CREATE INDEX IF NOT EXISTS audit_log_at ON audit_log (at);
 CREATE INDEX IF NOT EXISTS audit_log_repo ON audit_log (repo, at);
 `;
 
+const tableExists = (db: DatabaseSync, table: string) =>
+  db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) !== undefined;
+
+const columnsOf = (db: DatabaseSync, table: string): string[] =>
+  db
+    .prepare(`PRAGMA table_info(${table})`)
+    .all()
+    .map((c) => c.name as string);
+
+/**
+ * v0.7.0 renamed the linked repo from scope to app and its deploy targets from service to scope. Before v0.7.0:
+ * \`scopes\` (repos), \`services\` (targets, with \`scope_id\`), \`service_locks\`, \`deploys.service_id/service_alias\`,
+ * \`member_grants.service_pattern\` and \`audit_log.service\`. Runs before SCHEMA, which would otherwise create empty
+ * \`apps\` and \`scope_locks\` tables next to the old ones.
+ *
+ * The names swap, so the order matters: \`scopes\` becomes \`apps\` before \`services\` becomes \`scopes\`. Each step looks
+ * at the current shape first, so it is idempotent and works from any older version (tables a version didn't have
+ * are skipped; SCHEMA creates them). With \`legacy_alter_table\` off, SQLite rewrites the foreign keys that point at a
+ * renamed table or column, so cascades keep working. All of it runs in one transaction.
+ */
+export function renameScopesToApps(db: DatabaseSync): void {
+  db.exec("PRAGMA legacy_alter_table = OFF");
+  const renameColumn = (table: string, from: string, to: string) => {
+    if (!tableExists(db, table)) return;
+    const columns = columnsOf(db, table);
+    if (columns.includes(from) && !columns.includes(to)) db.exec(`ALTER TABLE ${table} RENAME COLUMN ${from} TO ${to}`);
+  };
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    // The old \`scopes\` is the repo table: it has the CI token. The new one never does.
+    if (tableExists(db, "scopes") && columnsOf(db, "scopes").includes("ci_token_hash") && !tableExists(db, "apps")) {
+      db.exec("ALTER TABLE scopes RENAME TO apps");
+    }
+    if (tableExists(db, "services") && !tableExists(db, "scopes")) db.exec("ALTER TABLE services RENAME TO scopes");
+    if (tableExists(db, "service_locks") && !tableExists(db, "scope_locks")) {
+      db.exec("ALTER TABLE service_locks RENAME TO scope_locks");
+    }
+    renameColumn("scopes", "scope_id", "app_id");
+    renameColumn("deploys", "service_id", "scope_id");
+    renameColumn("deploys", "service_alias", "scope_alias");
+    renameColumn("scope_locks", "service_id", "scope_id");
+    renameColumn("member_grants", "service_pattern", "scope_pattern");
+    renameColumn("audit_log", "service", "scope");
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 /** Brings databases created by older keel versions up to the current schema. Each step is idempotent. */
 function migrate(db: DatabaseSync): void {
-  const serviceColumns = db
-    .prepare("PRAGMA table_info(services)")
-    .all()
-    .map((c) => c.name);
-  // v0.2.0: Compose services store the env variable that holds their image tag.
-  if (!serviceColumns.includes("tag_variable")) db.exec("ALTER TABLE services ADD COLUMN tag_variable TEXT");
+  // v0.2.0: Compose scopes store the env variable that holds their image tag.
+  if (!columnsOf(db, "scopes").includes("tag_variable")) db.exec("ALTER TABLE scopes ADD COLUMN tag_variable TEXT");
 
-  const deployColumns = db
-    .prepare("PRAGMA table_info(deploys)")
-    .all()
-    .map((c) => c.name);
-  // v0.3.0: when the CI was approved and when the deploy reached a final state, for `keel deploys`.
+  const deployColumns = columnsOf(db, "deploys");
+  // v0.3.0: when the CI was approved and when the deploy reached a final state, for \`keel deploys\`.
   for (const column of ["ci_passed_at", "finished_at"]) {
     if (!deployColumns.includes(column)) db.exec(`ALTER TABLE deploys ADD COLUMN ${column} TEXT`);
   }
   // v0.6.0: the API token name that asked for the deploy.
   if (!deployColumns.includes("requested_by")) db.exec("ALTER TABLE deploys ADD COLUMN requested_by TEXT");
 
-  const tokenColumns = db
-    .prepare("PRAGMA table_info(api_tokens)")
-    .all()
-    .map((c) => c.name);
-  // v0.7.0: tokens belong to a member and can be capped to a role. Tokens from before belong to the bootstrap admin.
+  const tokenColumns = columnsOf(db, "api_tokens");
+  // v0.6.0: tokens belong to a member and can be capped to a role. Tokens from before belong to the bootstrap admin.
   if (!tokenColumns.includes("member_id")) {
     db.exec("ALTER TABLE api_tokens ADD COLUMN member_id TEXT REFERENCES members(id) ON DELETE CASCADE");
   }
@@ -270,6 +314,7 @@ export function openSqliteDb(path: string): SqliteDb {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
   const raw = new DatabaseSync(path);
   raw.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
+  renameScopesToApps(raw);
   raw.exec(SCHEMA);
   migrate(raw);
   return new SqliteDb(raw);

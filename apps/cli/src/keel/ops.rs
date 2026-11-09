@@ -3,7 +3,7 @@
 
 use crate::dokploy::print_json;
 use crate::failure::{Kind, fail};
-use crate::keel::api::{CreateDeploy, ServiceSummary};
+use crate::keel::api::{CreateDeploy, ScopeSummary};
 use crate::keel::commands::{Ctx, Repo, need_terminal, resolve_repo, short, status_name, watch};
 use crate::keel::{git, semver, views};
 use crate::ui;
@@ -15,13 +15,13 @@ use std::sync::LazyLock;
 
 // ---------------------------------------------------------------- lock/unlock
 
-async fn scope_summaries(repo: &Repo) -> Result<Vec<ServiceSummary>> {
-    repo.api.list_service_summaries(&repo.repo).await
+async fn scope_summaries(repo: &Repo) -> Result<Vec<ScopeSummary>> {
+    repo.api.list_scope_summaries(&repo.repo).await
 }
 
 /// The scope named with -s, or one picked at the terminal.
 async fn pick_scope(repo: &Repo, scope: Option<String>, prompt: &str) -> Result<String> {
-    let aliases = repo.api.list_services(&repo.repo).await?;
+    let aliases = repo.api.list_scopes(&repo.repo).await?;
     let scope = match scope {
         Some(s) => s,
         None if ui::interactive() && !aliases.is_empty() => {
@@ -126,9 +126,9 @@ pub async fn whoami(ctx: &Ctx) -> Result<()> {
         println!("  este token está limitado a {max}");
     }
     if !who.grants.is_empty() {
-        println!("\n  {}", c.bold("Permisos por scope"));
+        println!("\n  {}", c.bold("Permisos por app / scope"));
         for g in &who.grants {
-            println!("  {}  {} / {}", ui::pad_end(&g.role, 11), g.repo, g.service);
+            println!("  {}  {} / {}", ui::pad_end(&g.role, 11), g.repo, g.scope);
         }
     }
     let auth = if who.auth == "required" {
@@ -245,7 +245,7 @@ pub async fn promote(ctx: &Ctx, args: PromoteArgs) -> Result<()> {
             repo: &repo.repo,
             tag: &version.tag,
             sha: &version.sha,
-            service: &args.to,
+            scope: &args.to,
         })
         .await?;
     let waits = args.wait || args.rollback_on_failure;
@@ -258,7 +258,7 @@ pub async fn promote(ctx: &Ctx, args: PromoteArgs) -> Result<()> {
             "Deploy {} encolado: {} → {} ({})",
             short(&created.id),
             created.tag,
-            created.service,
+            created.scope,
             status_name(created.status)
         ));
     }

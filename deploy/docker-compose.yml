@@ -21,6 +21,8 @@ services:
       # descomenta estas dos líneas y define POSTGRES_DSN en el Environment.
       # DB_ENGINE: postgres
       # POSTGRES_DSN: ${POSTGRES_DSN:?DSN de Postgres, p.ej. postgres://keel:contraseña@postgres:5432/keel}
+    # The SQLite database (apps, their scopes, CI tokens and history) lives in keel-data and survives redeploys.
+    # keel migrates it on start when you bump the tag (e.g. v0.7.0 renames scopes/services to apps/scopes).
     volumes:
       - keel-data:/data
     expose:

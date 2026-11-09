@@ -43,7 +43,7 @@ export function roleOn(p: Principal, target: Target): Role | null {
 
 export const can = (p: Principal, required: Role, target: Target) => roleAtLeast(roleOn(p, target), required);
 
-/** Global admin: members, everyone's tokens, scopes, audit log. Grants don't make someone a global admin. */
+/** Global admin: members, everyone's tokens, apps, audit log. Grants don't make someone a global admin. */
 export const isAdmin = (p: Principal) => baseRole(p) === "admin";
 
 /**

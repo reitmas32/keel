@@ -2,7 +2,7 @@
 name: keel-cli
 description: Operate releases and Dokploy with the keel CLI safely — create, promote and deploy versions through the keel server after CI passes, roll back, freeze scopes, read versions, changes, deploys, status and redacted logs, and change anything else on Dokploy (env, Compose, mounts, databases, backups, start/stop) only through expiring plans a person approves one by one. Use when the user wants to deploy, ship, promote or roll back a version, freeze deploys, or see what a deploy would change; asks what runs where, whether a service is up, for logs, or why a deploy failed or waits for CI; wants to change, add or remove an env variable, edit a Compose, add a volume or mount, create a database or a scheduled backup, start, stop or redeploy something on Dokploy; prepare a repo for keel or install agent skills; or when a keel command fails with an error kind such as keel_managed, locked, unauthorized, drift or ci_failed — even if they do not name keel. Never use the Dokploy web UI, curl or another client instead.
 metadata:
-  version: "0.2.0"
+  version: "0.3.0"
   owner: fundathyon
 ---
 
@@ -21,7 +21,23 @@ metadata:
   exact plan once.
 
 Run it from the repository the conversation is about: the folder decides the
-keel repo and, through each instance's `paths`, the Dokploy instance.
+keel app and, through each instance's `paths`, the Dokploy instance.
+
+Words keel uses:
+
+- **app** — a GitHub repository linked to keel (created in the keel admin,
+  under `/apps`). Versions, deploys and the CI token belong to an app.
+- **scope** — a deploy target inside an app: an alias such as `prod` or `stg`
+  that points to one Dokploy application or compose. Every keel command picks
+  it with `-s/--scope` (`--service`, the name before keel-cli 0.3.0, still
+  works in old scripts).
+- **service** — only for things on Dokploy's side: applications, composes and
+  databases (`keel get services`, the Dokploy plans). A Dokploy service may or
+  may not be a keel scope.
+
+The CLI talks to keel servers before v0.7.0 too: it falls back to their old
+routes on its own, and its `--json` keeps the old `service` key next to
+`scope`.
 
 Full flags of every command: [references/commands.md](references/commands.md).
 Every error kind and what to do: [references/errors.md](references/errors.md).
@@ -71,7 +87,7 @@ Every error kind and what to do: [references/errors.md](references/errors.md).
 Start every session with:
 
 ```sh
-keel context --json      # keel org, repo and scopes; Dokploy instance and why it was chosen
+keel context --json      # keel org and app (this repo); Dokploy instance and why it was chosen
 ```
 
 | The person wants… | Use |
@@ -82,10 +98,10 @@ keel context --json      # keel org, repo and scopes; Dokploy instance and why i
 | To undo a deploy of a version | `keel rollback` (or `--rollback-on-failure` on deploy/promote) |
 | Freeze or unfreeze deploys of a scope | `keel lock -s <scope> -m <reason>`, `keel unlock -s <scope>` |
 | Compare env variables of two services (names only) | `keel env diff <svcA> <svcB>` |
-| Prepare a repo for keel, or audit it | `keel init`, `keel init --check` |
+| Prepare a repo for keel (workflow, app, secrets), or audit it | `keel init`, `keel init --check` |
 | Install these skills in a repo | `keel skills add keel-cli` |
 | What runs where, is it up, what CI says | `keel status`, `keel scopes`, `keel versions` |
-| Deploy history of the repo, why one failed | `keel deploys`, `keel deploys <id> --log` |
+| Deploy history of the app, why one failed | `keel deploys`, `keel deploys <id> --log` |
 | Logs of a scope | `keel logs -s <scope>` |
 | Logs or deploy log of any Dokploy service | `keel get logs`, `keel get deploy-log` |
 | Env variables, Compose, mounts, databases, backups, start/stop | `keel plan …` → `keel apply` |
@@ -164,7 +180,7 @@ person asks; on `locked`, report the reason and stop.
 
 Each person has a role in keel — viewer, publisher (create versions),
 deployer (deploy, promote, rollback), maintainer (also lock) or admin — that
-can change per scope (e.g. deployer on `stg`, viewer on `prod`). Check with
+can change per app and scope (e.g. deployer on `stg`, viewer on `prod`). Check with
 `keel whoami` before acting for someone; on `forbidden` (33) report it and
 stop.
 
@@ -255,17 +271,17 @@ Take every field from the plan's output (`operation`, `changes`, `target`,
 
 The keel rule, checked when planning:
 
-- `plan deploy|redeploy` on a keel scope of this repo → `keel_managed` (25):
+- `plan deploy|redeploy` on a keel scope of this app → `keel_managed` (25):
   use `keel deploy -s <scope> -v <version>` or `keel rollback -s <scope>`.
 - env plans may not change or remove a keel Compose scope's tag variable
   (`DOCKER_TAG` unless the scope names another) → `keel_managed`.
 - `compose-update` on a keel scope warns if the image stops using the tag
   variable: keel could no longer deploy it. Treat that warning as a blocker
   to raise with the person.
-- In a keel repo where the keel server cannot be asked → `keel_unreachable`
+- In a keel app's repo where the keel server cannot be asked → `keel_unreachable`
   (26). Report it. `--not-keel-managed` exists for a service the person
   confirms is not a keel scope; never add it on your own.
-- Outside a keel repo the plan only notes "no verificado con keel" (not
+- Outside a keel app's repo the plan only notes "no verificado con keel" (not
   verified with keel) — show that note in the summary.
 
 ### 4. Apply exactly that plan
@@ -364,7 +380,7 @@ Branch on `kind`, not on the message:
 | `unauthorized` | 29 | keel rejected the personal token or requires one: the person creates one in the admin («Tokens de API») and runs `keel login --token` themselves |
 | `cancelled` | 30 | Someone said no, or waiting stopped; the deploy may still be running: `keel deploys <id>` |
 | `locked` | 31 | The scope is frozen: report the reason; only the person decides to `keel unlock` |
-| `forbidden` | 33 | Your role can't do that on that repo/scope (`keel whoami` shows role and grants): report it; a keel admin grants access |
+| `forbidden` | 33 | Your role can't do that on that app/scope (`keel whoami` shows role and grants): report it; a keel admin grants access |
 | `missing_input` | 32 | A flag is missing and there is no terminal to ask: add it (ask the person for its value if needed) |
 
 Details and examples: [references/errors.md](references/errors.md).
@@ -406,8 +422,10 @@ When the server sets `KEEL_API_AUTH=required`, every keel command needs that
 token; deploys record who asked for them (`requestedBy`).
 
 Prepare a repo: `keel init` writes `.github/workflows/keel-release.yml` and
-checks that the repo is linked in keel and has the `DEPLOY_API_TOKEN` secret
-and `KEEL_API_URL` variable; `keel init --check --json` only audits. It never
+checks that the repo is an app in keel (if not: create the app in the keel
+admin, `<origin>/apps`, and keep the CI token it shows), that the app has
+scopes, and that the repo has the `DEPLOY_API_TOKEN` secret (the app's CI
+token) and `KEEL_API_URL` variable; `keel init --check --json` only audits. It never
 writes secrets: setting them is the person's step.
 
 Install these skills elsewhere: `keel skills add keel-cli` (this repo, for

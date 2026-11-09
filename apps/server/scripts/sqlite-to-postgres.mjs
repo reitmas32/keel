@@ -23,8 +23,46 @@ import {
 const BATCH = 200;
 
 /**
+ * Before v0.7.0 the linked repos were `scopes` and their deploy targets `services`. For a source in that shape, where
+ * each new table and column comes from. The new `scopes` table is the old `services`, so the table map only applies
+ * to a source in the old shape (see `isOldShape`).
+ */
+const OLD_TABLES = { apps: "scopes", scopes: "services", scope_locks: "service_locks" };
+const OLD_COLUMNS = {
+  scopes: { app_id: "scope_id" },
+  deploys: { scope_id: "service_id", scope_alias: "service_alias" },
+  scope_locks: { scope_id: "service_id" },
+  member_grants: { scope_pattern: "service_pattern" },
+  audit_log: { scope: "service" },
+};
+
+/** @param {DatabaseSync} sqlite @param {string} table */
+const hasTable = (sqlite, table) =>
+  sqlite.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) !== undefined;
+
+/** @param {DatabaseSync} sqlite @param {string} table @returns {Set<string>} */
+const columnsOf = (sqlite, table) =>
+  new Set(
+    sqlite
+      .prepare(`PRAGMA table_info(${table})`)
+      .all()
+      .map((c) => String(c.name)),
+  );
+
+/**
+ * Whether the source was last opened by keel v0.6.0 or earlier: it has `services`, or a `scopes` table that holds
+ * repos (with their CI token) instead of deploy targets.
+ *
+ * @param {DatabaseSync} sqlite
+ */
+const isOldShape = (sqlite) =>
+  hasTable(sqlite, "services") || (hasTable(sqlite, "scopes") && columnsOf(sqlite, "scopes").has("ci_token_hash"));
+
+/**
  * Copies every keel table from `sqlite` to the Postgres connection behind `query`, which must already be inside a
- * transaction. Columns that an old SQLite database lacks are left NULL; tables it lacks are skipped.
+ * transaction. The source can be in the current shape or in the one before v0.7.0 (scopes and services), which is read
+ * with the new names; it is never modified. Columns that an old SQLite database lacks are left NULL; tables it lacks
+ * are skipped.
  *
  * @param {{
  *   sqlite: DatabaseSync,
@@ -54,27 +92,30 @@ export async function copySqliteToPostgres({ sqlite, query, force = false }) {
   // SQLite has its own bootstrap admin (with its tokens); without one it is recreated after the copy.
   await query("DELETE FROM members WHERE id = $1", [BOOTSTRAP_ADMIN.id]);
 
+  const oldShape = isOldShape(sqlite);
   const counts = [];
   for (const table of TABLES) {
-    const found = sqlite.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table);
-    if (!found) {
+    const sourceTable = (oldShape && OLD_TABLES[table]) || table;
+    if (!hasTable(sqlite, sourceTable)) {
       counts.push({ table, rows: 0 });
       continue;
     }
-    const sourceColumns = new Set(
-      sqlite
-        .prepare(`PRAGMA table_info(${table})`)
-        .all()
-        .map((c) => c.name),
-    );
+    const sourceColumns = columnsOf(sqlite, sourceTable);
+    /** The source column for a target column, under its current or its pre-v0.7.0 name; undefined if it lacks it. */
+    const sourceOf = (column) => {
+      if (sourceColumns.has(column)) return column;
+      const old = OLD_COLUMNS[table]?.[column];
+      return old && sourceColumns.has(old) ? old : undefined;
+    };
     const { rows: targetColumns } = await query(
       "SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1 ORDER BY ordinal_position",
       [table],
     );
     // `seq` (deploys) is filled by Postgres; copying in rowid order keeps SQLite's insertion order.
-    const columns = targetColumns.map((c) => String(c.column_name)).filter((c) => sourceColumns.has(c));
+    const columns = targetColumns.map((c) => String(c.column_name)).filter((c) => sourceOf(c) !== undefined);
+    const select = columns.map((c) => (sourceOf(c) === c ? c : `${sourceOf(c)} AS ${c}`));
 
-    const rows = sqlite.prepare(`SELECT ${columns.join(", ")} FROM ${table} ORDER BY rowid`).all();
+    const rows = sqlite.prepare(`SELECT ${select.join(", ")} FROM ${sourceTable} ORDER BY rowid`).all();
     for (let start = 0; start < rows.length; start += BATCH) {
       const batch = rows.slice(start, start + BATCH);
       const params = [];
@@ -96,7 +137,7 @@ export async function copySqliteToPostgres({ sqlite, query, force = false }) {
     counts.push({ table, rows: rows.length });
   }
 
-  // A SQLite database from before members (never opened by keel v0.7.0+) has no bootstrap admin and tokens without
+  // A SQLite database from before members (never opened by keel v0.6.0+) has no bootstrap admin and tokens without
   // an owner: the same migration the server runs gives them to the bootstrap admin.
   await query(bootstrapAdminSql(POSTGRES_NOW_ISO));
   await query("UPDATE api_tokens SET member_id = $1 WHERE member_id IS NULL", [BOOTSTRAP_ADMIN.id]);

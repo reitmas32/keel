@@ -166,15 +166,15 @@ export function AddGrantForm({ memberId }: { memberId: string }) {
       <form action={action} className="form-row">
         <div className="field">
           <label className="label" htmlFor="grant-repo">
-            Repo
+            Patrón de repo
           </label>
           <input id="grant-repo" className="input" name="repo" placeholder="konectus-io/* (vacío = *)" />
         </div>
         <div className="field narrow">
-          <label className="label" htmlFor="grant-service">
-            Servicio
+          <label className="label" htmlFor="grant-scope">
+            Patrón de scope
           </label>
-          <input id="grant-service" className="input" name="service" placeholder="prod* (vacío = *)" />
+          <input id="grant-scope" className="input" name="scope" placeholder="prod* (vacío = *)" />
         </div>
         <div className="field narrow">
           <label className="label" htmlFor="grant-role">

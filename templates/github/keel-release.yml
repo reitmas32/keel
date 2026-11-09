@@ -6,7 +6,7 @@
 #
 # Repo (or org) settings:
 #   Variables → KEEL_API_URL      e.g. https://keel.konectus.internal/api
-#   Secrets   → DEPLOY_API_TOKEN  the CI token shown in the keel admin for this repo
+#   Secrets   → DEPLOY_API_TOKEN  the CI token of this repo's app in the keel admin (Apps)
 
 name: keel release
 

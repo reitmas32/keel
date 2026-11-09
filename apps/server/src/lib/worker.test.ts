@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { addScope } from "./apps";
 import { recordCiResult, requestDeploy } from "./deploys";
-import { addService } from "./scopes";
 import { createTestContext, SHA } from "./testing";
 
-const deployReq = { repo: "konectus-io/app", tag: "v1.0.0", sha: SHA, service: "api-prod" };
+const deployReq = { repo: "konectus-io/app", tag: "v1.0.0", sha: SHA, scope: "api-prod" };
 const ciReq = { repo: "konectus-io/app", tag: "v1.0.0", sha: SHA, status: "success" as const };
 
 describe("DeployWorker", () => {
@@ -71,20 +71,20 @@ describe("DeployWorker", () => {
     });
   });
 
-  it("deploys one version at a time per service", async () => {
-    const { store, worker, dokploy, clock, ciToken, scope } = await createTestContext();
+  it("deploys one version at a time per scope", async () => {
+    const { store, worker, dokploy, clock, ciToken, app } = await createTestContext();
     const otherSha = "b".repeat(40);
     await recordCiResult(store, ciReq, ciToken, clock.now());
     await recordCiResult(store, { ...ciReq, sha: otherSha, tag: "v1.0.1" }, ciToken, clock.now());
     const first = await requestDeploy(store, deployReq, clock.now());
     const second = await requestDeploy(store, { ...deployReq, sha: otherSha, tag: "v1.0.1" }, clock.now());
-    await addService(
+    await addScope(
       store,
-      scope,
+      app,
       { alias: "worker", dokployUrl: "https://dokploy.example.com/dashboard/project/p/services/application/w1" },
       clock.now(),
     );
-    const parallel = await requestDeploy(store, { ...deployReq, service: "worker" }, clock.now());
+    const parallel = await requestDeploy(store, { ...deployReq, scope: "worker" }, clock.now());
 
     await worker.tick();
     expect((await store.getDeploy(first.id))?.status).toBe("deploying");
@@ -97,11 +97,11 @@ describe("DeployWorker", () => {
     expect((await store.getDeploy(second.id))?.status).toBe("deploying");
   });
 
-  it("deploys a Compose service by its tag variable", async () => {
-    const { store, worker, dokploy, clock, ciToken, scope } = await createTestContext();
-    await addService(
+  it("deploys a Compose scope by its tag variable", async () => {
+    const { store, worker, dokploy, clock, ciToken, app } = await createTestContext();
+    await addScope(
       store,
-      scope,
+      app,
       {
         alias: "staging",
         dokployUrl: "http://dokploy.jalocompany.internal/dashboard/project/p/environment/e/services/compose/cmp1",
@@ -109,7 +109,7 @@ describe("DeployWorker", () => {
       clock.now(),
     );
     await recordCiResult(store, ciReq, ciToken, clock.now());
-    const { id } = await requestDeploy(store, { ...deployReq, service: "staging" }, clock.now());
+    const { id } = await requestDeploy(store, { ...deployReq, scope: "staging" }, clock.now());
 
     await worker.tick();
     expect(dokploy.deployed).toEqual([

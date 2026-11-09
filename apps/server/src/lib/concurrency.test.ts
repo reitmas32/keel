@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { addScope } from "./apps";
 import { recordCiResult, requestDeploy } from "./deploys";
-import { addService } from "./scopes";
 import { Store } from "./store";
 import { createTestContext, SHA } from "./testing";
 import { DeployWorker } from "./worker";
@@ -8,7 +8,7 @@ import { DeployWorker } from "./worker";
 // On Postgres, `replica` is a second connection pool on the same database, like another keel replica; on SQLite it is
 // the same connection, which still checks that interleaved async calls in one process don't double-run anything.
 
-const deployReq = { repo: "konectus-io/app", tag: "v1.0.0", sha: SHA, service: "api-prod" };
+const deployReq = { repo: "konectus-io/app", tag: "v1.0.0", sha: SHA, scope: "api-prod" };
 const ciReq = { ...deployReq, status: "success" as const };
 
 async function twoReplicas() {
@@ -56,11 +56,11 @@ describe("several replicas on one database", () => {
     expect(results.filter(Boolean)).toHaveLength(1);
   });
 
-  it("never starts the same deploy twice, nor two deploys of one service", async () => {
-    const { store, worker, otherWorker, dokploy, clock, ciToken, scope } = await twoReplicas();
-    await addService(
+  it("never starts the same deploy twice, nor two deploys of one scope", async () => {
+    const { store, worker, otherWorker, dokploy, clock, ciToken, app } = await twoReplicas();
+    await addScope(
       store,
-      scope,
+      app,
       { alias: "worker", dokployUrl: "https://dokploy.example.com/dashboard/project/p/services/application/w1" },
       clock.now(),
     );
@@ -69,25 +69,25 @@ describe("several replicas on one database", () => {
     await recordCiResult(store, { ...ciReq, sha: otherSha, tag: "v1.0.1" }, ciToken, clock.now());
     await requestDeploy(store, deployReq, clock.now());
     await requestDeploy(store, { ...deployReq, sha: otherSha, tag: "v1.0.1" }, clock.now());
-    await requestDeploy(store, { ...deployReq, service: "worker" }, clock.now());
+    await requestDeploy(store, { ...deployReq, scope: "worker" }, clock.now());
 
     await Promise.all([worker.tick(), otherWorker.tick(), worker.tick(), otherWorker.tick()]);
 
     expect(dokploy.deployed.map((d) => `${d.target.id}@${d.tag}`).sort()).toEqual(["app123@v1.0.0", "w1@v1.0.0"]);
     const deploying = await store.listDeploys({ status: "deploying" });
-    expect(deploying.map((d) => d.service).sort()).toEqual(["api-prod", "worker"]);
+    expect(deploying.map((d) => d.scope).sort()).toEqual(["api-prod", "worker"]);
   });
 
-  it("refuses to claim a deploy while another deploy of the service is deploying", async () => {
-    const { store, other, clock, ciToken, service } = await twoReplicas();
+  it("refuses to claim a deploy while another deploy of the scope is deploying", async () => {
+    const { store, other, clock, ciToken, scope } = await twoReplicas();
     await recordCiResult(store, ciReq, ciToken, clock.now());
     await recordCiResult(store, { ...ciReq, sha: "b".repeat(40), tag: "v2" }, ciToken, clock.now());
     const first = await requestDeploy(store, deployReq, clock.now());
     const second = await requestDeploy(store, { ...deployReq, sha: "b".repeat(40), tag: "v2" }, clock.now());
 
     const [a, b] = await Promise.all([
-      store.claimDeploy(first.id, service.id, clock.now()),
-      other.claimDeploy(second.id, service.id, clock.now()),
+      store.claimDeploy(first.id, scope.id, clock.now()),
+      other.claimDeploy(second.id, scope.id, clock.now()),
     ]);
     expect([a, b].filter(Boolean)).toHaveLength(1);
     expect(await store.listDeploys({ status: "deploying" })).toHaveLength(1);

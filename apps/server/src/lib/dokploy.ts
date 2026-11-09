@@ -1,10 +1,10 @@
-import type { ServiceKind } from "./store";
+import type { ScopeKind } from "./store";
 
 export type DokployDeploymentStatus = "pending" | "running" | "done" | "error";
 
-/** The Dokploy service a keel service points at. */
+/** The Dokploy service (application or compose) a keel scope points at. */
 export interface DokployTarget {
-  kind: ServiceKind;
+  kind: ScopeKind;
   id: string;
   /** Compose only: env variable that holds the image tag, e.g. `DOCKER_TAG`. */
   tagVariable: string | null;
@@ -36,7 +36,7 @@ export const DEFAULT_TAG_VARIABLE = "DOCKER_TAG";
  * Extracts the service id from a Dokploy dashboard URL, e.g.
  * `https://dokploy.example.com/dashboard/project/<p>/environment/<e>/services/application/<id>`.
  */
-export function parseDokployServiceUrl(url: string): { kind: ServiceKind; id: string } | undefined {
+export function parseDokployServiceUrl(url: string): { kind: ScopeKind; id: string } | undefined {
   let pathname: string;
   try {
     pathname = new URL(url).pathname;
@@ -44,7 +44,7 @@ export function parseDokployServiceUrl(url: string): { kind: ServiceKind; id: st
     return undefined;
   }
   const match = pathname.match(/\/services\/(application|compose)\/([A-Za-z0-9_-]+)\/?$/);
-  return match ? { kind: match[1] as ServiceKind, id: match[2] as string } : undefined;
+  return match ? { kind: match[1] as ScopeKind, id: match[2] as string } : undefined;
 }
 
 /** Replaces the tag (and drops any digest) of an image reference, keeping registry ports intact. */
@@ -137,7 +137,7 @@ export class HttpDokployClient implements DokployClient {
     if (cached && cached.expires > Date.now()) return cached.name;
     let name: string | undefined;
     try {
-      // A slow Dokploy must not hold up `keel scopes`: past this, the service shows by its id.
+      // A slow Dokploy must not hold up `keel scopes`: past this, the scope shows by its id.
       const signal = AbortSignal.timeout(DESCRIBE_TIMEOUT_MS);
       const service =
         target.kind === "compose"
@@ -146,7 +146,7 @@ export class HttpDokployClient implements DokployClient {
       const parts = [service.environment?.project?.name, service.environment?.name, service.name];
       name = parts.every(Boolean) ? parts.join("/") : service.name;
     } catch {
-      // Best effort: listing services must not fail because Dokploy is slow or down.
+      // Best effort: listing scopes must not fail because Dokploy is slow or down.
       return cached?.name;
     }
     this.names.set(key, { name, expires: Date.now() + DESCRIBE_TTL_MS });

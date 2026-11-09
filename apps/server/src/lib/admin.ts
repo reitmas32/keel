@@ -1,10 +1,10 @@
-import { LOCK_REASON_MAX, lockServiceRequestSchema, type Role, roleAtLeast } from "@keel/shared";
+import { LOCK_REASON_MAX, lockScopeRequestSchema, type Role, roleAtLeast } from "@keel/shared";
 import { type AuditActor, actorOf, baseRole, isAdmin, type Principal, requireRoleOn } from "./access";
 import { createApiToken } from "./api-auth";
+import { addScope, createApp, rotateCiToken } from "./apps";
 import { ApiError } from "./errors";
 import type { Target } from "./roles";
-import { addService, createScope, rotateCiToken } from "./scopes";
-import type { Scope, Service, Store } from "./store";
+import type { App, Scope, Store } from "./store";
 
 // What the admin's server actions do, with the role check and the audit entry, so they can be tested without Next.
 // Every function throws ApiError (403 for a role that can't, 404 for something missing).
@@ -23,7 +23,7 @@ const record = (
       actorMemberId: actor.memberId,
       action,
       repo: target.repo ?? null,
-      service: target.service ?? null,
+      scope: target.scope ?? null,
       details: { ...details, via: "admin" },
     },
     now,
@@ -39,107 +39,107 @@ export function requireAdmin(p: Principal, action: string): void {
   }
 }
 
-async function scopeOr404(store: Store, scopeId: string): Promise<Scope> {
+async function appOr404(store: Store, appId: string): Promise<App> {
+  const app = await store.getApp(appId);
+  if (!app) throw new ApiError(404, "App no encontrada.");
+  return app;
+}
+
+async function scopeOr404(store: Store, app: App, scopeId: string): Promise<Scope> {
   const scope = await store.getScope(scopeId);
-  if (!scope) throw new ApiError(404, "Scope no encontrado.");
+  if (scope?.appId !== app.id) throw new ApiError(404, "Scope no encontrado.");
   return scope;
 }
 
-async function serviceOr404(store: Store, scope: Scope, serviceId: string): Promise<Service> {
-  const service = await store.getService(serviceId);
-  if (service?.scopeId !== scope.id) throw new ApiError(404, "Servicio no encontrado.");
-  return service;
-}
-
-export async function createScopeAs(store: Store, p: Principal, input: { name: string; repoUrl: string }, now: Date) {
-  requireAdmin(p, "crear scopes");
-  const result = await createScope(store, input, now);
-  await record(store, actorOf(p), "scope.create", { repo: result.scope.repo }, { name: result.scope.name }, now);
+export async function createAppAs(store: Store, p: Principal, input: { name: string; repoUrl: string }, now: Date) {
+  requireAdmin(p, "crear apps");
+  const result = await createApp(store, input, now);
+  await record(store, actorOf(p), "app.create", { repo: result.app.repo }, { name: result.app.name }, now);
   return result;
 }
 
-export async function deleteScopeAs(store: Store, p: Principal, scopeId: string, now: Date): Promise<void> {
-  const scope = await scopeOr404(store, scopeId);
-  requireRoleOn(p, "admin", "eliminar scopes", { repo: scope.repo });
-  await store.deleteScope(scope.id);
-  await record(store, actorOf(p), "scope.delete", { repo: scope.repo }, { name: scope.name }, now);
+export async function deleteAppAs(store: Store, p: Principal, appId: string, now: Date): Promise<void> {
+  const app = await appOr404(store, appId);
+  requireRoleOn(p, "admin", "eliminar apps", { repo: app.repo });
+  await store.deleteApp(app.id);
+  await record(store, actorOf(p), "app.delete", { repo: app.repo }, { name: app.name }, now);
 }
 
-export async function linkServiceAs(
+export async function linkScopeAs(
   store: Store,
   p: Principal,
-  scopeId: string,
+  appId: string,
   input: { alias: string; dokployUrl: string; tagVariable?: string },
   now: Date,
-): Promise<Service> {
-  const scope = await scopeOr404(store, scopeId);
-  requireRoleOn(p, "maintainer", "vincular servicios", { repo: scope.repo });
-  const service = await addService(store, scope, input, now);
+): Promise<Scope> {
+  const app = await appOr404(store, appId);
+  requireRoleOn(p, "maintainer", "vincular scopes", { repo: app.repo });
+  const scope = await addScope(store, app, input, now);
   await record(
     store,
     actorOf(p),
-    "service.link",
-    { repo: scope.repo, service: service.alias },
-    { kind: service.kind, dokployId: service.dokployId, tagVariable: service.tagVariable },
+    "scope.link",
+    { repo: app.repo, scope: scope.alias },
+    { kind: scope.kind, dokployId: scope.dokployId, tagVariable: scope.tagVariable },
     now,
   );
-  return service;
+  return scope;
 }
 
-export async function unlinkServiceAs(
+export async function unlinkScopeAs(
   store: Store,
   p: Principal,
+  appId: string,
   scopeId: string,
-  serviceId: string,
   now: Date,
 ): Promise<void> {
-  const scope = await scopeOr404(store, scopeId);
-  const service = await serviceOr404(store, scope, serviceId);
-  requireRoleOn(p, "maintainer", "desvincular servicios", { repo: scope.repo, service: service.alias });
-  await store.deleteService(service.id);
-  await record(store, actorOf(p), "service.unlink", { repo: scope.repo, service: service.alias }, {}, now);
+  const app = await appOr404(store, appId);
+  const scope = await scopeOr404(store, app, scopeId);
+  requireRoleOn(p, "maintainer", "desvincular scopes", { repo: app.repo, scope: scope.alias });
+  await store.deleteScope(scope.id);
+  await record(store, actorOf(p), "scope.unlink", { repo: app.repo, scope: scope.alias }, {}, now);
 }
 
 /** Returns the new plaintext CI token, shown once. */
-export async function rotateCiTokenAs(store: Store, p: Principal, scopeId: string, now: Date): Promise<string> {
-  const scope = await scopeOr404(store, scopeId);
-  requireRoleOn(p, "maintainer", "rotar el token de CI", { repo: scope.repo });
-  const token = await rotateCiToken(store, scope.id);
-  await record(store, actorOf(p), "ci_token.rotate", { repo: scope.repo }, {}, now);
+export async function rotateCiTokenAs(store: Store, p: Principal, appId: string, now: Date): Promise<string> {
+  const app = await appOr404(store, appId);
+  requireRoleOn(p, "maintainer", "rotar el token de CI", { repo: app.repo });
+  const token = await rotateCiToken(store, app.id);
+  await record(store, actorOf(p), "ci_token.rotate", { repo: app.repo }, {}, now);
   return token;
 }
 
-export async function lockServiceAs(
+export async function lockScopeAs(
   store: Store,
   p: Principal,
+  appId: string,
   scopeId: string,
-  serviceId: string,
   rawReason: string,
   now: Date,
 ): Promise<void> {
-  const scope = await scopeOr404(store, scopeId);
-  const service = await serviceOr404(store, scope, serviceId);
-  const target = { repo: scope.repo, service: service.alias };
-  requireRoleOn(p, "maintainer", "bloquear servicios", target);
-  const parsed = lockServiceRequestSchema.safeParse({ reason: rawReason });
+  const app = await appOr404(store, appId);
+  const scope = await scopeOr404(store, app, scopeId);
+  const target = { repo: app.repo, scope: scope.alias };
+  requireRoleOn(p, "maintainer", "bloquear scopes", target);
+  const parsed = lockScopeRequestSchema.safeParse({ reason: rawReason });
   if (!parsed.success) throw new ApiError(400, `Escribe el motivo del bloqueo (1 a ${LOCK_REASON_MAX} caracteres).`);
   const actor = actorOf(p);
-  await store.lockService({ serviceId, reason: parsed.data.reason, lockedBy: actor.name }, now);
+  await store.lockScope({ scopeId, reason: parsed.data.reason, lockedBy: actor.name }, now);
   await record(store, actor, "lock.set", target, { reason: parsed.data.reason }, now);
 }
 
-export async function unlockServiceAs(
+export async function unlockScopeAs(
   store: Store,
   p: Principal,
+  appId: string,
   scopeId: string,
-  serviceId: string,
   now: Date,
 ): Promise<void> {
-  const scope = await scopeOr404(store, scopeId);
-  const service = await serviceOr404(store, scope, serviceId);
-  const target = { repo: scope.repo, service: service.alias };
-  requireRoleOn(p, "maintainer", "desbloquear servicios", target);
-  if (await store.unlockService(service.id)) await record(store, actorOf(p), "lock.clear", target, {}, now);
+  const app = await appOr404(store, appId);
+  const scope = await scopeOr404(store, app, scopeId);
+  const target = { repo: app.repo, scope: scope.alias };
+  requireRoleOn(p, "maintainer", "desbloquear scopes", target);
+  if (await store.unlockScope(scope.id)) await record(store, actorOf(p), "lock.clear", target, {}, now);
 }
 
 /** A token for the member signed in, optionally capped at `maxRole`. Returns the plaintext once. */

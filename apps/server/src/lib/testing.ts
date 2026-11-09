@@ -1,11 +1,11 @@
 import type { Role } from "@keel/shared";
 import { createApiToken } from "./api-auth";
+import { addScope, createApp } from "./apps";
 import type { AppContext } from "./context";
 import type { Db } from "./db";
 import { openSqliteDb } from "./db-sqlite";
 import type { DokployClient, DokployDeploymentStatus, DokployTarget } from "./dokploy";
 import type { Env } from "./env";
-import { addService, createScope } from "./scopes";
 import { type Member, Store } from "./store";
 import { DeployWorker } from "./worker";
 
@@ -64,7 +64,7 @@ export class FakeDokploy implements DokployClient {
     return { status: this.status, message: this.message };
   }
 
-  /** Dokploy names by service id; unknown ids describe as undefined, like an unreachable Dokploy. */
+  /** Dokploy names by Dokploy service id; unknown ids describe as undefined, like an unreachable Dokploy. */
   names = new Map<string, string>([["app123", "DEV/production/app"]]);
 
   async describe(target: DokployTarget) {
@@ -89,14 +89,14 @@ export async function createTestContext() {
     now: clock.now,
     log: () => {},
   });
-  const { scope, ciToken } = await createScope(
+  const { app, ciToken } = await createApp(
     store,
     { name: "app", repoUrl: "https://github.com/konectus-io/app" },
     clock.now(),
   );
-  const service = await addService(
+  const scope = await addScope(
     store,
-    scope,
+    app,
     {
       alias: "api-prod",
       dokployUrl: "https://dokploy.example.com/dashboard/project/p1/environment/e1/services/application/app123",
@@ -105,7 +105,7 @@ export async function createTestContext() {
   );
   const env = { KEEL_API_AUTH: "optional", KEEL_ANONYMOUS_ROLE: "deployer" } as Env;
   const ctx = { env, store, dokploy, worker, now: clock.now } as unknown as AppContext;
-  return { ctx, env, db, replica, store, dokploy, worker, clock, scope, service, ciToken };
+  return { ctx, env, db, replica, store, dokploy, worker, clock, app, scope, ciToken };
 }
 
 /** A request to an `/api` route, with an optional query string (`?a=b`), body and headers. */
@@ -122,7 +122,7 @@ export function apiRequest(
 
 let memberCount = 0;
 
-/** An active member with `role` and these grants (`[repo, service, role]`). */
+/** An active member with `role` and these grants (`[repo, scope, role]`). */
 export async function addMember(
   store: Store,
   now: Date,
@@ -133,8 +133,8 @@ export async function addMember(
     { name: name ?? `miembro${n}`, email: `${name ?? "miembro"}${n}@example.com`, role, status: "active" },
     now,
   );
-  for (const [repoPattern, servicePattern, grantRole] of grants) {
-    await store.addGrant({ memberId: member.id, repoPattern, servicePattern, role: grantRole }, now);
+  for (const [repoPattern, scopePattern, grantRole] of grants) {
+    await store.addGrant({ memberId: member.id, repoPattern, scopePattern, role: grantRole }, now);
   }
   return member;
 }

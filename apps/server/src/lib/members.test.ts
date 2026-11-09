@@ -176,7 +176,7 @@ describe("audit of member changes", () => {
       store,
       actor,
       member.id,
-      { repo: "konectus-io/*", service: "prod*", role: "viewer" },
+      { repo: "konectus-io/*", scope: "prod*", role: "viewer" },
       clock.now(),
     );
     await removeMemberGrant(store, actor, grant.id, clock.now());
@@ -197,7 +197,7 @@ describe("audit of member changes", () => {
       ["admin", "login"],
     ]);
     expect(entries[3]?.details).toMatchObject({ from: "viewer", to: "deployer" });
-    expect(entries[4]?.details).toMatchObject({ op: "add", repo: "konectus-io/*", service: "prod*", role: "viewer" });
+    expect(entries[4]?.details).toMatchObject({ op: "add", repo: "konectus-io/*", scope: "prod*", role: "viewer" });
     const all = JSON.stringify(entries);
     for (const secret of [token, resent, PASSWORD]) expect(all).not.toContain(secret);
   });

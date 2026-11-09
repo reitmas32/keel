@@ -29,7 +29,7 @@ export function KeelMark() {
   );
 }
 
-export const IconScopes = () => (
+export const IconApps = () => (
   <Icon>
     <path d="M12 3 3 7.5l9 4.5 9-4.5z" />
     <path d="m3 12 9 4.5 9-4.5" />
@@ -155,5 +155,37 @@ export const IconAudit = () => (
 export const IconShield = () => (
   <Icon>
     <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10" />
+  </Icon>
+);
+
+export const IconLayers = () => (
+  <Icon>
+    <rect x="3" y="4" width="18" height="6" rx="1.5" />
+    <rect x="3" y="14" width="18" height="6" rx="1.5" />
+    <path d="M7 7h.01" />
+    <path d="M7 17h.01" />
+  </Icon>
+);
+
+export const IconTag = () => (
+  <Icon>
+    <path d="M12.6 2.6A2 2 0 0 0 11.2 2H4a2 2 0 0 0-2 2v7.2a2 2 0 0 0 .6 1.4l8.7 8.7a2.4 2.4 0 0 0 3.4 0l6.6-6.6a2.4 2.4 0 0 0 0-3.4z" />
+    <path d="M7.5 7.5h.01" />
+  </Icon>
+);
+
+export const IconRocket = () => (
+  <Icon>
+    <path d="M4.5 16.5c-1.5 1.3-2 5-2 5s3.7-.5 5-2c.7-.8.7-2.1-.1-2.9a2.2 2.2 0 0 0-2.9-.1z" />
+    <path d="m12 15-3-3a22 22 0 0 1 2-3.9A12.9 12.9 0 0 1 22 2c0 2.7-.8 7.5-6 11a22.4 22.4 0 0 1-4 2z" />
+    <path d="M9 12H4s.6-3 2-4c1.6-1.1 5 0 5 0" />
+    <path d="M12 15v5s3-.6 4-2c1.1-1.6 0-5 0-5" />
+  </Icon>
+);
+
+export const IconSettings = () => (
+  <Icon>
+    <path d="M12.2 2h-.4a2 2 0 0 0-2 2v.2a2 2 0 0 1-1 1.7l-.4.3a2 2 0 0 1-2 0l-.2-.1a2 2 0 0 0-2.7.7l-.2.4a2 2 0 0 0 .7 2.7l.2.1a2 2 0 0 1 1 1.7v.5a2 2 0 0 1-1 1.7l-.2.1a2 2 0 0 0-.7 2.7l.2.4a2 2 0 0 0 2.7.7l.2-.1a2 2 0 0 1 2 0l.4.3a2 2 0 0 1 1 1.7v.2a2 2 0 0 0 2 2h.4a2 2 0 0 0 2-2v-.2a2 2 0 0 1 1-1.7l.4-.3a2 2 0 0 1 2 0l.2.1a2 2 0 0 0 2.7-.7l.2-.4a2 2 0 0 0-.7-2.7l-.2-.1a2 2 0 0 1-1-1.7v-.5a2 2 0 0 1 1-1.7l.2-.1a2 2 0 0 0 .7-2.7l-.2-.4a2 2 0 0 0-2.7-.7l-.2.1a2 2 0 0 1-2 0l-.4-.3a2 2 0 0 1-1-1.7V4a2 2 0 0 0-2-2z" />
+    <circle cx="12" cy="12" r="3" />
   </Icon>
 );

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { recordCiResult, requestDeploy } from "./deploys";
 import { createTestContext, SHA } from "./testing";
 
-const deployReq = { repo: "konectus-io/app", tag: "v1.0.0", sha: SHA, service: "api-prod" };
+const deployReq = { repo: "konectus-io/app", tag: "v1.0.0", sha: SHA, scope: "api-prod" };
 const ciReq = (status: "success" | "failure") => ({ repo: "konectus-io/app", tag: "v1.0.0", sha: SHA, status });
 
 describe("requestDeploy", () => {
@@ -38,12 +38,12 @@ describe("requestDeploy", () => {
     expect((await requestDeploy(store, deployReq, clock.now())).id).toBe(first.id);
   });
 
-  it("rejects an unlinked repo and an unknown service", async () => {
+  it("rejects an unlinked repo and an unknown scope", async () => {
     const { store, clock } = await createTestContext();
     await expect(requestDeploy(store, { ...deployReq, repo: "other/repo" }, clock.now())).rejects.toThrow(
       /no está vinculado/,
     );
-    await expect(requestDeploy(store, { ...deployReq, service: "nope" }, clock.now())).rejects.toThrow(
+    await expect(requestDeploy(store, { ...deployReq, scope: "nope" }, clock.now())).rejects.toThrow(
       /Disponibles: api-prod/,
     );
   });

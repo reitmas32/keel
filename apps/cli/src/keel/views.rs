@@ -1,7 +1,7 @@
 //! Tables for versions, deploys, scopes and status, as the TypeScript CLI
 //! printed them.
 
-use crate::keel::api::{CiStatus, Deploy, DeployDetail, DeployStatus, ServiceSummary, Version};
+use crate::keel::api::{CiStatus, Deploy, DeployDetail, DeployStatus, ScopeSummary, Version};
 use crate::keel::semver::{compare_desc, is_semver_tag};
 use crate::ui::{Colors, Paint, pad_end, width};
 use chrono::{DateTime, Datelike, Duration, FixedOffset, Local, NaiveDate, Timelike, Utc};
@@ -185,14 +185,14 @@ fn title_line(titles: &[&str], widths: &[usize], c: &Colors) -> String {
 pub fn render_deploy_list(
     header: &Header,
     deploys: &[Deploy],
-    service: Option<&str>,
+    scope: Option<&str>,
     options: &ViewOptions,
 ) -> String {
     let c = &options.colors;
     let mut lines = vec![header_line(header, c), String::new()];
     if deploys.is_empty() {
-        lines.push(match service {
-            Some(service) => format!("  No hay deploys de {service} todavía."),
+        lines.push(match scope {
+            Some(scope) => format!("  No hay deploys de {scope} todavía."),
             None => "  Todavía no hay deploys. Crea uno con `keel deploy`.".into(),
         });
         return lines.join("\n");
@@ -204,7 +204,7 @@ pub fn render_deploy_list(
             let style = deploy_style(d.status);
             vec![
                 d.tag.clone(),
-                d.service.clone(),
+                d.scope.clone(),
                 format!("{} {}", style.icon, style.label),
                 format_when(&d.created_at, options, false),
                 end.map_or("—".into(), |e| format_when(e, options, false)),
@@ -221,7 +221,7 @@ pub fn render_deploy_list(
         .collect();
     let titles = [
         "VERSIÓN",
-        "SERVICIO",
+        "SCOPE",
         "ESTADO",
         "PEDIDO",
         "TERMINÓ",
@@ -307,14 +307,14 @@ pub fn render_deploy_detail(d: &DeployDetail, options: &ViewOptions) -> String {
     let style = deploy_style(deploy.status);
     let when = |iso: &str| format_when(iso, options, true);
     let end = deploy.finished();
-    let service = match d.service_kind.as_deref() {
+    let scope = match d.scope_kind.as_deref().or(d.service_kind.as_deref()) {
         Some("compose") => format!(
             "{}  (Compose, {})",
-            deploy.service,
+            deploy.scope,
             d.tag_variable.as_deref().unwrap_or("DOCKER_TAG")
         ),
-        Some("application") => format!("{}  (Application)", deploy.service),
-        _ => deploy.service.clone(),
+        Some("application") => format!("{}  (Application)", deploy.scope),
+        _ => deploy.scope.clone(),
     };
     let mut fields = vec![
         (
@@ -325,7 +325,7 @@ pub fn render_deploy_detail(d: &DeployDetail, options: &ViewOptions) -> String {
                 &deploy.sha[..deploy.sha.len().min(7)]
             ),
         ),
-        ("Servicio", service),
+        ("Scope", scope),
         (
             "Estado",
             style
@@ -459,7 +459,7 @@ pub fn render_deploy_detail(d: &DeployDetail, options: &ViewOptions) -> String {
     lines.join("\n")
 }
 
-fn kind_label(s: &ServiceSummary) -> String {
+fn kind_label(s: &ScopeSummary) -> String {
     match s.kind.as_deref() {
         Some("application") => "Application".into(),
         Some("compose") => match s.tag_variable.as_deref() {
@@ -471,7 +471,7 @@ fn kind_label(s: &ServiceSummary) -> String {
 }
 
 /// `✔ hoy 16:04 · 1m 02s` when the last deploy is the current version, else what that last deploy did.
-fn last_deploy_cell(s: &ServiceSummary, options: &ViewOptions) -> String {
+fn last_deploy_cell(s: &ScopeSummary, options: &ViewOptions) -> String {
     let Some(last) = &s.last else {
         return "sin deploys".into();
     };
@@ -507,23 +507,19 @@ pub fn lock_text(lock: &crate::keel::api::Lock, options: &ViewOptions) -> String
     )
 }
 
-pub fn render_scopes(
-    header: &Header,
-    services: &[ServiceSummary],
-    options: &ViewOptions,
-) -> String {
+pub fn render_scopes(header: &Header, scopes: &[ScopeSummary], options: &ViewOptions) -> String {
     let c = &options.colors;
     let mut lines = vec![header_line(header, c), String::new()];
-    if services.is_empty() {
+    if scopes.is_empty() {
         lines.push(format!(
-            "{INDENT}{} no tiene scopes vinculados. Agrégalos en el admin de keel.",
+            "{INDENT}La app {} no tiene scopes. Agrégalos en el admin de keel.",
             header.repo
         ));
         return lines.join("\n");
     }
-    if services.iter().all(|s| s.kind.is_none()) {
+    if scopes.iter().all(|s| s.kind.is_none()) {
         lines.push(format!("{INDENT}{}", c.dim("SCOPE")));
-        lines.extend(services.iter().map(|s| format!("{INDENT}{}", s.alias)));
+        lines.extend(scopes.iter().map(|s| format!("{INDENT}{}", s.alias)));
         lines.push(String::new());
         lines.push(format!(
             "{INDENT}{} Tu servidor de keel es anterior a v0.5.0: solo muestra los nombres.",
@@ -531,7 +527,7 @@ pub fn render_scopes(
         ));
         return lines.join("\n");
     }
-    let rows: Vec<Vec<String>> = services
+    let rows: Vec<Vec<String>> = scopes
         .iter()
         .map(|s| {
             vec![
@@ -555,15 +551,15 @@ pub fn render_scopes(
     ];
     let widths = column_widths(&titles, &rows);
     lines.push(title_line(&titles, &widths, c));
-    for (service, cells) in services.iter().zip(&rows) {
+    for (scope, cells) in scopes.iter().zip(&rows) {
         let painted: Vec<String> = cells
             .iter()
             .enumerate()
             .map(|(i, cell)| {
                 let padded = pad_end(cell, widths[i]);
-                match (i, &service.last) {
+                match (i, &scope.last) {
                     (4, Some(last)) => deploy_style(last.status).paint.apply(c, &padded),
-                    (1, _) if service.dokploy_name.is_none() => c.dim(&padded),
+                    (1, _) if scope.dokploy_name.is_none() => c.dim(&padded),
                     _ => padded,
                 }
             })
@@ -573,7 +569,7 @@ pub fn render_scopes(
                 .trim_end()
                 .to_owned(),
         );
-        if let Some(last) = service.last.as_ref().filter(|l| l.status.is_failure())
+        if let Some(last) = scope.last.as_ref().filter(|l| l.status.is_failure())
             && let Some(error) = &last.error
         {
             let offset: usize = widths[..4].iter().map(|w| w + GAP.len()).sum();
@@ -583,7 +579,7 @@ pub fn render_scopes(
                 c.dim(&format!("└ {error}"))
             ));
         }
-        if let Some(lock) = &service.lock {
+        if let Some(lock) = &scope.lock {
             lines.push(format!(
                 "{INDENT}{}",
                 c.yellow(&format!("└ 🔒 {}", lock_text(lock, options)))
@@ -593,12 +589,8 @@ pub fn render_scopes(
     lines.push(String::new());
     lines.push(format!(
         "{INDENT}{} {} · despliega con `keel deploy -s <scope> -v <versión>`",
-        services.len(),
-        if services.len() == 1 {
-            "scope"
-        } else {
-            "scopes"
-        }
+        scopes.len(),
+        if scopes.len() == 1 { "scope" } else { "scopes" }
     ));
     lines.join("\n")
 }
@@ -719,7 +711,7 @@ pub fn render_version_list(header: &Header, versions: &[Version], options: &View
 
 /// One scope in `keel status`: keel's view plus what Dokploy says, when it was asked.
 pub struct StatusRow<'a> {
-    pub service: &'a ServiceSummary,
+    pub scope: &'a ScopeSummary,
     /// `running`, `done`, `error`, `idle`… as Dokploy reports the service; `None` without a Dokploy key.
     pub dokploy_status: Option<String>,
 }
@@ -736,7 +728,7 @@ pub fn render_status(
     let mut lines = vec![header_line(header, c), String::new()];
     if rows.is_empty() {
         lines.push(format!(
-            "{INDENT}{} no tiene scopes vinculados. Agrégalos en el admin de keel.",
+            "{INDENT}La app {} no tiene scopes. Agrégalos en el admin de keel.",
             header.repo
         ));
     } else {
@@ -744,12 +736,12 @@ pub fn render_status(
             .iter()
             .map(|r| {
                 vec![
-                    r.service.alias.clone(),
-                    r.service
+                    r.scope.alias.clone(),
+                    r.scope
                         .current
                         .as_ref()
                         .map_or("—".into(), |d| d.tag.clone()),
-                    last_deploy_cell(r.service, options),
+                    last_deploy_cell(r.scope, options),
                     r.dokploy_status.clone().unwrap_or("—".into()),
                 ]
             })
@@ -764,7 +756,7 @@ pub fn render_status(
                 .map(|(i, cell)| {
                     let padded = pad_end(cell, widths[i]);
                     match i {
-                        2 => match &row.service.last {
+                        2 => match &row.scope.last {
                             Some(last) => deploy_style(last.status).paint.apply(c, &padded),
                             None => padded,
                         },
@@ -819,7 +811,7 @@ pub fn render_status(
                 "{INDENT}{} {} → {} · {} · keel deploys {}",
                 style.paint.apply(c, style.icon),
                 d.tag,
-                d.service,
+                d.scope,
                 style.label,
                 short_id(&d.id)
             ));
@@ -849,6 +841,7 @@ mod tests {
             repo: "konectus-io/app".into(),
             tag: tag.into(),
             sha: "abcdef0123".into(),
+            scope: "staging".into(),
             service: "staging".into(),
             status,
             error: None,
@@ -899,7 +892,7 @@ mod tests {
             None,
             &options(),
         );
-        assert!(out.contains("v1.5.0    staging    ◌ esperando CI"), "{out}");
+        assert!(out.contains("v1.5.0    staging   ◌ esperando CI"), "{out}");
         assert!(out.contains("3m 00s…"), "{out}");
         assert!(out.contains("└ Dokploy respondió 404"), "{out}");
         assert!(out.ends_with("3 deploys · 1 ✔ · 1 ✖ · 1 en curso"), "{out}");

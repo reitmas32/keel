@@ -50,7 +50,7 @@ describe("authenticate", () => {
       name: "Rafa",
       tokenName: "rafa",
       member: { id: owner.id },
-      grants: [{ servicePattern: "prod*", role: "viewer" }],
+      grants: [{ scopePattern: "prod*", role: "viewer" }],
       maxRole: null,
     });
     const first = (await store.listApiTokens())[0]?.lastUsedAt;
@@ -92,7 +92,7 @@ describe("API routes with tokens", () => {
     const { ctx, env, ciToken } = await createTestContext();
     env.KEEL_API_AUTH = "required";
     const responses = await Promise.all([
-      handlers.listServices(ctx, apiRequest(), "konectus-io", "app"),
+      handlers.listScopes(ctx, apiRequest(), "konectus-io", "app"),
       handlers.listRepoDeploys(ctx, apiRequest(), "konectus-io", "app"),
       handlers.listRepoVersions(ctx, apiRequest(), "konectus-io", "app"),
       handlers.getRepoDeploy(ctx, apiRequest(), "konectus-io", "app", "abcd"),
@@ -100,14 +100,14 @@ describe("API routes with tokens", () => {
       handlers.whoami(ctx, apiRequest()),
       handlers.createDeploy(ctx, apiRequest("", { method: "POST", body: {} })),
       handlers.registerVersion(ctx, apiRequest("", { method: "POST", body: {} })),
-      handlers.lockService(
+      handlers.lockScope(
         ctx,
         apiRequest("", { method: "PUT", body: { reason: "x" } }),
         "konectus-io",
         "app",
         "api-prod",
       ),
-      handlers.unlockService(ctx, apiRequest("", { method: "DELETE" }), "konectus-io", "app", "api-prod"),
+      handlers.unlockScope(ctx, apiRequest("", { method: "DELETE" }), "konectus-io", "app", "api-prod"),
     ]);
     expect(responses.map((r) => r.status)).toEqual(Array(responses.length).fill(401));
     expect((await (responses[0] as Response).json()).error).toMatch(/Tokens de API/);
@@ -141,7 +141,7 @@ describe("API routes with tokens", () => {
   it("records the member's name as requestedBy on POST /deploys", async () => {
     const { ctx, store, clock } = await createTestContext();
     const { token } = await memberToken(store, clock.now(), { name: "rafa" });
-    const body = { repo: "konectus-io/app", tag: "v1.0.0", sha: SHA, service: "api-prod" };
+    const body = { repo: "konectus-io/app", tag: "v1.0.0", sha: SHA, scope: "api-prod" };
     const withToken = await handlers.createDeploy(
       ctx,
       apiRequest("", { method: "POST", body, headers: { authorization: `Bearer ${token}` } }),
@@ -180,7 +180,7 @@ describe("GET /whoami", () => {
       email: member.email,
       // The base role capped by the token.
       role: "deployer",
-      grants: [{ repo: "konectus-io/*", service: "prod*", role: "viewer" }],
+      grants: [{ repo: "konectus-io/*", scope: "prod*", service: "prod*", role: "viewer" }],
       tokenMaxRole: "deployer",
       auth: "optional",
       anonymousRole: "deployer",

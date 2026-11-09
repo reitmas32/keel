@@ -36,7 +36,10 @@ the person chooses.
 
 ### `service_not_found` (4)
 
-Run `keel get services <part of the name>` and propose the closest names.
+No Dokploy service matches: run `keel get services <part of the name>` and
+propose the closest names. For a keel scope that does not exist (`keel logs
+-s`, `promote`), `keel scopes` lists the app's scopes. The kind keeps its
+name for scripts.
 
 ### `service_ambiguous` (5)
 
@@ -95,7 +98,7 @@ rebuild the change on the new state, plan again, and ask again.
 
 ### `keel_managed` (25)
 
-The Dokploy service is a keel scope of this repo (`details.repo`,
+The Dokploy service is a keel scope of this app (`details.repo`,
 `details.scope`, and for env plans `details.tag_variable`).
 
 - `plan deploy`/`plan redeploy` → `keel deploy -s <scope> -v <version>` (ask
@@ -108,8 +111,8 @@ using it to dodge the rule defeats it.
 
 ### `keel_unreachable` (26)
 
-In a keel repo, keel could not be asked whether the service is a scope (the
-server is down, unreachable, or older than v0.5.0). Report it and run
+In a keel app's repo, keel could not be asked whether the Dokploy service is
+one of its scopes (the server is down, unreachable, or older than v0.5.0). Report it and run
 `keel doctor`. Only if the person confirms the service is not a keel scope,
 repeat the plan with `--not-keel-managed`; the summary records it.
 
@@ -162,14 +165,16 @@ Report it and stop. Unlocking is the person's decision (`keel unlock -s
 
 ### `forbidden` (33)
 
-keel knows who you are, but your role doesn't allow that action on that repo
+keel knows who you are, but your role doesn't allow that action on that app
 or scope (roles: viewer < publisher < deployer < maintainer < admin, and they
-can differ per scope). `keel whoami` shows the role and the per-scope grants.
+can differ per app and scope). `keel whoami` shows the role and the grants
+per app and scope.
 Report it and stop: a keel admin grants access, never retry with another
 token or scope.
 
 ### `missing_input` (32)
 
-keel needed a value it would ask at a terminal and there is none: `-s`,
+keel needed a value it would ask at a terminal and there is none: `-s`
+(`--scope`),
 `-v`/`-r`/`-l`, `-y`, `-m`, `--org`… Add the flag; ask the person for its
 value if the conversation does not give it.

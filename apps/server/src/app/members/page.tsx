@@ -14,7 +14,7 @@ export default async function MembersPage() {
     <Page crumbs={[{ label: "Miembros" }]}>
       <PageHeader
         title="Miembros"
-        description="Quién puede entrar a keel y qué puede hacer. Los permisos por repo o servicio ajustan el rol base."
+        description="Quién puede entrar a keel y qué puede hacer. Los permisos por repo o scope ajustan el rol base."
       />
 
       <div className="stack">

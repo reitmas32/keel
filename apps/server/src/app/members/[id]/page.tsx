@@ -37,13 +37,13 @@ export default async function MemberPage({ params }: { params: Promise<{ id: str
       <div className="stack">
         <Card
           title="Rol"
-          description="El rol base aplica en todos los repos y servicios, salvo donde un permiso lo cambie. Un admin es admin en todo."
+          description="El rol base aplica en todos los repos y scopes, salvo donde un permiso lo cambie. Un admin es admin en todo."
         >
           <ChangeRoleForm memberId={member.id} role={member.role} />
         </Card>
 
         <Card
-          title="Permisos por repo y servicio"
+          title="Permisos por repo y scope"
           description={
             <>
               Cambian el rol (hacia arriba o hacia abajo) donde coinciden los patrones; <code>*</code> es cualquier
@@ -61,7 +61,7 @@ export default async function MemberPage({ params }: { params: Promise<{ id: str
                 <thead>
                   <tr>
                     <th>Repo</th>
-                    <th>Servicio</th>
+                    <th>Scope</th>
                     <th>Rol</th>
                     <th>Creado</th>
                     <th className="actions">
@@ -76,7 +76,7 @@ export default async function MemberPage({ params }: { params: Promise<{ id: str
                         <code>{g.repoPattern}</code>
                       </td>
                       <td>
-                        <code>{g.servicePattern}</code>
+                        <code>{g.scopePattern}</code>
                       </td>
                       <td>
                         <RoleBadge role={g.role} />

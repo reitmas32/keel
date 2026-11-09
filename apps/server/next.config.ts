@@ -11,6 +11,8 @@ const config: NextConfig = {
   serverExternalPackages: ["pg"],
   // Type checking runs via `pnpm typecheck` (tsc); Next's builtin checker doesn't support TypeScript 7.
   typescript: { ignoreBuildErrors: true },
+  // The admin's "Scopes" became "Apps" in v0.7.0 (same ids); old bookmarks land on the new pages.
+  redirects: async () => [{ source: "/scopes/:path*", destination: "/apps/:path*", permanent: true }],
 };
 
 export default config;

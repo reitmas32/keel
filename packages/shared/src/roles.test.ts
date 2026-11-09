@@ -23,7 +23,7 @@ describe("roles", () => {
       name: "Rafa",
       email: "rafa@example.com",
       role: "deployer",
-      grants: [{ repo: "konectus-io/*", service: "prod*", role: "viewer" }],
+      grants: [{ repo: "konectus-io/*", scope: "prod*", service: "prod*", role: "viewer" }],
       tokenMaxRole: null,
       auth: "required",
       anonymousRole: "none",

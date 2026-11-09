@@ -12,7 +12,7 @@ export const viewport: Viewport = {
 
 export const metadata: Metadata = {
   title: "keel admin",
-  description: "Scopes, repos y servicios de Dokploy de esta instancia de keel",
+  description: "Apps, sus scopes y los servicios de Dokploy de esta instancia de keel",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

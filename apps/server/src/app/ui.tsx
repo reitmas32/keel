@@ -1,15 +1,16 @@
 import type { DeployStatus, Role, VersionCiStatus } from "@keel/shared";
 import Link from "next/link";
 import { Fragment, type ReactNode } from "react";
+import { getContext } from "@/lib/context";
 import type { MemberStatus } from "@/lib/store";
 import { IconChevronRight, IconLogOut, KeelMark } from "./icons";
 import { logout } from "./login/actions";
 import { currentViewer, viewerIsAdmin } from "./session";
-import { NavLinks } from "./ui-client";
+import { AppNav, NavLinks } from "./ui-client";
 
 export function Brand({ sub }: { sub?: string }) {
   return (
-    <Link href="/scopes" className="brand">
+    <Link href="/apps" className="brand">
       <span className="brand-mark">
         <KeelMark />
       </span>
@@ -27,6 +28,8 @@ export function Brand({ sub }: { sub?: string }) {
  */
 export async function AdminShell({ children }: { children: ReactNode }) {
   const viewer = await currentViewer();
+  // Names for the open app's sidebar group; only ids and names leave the server.
+  const apps = viewer ? (await (await getContext()).store.listApps()).map(({ id, name }) => ({ id, name })) : [];
   return (
     <div className="shell">
       <aside className="sidebar">
@@ -37,6 +40,7 @@ export async function AdminShell({ children }: { children: ReactNode }) {
           <div className="sidebar-label">Administración</div>
           <NavLinks admin={viewer ? viewerIsAdmin(viewer) : false} />
         </nav>
+        <AppNav apps={apps} />
         <form action={logout} className="sidebar-footer">
           {viewer && (
             <div className="sidebar-user">
