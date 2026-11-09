@@ -650,6 +650,8 @@ mod tests {
         .unwrap()
     }
 
+    // The mapped paths are Unix-style; on Windows they are not absolute.
+    #[cfg(unix)]
     #[test]
     fn selection_follows_flags_env_then_directory() {
         let config = multi_org();
