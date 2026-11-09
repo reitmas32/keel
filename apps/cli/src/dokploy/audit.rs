@@ -26,9 +26,10 @@ pub fn append(path: &Path, event: &AuditEvent<'_>) -> Result<()> {
         .create(true)
         .append(true)
         .open(path)
-        .with_context(|| format!("cannot open audit log {}", path.display()))?;
+        .with_context(|| format!("no se pudo abrir el audit log {}", path.display()))?;
     restrict(&file)?;
-    writeln!(file, "{}", serde_json::to_string(event)?).context("cannot write audit log")?;
+    writeln!(file, "{}", serde_json::to_string(event)?)
+        .context("no se pudo escribir el audit log")?;
     Ok(())
 }
 

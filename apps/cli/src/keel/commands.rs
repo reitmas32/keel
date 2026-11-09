@@ -47,7 +47,7 @@ impl Ctx {
         })
     }
 
-    fn colors(&self) -> Colors {
+    pub(crate) fn colors(&self) -> Colors {
         if self.json {
             Colors::plain()
         } else {
@@ -55,7 +55,7 @@ impl Ctx {
         }
     }
 
-    fn view(&self) -> ViewOptions {
+    pub(crate) fn view(&self) -> ViewOptions {
         ViewOptions::now(self.colors())
     }
 }
@@ -70,7 +70,7 @@ pub struct Repo {
 }
 
 impl Repo {
-    fn header(&self) -> Header<'_> {
+    pub(crate) fn header(&self) -> Header<'_> {
         Header {
             repo: &self.repo,
             org: &self.org.org,
@@ -91,7 +91,7 @@ pub fn resolve_repo(ctx: &Ctx, action: &str) -> Result<Repo> {
             ),
         ));
     }
-    let api = KeelApi::new(&org.api_url)?;
+    let api = KeelApi::for_org(&org)?;
     Ok(Repo {
         repo: origin.slug(),
         org,
@@ -106,16 +106,21 @@ fn validate_limit(limit: Option<u32>) -> Result<()> {
     Ok(())
 }
 
-fn need_terminal(what: &str) -> anyhow::Error {
+pub fn need_terminal(what: &str) -> anyhow::Error {
     fail(
-        Kind::Error,
+        Kind::MissingInput,
         format!("Sin terminal interactiva hay que indicar {what}."),
     )
 }
 
 // ------------------------------------------------------------------ login/use
 
-pub fn login(ctx: &Ctx, org: Option<String>, api_url: Option<String>) -> Result<()> {
+pub async fn login(
+    ctx: &Ctx,
+    org: Option<String>,
+    api_url: Option<String>,
+    token: Option<String>,
+) -> Result<()> {
     let org = match org {
         Some(org) => org,
         None if ui::interactive() => {
@@ -134,18 +139,67 @@ pub fn login(ctx: &Ctx, org: Option<String>, api_url: Option<String>) -> Result<
         None => return Err(need_terminal("--api-url")),
     };
     let api_url = config::normalize_api_url(&api_url)?;
+    let previous = config::read_org(&ctx.home, &org)?.and_then(|o| o.token);
+    // `--token ""` forgets it; without --token a terminal asks, and a script keeps the saved one.
+    let token = match token {
+        Some(token) => Some(token),
+        None if ui::interactive() && !ctx.json => Some(ui::secret_optional(
+            "Token personal de keel (Tokens de API en el admin; Enter para omitir)",
+        )?),
+        None => None,
+    };
+    let token = match token {
+        Some(t) => Some(t.trim().to_owned()).filter(|t| !t.is_empty()),
+        None => previous,
+    };
+    // A token is checked before it is saved; an unreachable server only warns.
+    let mut user = None;
+    let mut warning = None;
+    if let Some(token) = &token {
+        match KeelApi::with_token(&api_url, Some(token.clone()))?
+            .whoami()
+            .await
+        {
+            Ok(Some(who)) => user = who.name,
+            Ok(None) => {
+                warning = Some("Tu servidor de keel no conoce los tokens personales: se guardó, pero no se usa todavía.".to_owned());
+            }
+            Err(error) if crate::failure::report(&error).0["error"]["kind"] == "unauthorized" => {
+                return Err(error);
+            }
+            Err(error) => {
+                warning = Some(format!(
+                    "No se pudo comprobar el token ({error:#}); se guardó igual."
+                ));
+            }
+        }
+    }
     let saved = OrgConfig {
         org: org.clone(),
         api_url: api_url.clone(),
+        token: token.clone(),
     };
     config::save_org(&ctx.home, &saved)?;
     config::set_active_org(&ctx.home, &org)?;
     if ctx.json {
-        return print_json(&json!({"ok": true, "org": org, "apiUrl": api_url, "active": true}));
+        return print_json(&json!({
+            "ok": true, "org": org, "apiUrl": api_url, "active": true,
+            "token": token.is_some(), "user": user, "warning": warning,
+        }));
     }
     ui::success(&format!(
         "{org} guardada ({api_url}) y seleccionada como organización activa."
     ));
+    match (&token, &user) {
+        (Some(_), Some(user)) => ui::success(&format!("Token verificado: eres {user}.")),
+        (Some(_), None) => {}
+        (None, _) => {
+            ui::info("Sin token personal. Si el servidor lo exige: keel login --token <token>.")
+        }
+    }
+    if let Some(warning) = warning {
+        ui::warn(&warning);
+    }
     Ok(())
 }
 
@@ -178,7 +232,7 @@ pub fn use_org(ctx: &Ctx, org: Option<String>) -> Result<()> {
         }
         None => {
             return Err(fail(
-                Kind::Error,
+                Kind::MissingInput,
                 format!(
                     "Sin terminal interactiva indica la organización: {}",
                     orgs.join(", ")
@@ -359,7 +413,7 @@ pub async fn create_version(
     Ok(())
 }
 
-fn status_name(status: DeployStatus) -> &'static str {
+pub(crate) fn status_name(status: DeployStatus) -> &'static str {
     match status {
         DeployStatus::WaitingCi => "waiting_ci",
         DeployStatus::CiPassed => "ci_passed",
@@ -379,6 +433,7 @@ pub struct DeployArgs {
     pub latest: bool,
     pub latest_ready: bool,
     pub wait: bool,
+    pub rollback_on_failure: bool,
 }
 
 /// Which tag `deploy` picks, given the remote tags and what keel knows.
@@ -547,6 +602,11 @@ pub async fn deploy(ctx: &Ctx, args: DeployArgs) -> Result<()> {
         }
     }
 
+    let previous = if args.rollback_on_failure {
+        running(&repo, &target).await?
+    } else {
+        None
+    };
     let created = repo
         .api
         .create_deploy(&CreateDeploy {
@@ -556,10 +616,14 @@ pub async fn deploy(ctx: &Ctx, args: DeployArgs) -> Result<()> {
             service: &target,
         })
         .await?;
+    let waits = args.wait || args.rollback_on_failure;
     if ctx.json {
-        print_json(
-            &json!({"deploy": created, "version": info, "createdByOther": created_by_other}),
-        )?;
+        // With --wait only the final state is printed, so stdout is one JSON document.
+        if !waits {
+            print_json(
+                &json!({"deploy": created, "version": info, "createdByOther": created_by_other}),
+            )?;
+        }
     } else {
         if let Some(info) = info {
             ui::info(&views::describe_version(info, &ctx.view()));
@@ -583,26 +647,36 @@ pub async fn deploy(ctx: &Ctx, args: DeployArgs) -> Result<()> {
             );
         }
     }
-    if args.wait {
-        wait_for(ctx, &repo, created).await?;
+    if waits {
+        watch(ctx, &repo, created, previous, args.rollback_on_failure).await?;
     }
     Ok(())
 }
 
 /// Follows a deploy until it ends; a failed end is a `ci_failed` error.
-async fn wait_for(ctx: &Ctx, repo: &Repo, mut deploy: Deploy) -> Result<()> {
+pub(crate) async fn wait_for(ctx: &Ctx, repo: &Repo, deploy: Deploy) -> Result<()> {
+    let deploy = wait_until_done(ctx, repo, deploy).await?;
+    // A failure prints its own JSON error, with the deploy in its details.
+    if ctx.json && !deploy.status.is_failure() {
+        print_json(&json!({"deploy": deploy}))?;
+    }
+    finish(ctx, deploy)
+}
+
+/// Polls a deploy until it reaches a final state, printing each change.
+pub(crate) async fn wait_until_done(ctx: &Ctx, repo: &Repo, mut deploy: Deploy) -> Result<Deploy> {
     let mut last = deploy.status;
     if !ctx.json {
         ui::info(&format!(
             "Esperando a que {} termine (Ctrl-C deja de esperar; el deploy sigue)…",
-            &deploy.id[..8.min(deploy.id.len())]
+            short(&deploy.id)
         ));
     }
     while !deploy.status.is_terminal() {
         tokio::select! {
-            _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+            _ = tokio::time::sleep(poll_interval()) => {}
             _ = tokio::signal::ctrl_c() => {
-                return Err(fail(Kind::Cancelled, format!("Dejé de esperar; revisa el deploy con `keel deploys {}`.", &deploy.id[..8.min(deploy.id.len())])));
+                return Err(fail(Kind::Cancelled, format!("Dejé de esperar; revisa el deploy con `keel deploys {}`.", short(&deploy.id))));
             }
         }
         deploy = repo.api.get_deploy(&deploy.id).await?;
@@ -616,23 +690,41 @@ async fn wait_for(ctx: &Ctx, repo: &Repo, mut deploy: Deploy) -> Result<()> {
         }
         last = deploy.status;
     }
-    if ctx.json {
-        print_json(&json!({"deploy": deploy}))?;
-    }
+    Ok(deploy)
+}
+
+/// How often `--wait` asks keel; `KEEL_POLL_MS` shortens it in tests.
+fn poll_interval() -> Duration {
+    std::env::var("KEEL_POLL_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map_or(Duration::from_secs(5), Duration::from_millis)
+}
+
+pub(crate) fn short(id: &str) -> &str {
+    &id[..8.min(id.len())]
+}
+
+fn deploy_failure(deploy: &Deploy) -> String {
+    format!(
+        "El deploy {} terminó en {}{}. Detalle: keel deploys {} --log",
+        short(&deploy.id),
+        status_name(deploy.status),
+        deploy
+            .error
+            .as_deref()
+            .map(|e| format!(": {e}"))
+            .unwrap_or_default(),
+        short(&deploy.id)
+    )
+}
+
+/// A finished deploy: an error if it failed, a success line otherwise.
+fn finish(ctx: &Ctx, deploy: Deploy) -> Result<()> {
     if deploy.status.is_failure() {
         return Err(fail_with(
             Kind::CiFailed,
-            format!(
-                "El deploy {} terminó en {}{}. Detalle: keel deploys {} --log",
-                &deploy.id[..8.min(deploy.id.len())],
-                status_name(deploy.status),
-                deploy
-                    .error
-                    .as_deref()
-                    .map(|e| format!(": {e}"))
-                    .unwrap_or_default(),
-                &deploy.id[..8.min(deploy.id.len())]
-            ),
+            deploy_failure(&deploy),
             json!({"deploy": deploy}),
         ));
     }
@@ -640,6 +732,73 @@ async fn wait_for(ctx: &Ctx, repo: &Repo, mut deploy: Deploy) -> Result<()> {
         ui::success(&format!("{} desplegado en {}", deploy.tag, deploy.service));
     }
     Ok(())
+}
+
+/// The version a scope runs now, as keel knows it: its newest `deployed`.
+pub(crate) async fn running(repo: &Repo, scope: &str) -> Result<Option<Deploy>> {
+    Ok(repo
+        .api
+        .list_deploys(&repo.repo, Some(scope), Some(50))
+        .await?
+        .into_iter()
+        .find(|d| d.status == DeployStatus::Deployed))
+}
+
+/// Waits for a deploy and, if it ends `deploy_failed`, deploys `previous`
+/// again and waits for that too. Fails with the deploy's failure either way.
+pub(crate) async fn watch(
+    ctx: &Ctx,
+    repo: &Repo,
+    created: Deploy,
+    previous: Option<Deploy>,
+    rollback_on_failure: bool,
+) -> Result<()> {
+    if !rollback_on_failure {
+        return wait_for(ctx, repo, created).await;
+    }
+    let done = wait_until_done(ctx, repo, created).await?;
+    // ci_failed and expired never reached Dokploy: nothing to undo.
+    let previous = previous.filter(|p| p.tag != done.tag || p.sha != done.sha);
+    let (DeployStatus::DeployFailed, Some(previous)) = (done.status, previous) else {
+        if done.status == DeployStatus::DeployFailed && !ctx.json {
+            ui::warn("No hay una versión anterior desplegada con keel: no se hace rollback.");
+        }
+        if ctx.json && !done.status.is_failure() {
+            print_json(&json!({"deploy": done, "rollback": null}))?;
+        }
+        return finish(ctx, done);
+    };
+    if !ctx.json {
+        ui::warn(&format!(
+            "{} falló en {}; volviendo a {}…",
+            done.tag, done.service, previous.tag
+        ));
+    }
+    let rollback = repo
+        .api
+        .create_deploy(&CreateDeploy {
+            repo: &repo.repo,
+            tag: &previous.tag,
+            sha: &previous.sha,
+            service: &done.service,
+        })
+        .await?;
+    let rollback = wait_until_done(ctx, repo, rollback).await?;
+    let outcome = if rollback.status == DeployStatus::Deployed {
+        format!("rollback a {} desplegado", previous.tag)
+    } else {
+        format!(
+            "el rollback a {} también falló ({}): revisa {} a mano",
+            previous.tag,
+            status_name(rollback.status),
+            done.service
+        )
+    };
+    Err(fail_with(
+        Kind::CiFailed,
+        format!("{} · {outcome}.", deploy_failure(&done)),
+        json!({"deploy": done, "rollback": rollback}),
+    ))
 }
 
 // ------------------------------------------------------------------- rollback
@@ -765,7 +924,7 @@ pub async fn rollback(
     if !yes {
         if !ui::interactive() || ctx.json {
             return Err(fail(
-                Kind::Error,
+                Kind::MissingInput,
                 format!("Sin terminal interactiva hay que confirmar con -y. {message}"),
             ));
         }
@@ -783,9 +942,11 @@ pub async fn rollback(
         })
         .await?;
     if ctx.json {
-        print_json(
-            &json!({"service": target, "from": current, "to": previous, "deploy": created}),
-        )?;
+        if !wait {
+            print_json(
+                &json!({"service": target, "from": current, "to": previous, "deploy": created}),
+            )?;
+        }
     } else {
         ui::success(&format!(
             "Rollback encolado: {target} {} → {} (deploy {}, {})",
@@ -891,7 +1052,7 @@ pub async fn deploys(
 }
 
 /// The scope's Dokploy service, by the id keel stores for it.
-async fn scope_service(repo: &Repo, alias: &str) -> Result<ServiceSummary> {
+pub(crate) async fn scope_service(repo: &Repo, alias: &str) -> Result<ServiceSummary> {
     let scopes = repo.api.list_service_summaries(&repo.repo).await?;
     let scope = scopes
         .into_iter()
@@ -912,7 +1073,7 @@ async fn scope_service(repo: &Repo, alias: &str) -> Result<ServiceSummary> {
 }
 
 /// The Dokploy client for keel's Dokploy, from the local Dokploy config.
-fn dokploy_client(config: &Config, target: &Target) -> Result<DokployClient> {
+pub(crate) fn dokploy_client(config: &Config, target: &Target) -> Result<DokployClient> {
     let instance = target.resolve(config)?;
     DokployClient::new(instance)
 }
@@ -1030,11 +1191,13 @@ pub async fn logs(
 
 pub async fn status(ctx: &Ctx, config_path: Option<PathBuf>, target: &Target) -> Result<()> {
     let repo = resolve_repo(ctx, "consultar el estado")?;
-    let (scopes, versions, recent) = tokio::try_join!(
+    let (scopes, versions, recent, who) = tokio::try_join!(
         repo.api.list_service_summaries(&repo.repo),
         repo.api.list_versions(&repo.repo, Some(20)),
         repo.api.list_deploys(&repo.repo, None, Some(50)),
+        repo.api.whoami(),
     )?;
+    let user = who.as_ref().and_then(|w| w.name.clone());
     let in_flight: Vec<&Deploy> = recent.iter().filter(|d| !d.status.is_terminal()).collect();
 
     // What Dokploy says about each scope, when there is a Dokploy key here.
@@ -1078,6 +1241,8 @@ pub async fn status(ctx: &Ctx, config_path: Option<PathBuf>, target: &Target) ->
             "latest_ready": versions.as_deref().and_then(views::latest_ready).map(|v| &v.tag),
             "in_flight": in_flight,
             "note": note,
+            "user": user,
+            "locks": scopes.iter().filter_map(|s| s.lock.as_ref().map(|l| json!({"scope": s.alias, "lock": l}))).collect::<Vec<_>>(),
         }));
     }
     let rows: Vec<StatusRow> = scopes
@@ -1098,6 +1263,18 @@ pub async fn status(ctx: &Ctx, config_path: Option<PathBuf>, target: &Target) ->
             &ctx.view(),
         )
     );
+    for scope in &scopes {
+        if let Some(lock) = &scope.lock {
+            ui::warn(&format!(
+                "{} {}",
+                scope.alias,
+                views::lock_text(lock, &ctx.view())
+            ));
+        }
+    }
+    if let Some(user) = user {
+        println!("  {}", ctx.colors().dim(&format!("sesión: {user}")));
+    }
     Ok(())
 }
 
@@ -1145,6 +1322,7 @@ mod tests {
             ci_passed_at: None,
             deploy_started_at: None,
             finished_at: None,
+            requested_by: None,
         }
     }
 

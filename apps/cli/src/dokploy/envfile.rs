@@ -45,11 +45,11 @@ pub fn parse(content: &str) -> Result<BTreeMap<String, String>> {
         let line = line.strip_prefix("export ").unwrap_or(line);
         let (key, value) = line
             .split_once('=')
-            .with_context(|| format!("line {}: expected KEY=value", number + 1))?;
+            .with_context(|| format!("línea {}: se esperaba CLAVE=valor", number + 1))?;
         let key = key.trim();
         if !KNOWN_KEYS.contains(&key) {
             bail!(
-                "line {}: unknown key {key}; expected one of {}",
+                "línea {}: clave desconocida {key}; se espera una de {}",
                 number + 1,
                 KNOWN_KEYS.join(", ")
             );
@@ -62,7 +62,7 @@ pub fn parse(content: &str) -> Result<BTreeMap<String, String>> {
             _ => value,
         };
         if values.insert(key.to_owned(), value.to_owned()).is_some() {
-            bail!("line {}: {key} is defined twice", number + 1);
+            bail!("línea {}: {key} está definida dos veces", number + 1);
         }
     }
     Ok(values)
@@ -71,10 +71,10 @@ pub fn parse(content: &str) -> Result<BTreeMap<String, String>> {
 /// Reads an instance file after checking it cannot be read by anyone else.
 pub fn read_protected(path: &Path) -> Result<BTreeMap<String, String>> {
     let metadata = fs::symlink_metadata(path)
-        .with_context(|| format!("cannot read instance file {}", path.display()))?;
+        .with_context(|| format!("no se pudo leer el archivo de instancia {}", path.display()))?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         bail!(
-            "{} must be a regular file, not a symbolic link",
+            "{} debe ser un archivo normal, no un enlace simbólico",
             path.display()
         );
     }
@@ -83,14 +83,14 @@ pub fn read_protected(path: &Path) -> Result<BTreeMap<String, String>> {
         use std::os::unix::fs::PermissionsExt;
         if metadata.permissions().mode() & 0o077 != 0 {
             bail!(
-                "{} holds an API key and must be owner-only (chmod 600)",
+                "{} tiene una API key y debe ser solo del dueño (chmod 600)",
                 path.display()
             );
         }
     }
     let content = fs::read_to_string(path)
-        .with_context(|| format!("cannot read instance file {}", path.display()))?;
-    parse(&content).with_context(|| format!("invalid instance file {}", path.display()))
+        .with_context(|| format!("no se pudo leer el archivo de instancia {}", path.display()))?;
+    parse(&content).with_context(|| format!("archivo de instancia inválido {}", path.display()))
 }
 
 /// The API key of an instance file, read when a request needs it.
@@ -100,7 +100,7 @@ pub fn api_key(path: &Path) -> Result<String> {
         .get("DOKPLOY_API_KEY")
         .map(|v| v.trim())
         .filter(|v| !v.is_empty())
-        .with_context(|| format!("{} has no DOKPLOY_API_KEY", path.display()))?;
+        .with_context(|| format!("{} no tiene DOKPLOY_API_KEY", path.display()))?;
     Ok(key.to_owned())
 }
 
@@ -117,7 +117,7 @@ fn boolean(values: &BTreeMap<String, String>, key: &str, path: &Path) -> Result<
         None => Ok(false),
         Some(v) if v == "true" || v == "1" || v == "yes" => Ok(true),
         Some(v) if v == "false" || v == "0" || v == "no" || v.is_empty() => Ok(false),
-        Some(v) => bail!("{}: {key} must be true or false, got {v:?}", path.display()),
+        Some(v) => bail!("{}: {key} debe ser true o false, no {v:?}", path.display()),
     }
 }
 
@@ -128,7 +128,7 @@ pub fn instance_from_file(path: &Path, home: &Path) -> Result<InstanceConfig> {
     let stem = path
         .file_stem()
         .and_then(|s| s.to_str())
-        .context("instance file name must be UTF-8")?;
+        .context("el nombre del archivo de instancia debe ser UTF-8")?;
     let get = |key: &str| {
         values
             .get(key)
@@ -137,18 +137,18 @@ pub fn instance_from_file(path: &Path, home: &Path) -> Result<InstanceConfig> {
     };
 
     let base_url =
-        get("DOKPLOY_URL").with_context(|| format!("{} has no DOKPLOY_URL", path.display()))?;
+        get("DOKPLOY_URL").with_context(|| format!("{} no tiene DOKPLOY_URL", path.display()))?;
     let base_url = Url::parse(base_url)
-        .with_context(|| format!("{}: DOKPLOY_URL is not a valid URL", path.display()))?;
+        .with_context(|| format!("{}: DOKPLOY_URL no es una URL válida", path.display()))?;
     if get("DOKPLOY_API_KEY").is_none() {
-        bail!("{} has no DOKPLOY_API_KEY", path.display());
+        bail!("{} no tiene DOKPLOY_API_KEY", path.display());
     }
     let approval = match get("DOKPLOY_APPROVAL") {
         None => None,
         Some("token") => Some(ApprovalMode::Token),
         Some("terminal") => Some(ApprovalMode::Terminal),
         Some(other) => bail!(
-            "{}: DOKPLOY_APPROVAL must be token or terminal, got {other:?}",
+            "{}: DOKPLOY_APPROVAL debe ser token o terminal, no {other:?}",
             path.display()
         ),
     };
@@ -180,10 +180,10 @@ pub fn instance_from_file(path: &Path, home: &Path) -> Result<InstanceConfig> {
 /// Every `*.env` file of an owner-only directory, in name order.
 pub fn load_dir(directory: &Path, home: &Path) -> Result<Vec<InstanceConfig>> {
     let metadata = fs::symlink_metadata(directory)
-        .with_context(|| format!("cannot read {}", directory.display()))?;
+        .with_context(|| format!("no se pudo leer {}", directory.display()))?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         bail!(
-            "{} must be a directory, not a symbolic link",
+            "{} debe ser una carpeta, no un enlace simbólico",
             directory.display()
         );
     }
@@ -192,7 +192,7 @@ pub fn load_dir(directory: &Path, home: &Path) -> Result<Vec<InstanceConfig>> {
         use std::os::unix::fs::PermissionsExt;
         if metadata.permissions().mode() & 0o077 != 0 {
             bail!(
-                "{} holds API keys and must be owner-only (chmod 700)",
+                "{} tiene API keys y debe ser solo del dueño (chmod 700)",
                 directory.display()
             );
         }

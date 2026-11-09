@@ -48,7 +48,7 @@ impl DokployClient {
             return Err(fail(
                 Kind::Refused,
                 format!(
-                    "refusing destructive procedure {procedure}: deletes are run by a person from the Dokploy panel"
+                    "se rechaza el procedimiento destructivo {procedure}: los borrados los hace una persona desde el panel de Dokploy"
                 ),
             ));
         }
@@ -72,7 +72,7 @@ impl DokployClient {
     fn url(&self, procedure: &str) -> Result<Url> {
         self.base_url
             .join(&format!("api/{procedure}"))
-            .context("invalid Dokploy API URL")
+            .context("URL de la API de Dokploy inválida")
     }
 
     async fn request(
@@ -96,7 +96,7 @@ impl DokployClient {
         let bytes = response
             .bytes()
             .await
-            .context("cannot read Dokploy response")?;
+            .context("no se pudo leer la respuesta de Dokploy")?;
         if !status.is_success() {
             // The body is withheld: a proxy or server could echo request data back.
             let status = status.as_u16();
@@ -110,7 +110,7 @@ impl DokployClient {
         if bytes.is_empty() {
             return Ok(Value::Null);
         }
-        serde_json::from_slice(&bytes).context("Dokploy returned non-JSON data")
+        serde_json::from_slice(&bytes).context("Dokploy devolvió datos que no son JSON")
     }
 }
 
@@ -128,13 +128,15 @@ pub fn http_client(instance: &InstanceConfig) -> Result<Client> {
 fn status_hint(status: u16) -> String {
     match status {
         401 | 403 => format!(
-            "HTTP {status}: the API key was rejected (check this instance's api_key_env or api_key_file; response body withheld)"
+            "HTTP {status}: la API key fue rechazada (revisa api_key_env o api_key_file de esta instancia; el cuerpo de la respuesta se omite)"
         ),
         404 => format!(
-            "HTTP {status}: this procedure does not exist on this Dokploy version (list the real ones with `api`)"
+            "HTTP {status}: este procedimiento no existe en esta versión de Dokploy (lista los reales con `api`)"
         ),
-        400 => format!("HTTP {status}: Dokploy rejected the parameters (response body withheld)"),
-        _ => format!("HTTP {status} (response body withheld)"),
+        400 => format!(
+            "HTTP {status}: Dokploy rechazó los parámetros (el cuerpo de la respuesta se omite)"
+        ),
+        _ => format!("HTTP {status} (el cuerpo de la respuesta se omite)"),
     }
 }
 
@@ -144,18 +146,21 @@ fn connection_error(base_url: &Url, error: reqwest::Error) -> anyhow::Error {
         fail(
             Kind::Network,
             format!(
-                "{host} did not answer in time. Run `doctor`: on a private panel this is usually the VPN"
+                "{host} no respondió a tiempo. Ejecuta `doctor`: en un panel privado suele ser la VPN"
             ),
         )
     } else if error.is_connect() {
         fail(
             Kind::Network,
             format!(
-                "cannot connect to {host}. Run `doctor`: if the name does not resolve, the VPN is down"
+                "no se pudo conectar con {host}. Ejecuta `doctor`: si el nombre no resuelve, la VPN está caída"
             ),
         )
     } else {
-        fail(Kind::Network, format!("Dokploy request failed: {error}"))
+        fail(
+            Kind::Network,
+            format!("falló la petición a Dokploy: {error}"),
+        )
     }
 }
 
@@ -171,7 +176,7 @@ pub fn validate_procedure(procedure: &str) -> Result<()> {
         })
     };
     if !(valid(parts.next()) && valid(parts.next()) && parts.next().is_none()) {
-        bail!("invalid procedure name {procedure:?}: expected router.procedure");
+        bail!("nombre de procedimiento inválido {procedure:?}: se espera router.procedure");
     }
     Ok(())
 }

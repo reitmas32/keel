@@ -6,6 +6,7 @@ use crate::dokploy::{extra, print_json};
 use crate::failure::{self, Kind, fail};
 use crate::keel::commands::{self as kc, Ctx, DeployArgs, LogsArgs};
 use crate::keel::update::{self, UpdateStatus};
+use crate::keel::{ops, skills};
 use crate::ui;
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
@@ -18,7 +19,7 @@ use std::path::PathBuf;
     name = "keel",
     version = crate::VERSION,
     about = "Crea versiones, las despliega a Dokploy cuando su CI pasa y opera Dokploy con planes revisados",
-    after_help = "Versiones y deploys pasan por el servidor de keel (create-version, deploy, rollback, scopes, deploys, status).\nLas operaciones directas sobre Dokploy usan tu API key local (get, api, plan, apply, backup)."
+    after_help = "Versiones y deploys pasan por el servidor de keel (create-version, deploy, promote, rollback, lock, scopes, deploys, changes, status).\nLas operaciones directas sobre Dokploy usan tu API key local (get, env diff, api, plan, apply, backup).\nPara preparar un repo: keel init. Skills para agentes: keel skills."
 )]
 pub struct Cli {
     /// Salida JSON (también los errores). Sin terminal, los errores ya salen en JSON.
@@ -46,6 +47,10 @@ pub enum Command {
         /// URL de la API de keel.
         #[arg(long)]
         api_url: Option<String>,
+        /// Token personal (keel_pat_…) de «Tokens de API» en el admin. Vacío lo borra;
+        /// sin él se pregunta en una terminal. KEEL_TOKEN lo reemplaza al usarlo.
+        #[arg(long)]
+        token: Option<String>,
     },
     /// Selecciona la organización activa.
     Use {
@@ -110,6 +115,10 @@ pub enum Command {
         /// Espera a que el deploy termine; sale con código 28 si falla.
         #[arg(long)]
         wait: bool,
+        /// Si el deploy termina en deploy_failed, vuelve a la versión que corría antes
+        /// (implica --wait). Sale con código 28 aunque el rollback funcione.
+        #[arg(long)]
+        rollback_on_failure: bool,
     },
     /// Vuelve un scope a la versión que tenía antes (o a --to, ya desplegada ahí).
     Rollback {
@@ -125,6 +134,67 @@ pub enum Command {
         /// Espera a que el deploy del rollback termine; sale con código 28 si falla.
         #[arg(long)]
         wait: bool,
+    },
+    /// Despliega en --to la versión que corre --from (p. ej. de staging a producción).
+    Promote {
+        /// Scope de origen: su versión desplegada es la que se promueve.
+        #[arg(long, value_name = "SCOPE")]
+        from: String,
+        /// Scope de destino.
+        #[arg(long, value_name = "SCOPE")]
+        to: String,
+        /// Espera a que el deploy termine; sale con código 28 si falla.
+        #[arg(long)]
+        wait: bool,
+        /// Si el deploy termina en deploy_failed, vuelve a lo que corría --to (implica --wait).
+        #[arg(long)]
+        rollback_on_failure: bool,
+        /// No pedir confirmación (obligatorio sin terminal interactiva).
+        #[arg(short = 'y', long)]
+        yes: bool,
+        /// Desplegarla aunque --to ya corra esa versión.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Commits y PRs entre lo que corre un scope y una versión (por defecto la más nueva).
+    Changes {
+        /// Scope; si se omite, se pregunta.
+        #[arg(short = 's', long = "service", value_name = "SCOPE")]
+        service: Option<String>,
+        /// Versión con la que comparar; por defecto el tag semver más alto.
+        #[arg(short = 'v', long = "version", value_name = "TAG")]
+        version: Option<String>,
+    },
+    /// Congela los deploys de un scope (incidente, freeze de releases) con un motivo.
+    Lock {
+        /// Scope; si se omite, se pregunta.
+        #[arg(short = 's', long = "service", value_name = "SCOPE")]
+        service: Option<String>,
+        /// Motivo, visible en `keel scopes` y en el error de quien intente desplegar.
+        #[arg(short = 'm', long = "message", value_name = "MOTIVO")]
+        message: Option<String>,
+    },
+    /// Vuelve a permitir deploys en un scope bloqueado con `keel lock`.
+    Unlock {
+        /// Scope; si se omite, se pregunta.
+        #[arg(short = 's', long = "service", value_name = "SCOPE")]
+        service: Option<String>,
+    },
+    /// Prepara el repo para keel: workflow de release, vínculo en keel y secrets de GitHub.
+    Init {
+        /// Solo revisa; sale con código 2 si falta algo.
+        #[arg(long)]
+        check: bool,
+        /// Reemplaza el workflow aunque esté adaptado.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Skills para agentes (Claude Code, Codex, Copilot) publicados en el repo de keel.
+    Skills {
+        #[command(subcommand)]
+        command: Option<SkillsCommand>,
+        #[command(flatten)]
+        scope: SkillsScope,
     },
     /// Scopes del repo: su servicio en Dokploy, la versión que corren y su último deploy.
     #[command(visible_alias = "services")]
@@ -182,6 +252,11 @@ pub enum Command {
         /// Solo procedimientos que contengan este texto.
         filter: Option<String>,
     },
+    /// Variables de entorno de servicios de Dokploy (solo nombres, nunca valores).
+    Env {
+        #[command(subcommand)]
+        command: EnvCommand,
+    },
     /// Diff saneado entre el Compose remoto y un archivo local.
     Compose {
         #[command(subcommand)]
@@ -211,6 +286,53 @@ pub enum ConfigCommand {
         #[arg(long)]
         dry_run: bool,
     },
+}
+
+#[derive(Subcommand)]
+pub enum EnvCommand {
+    /// Compara las variables de dos servicios: solo en A, solo en B, valor distinto, igual.
+    Diff {
+        #[command(flatten)]
+        target: Target,
+        /// Servicio A: `name`, `environment/name` o `project/environment/name`.
+        a: String,
+        /// Servicio B.
+        b: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum SkillsCommand {
+    /// Skills publicados y los que keel instaló aquí (lo mismo que `keel skills`).
+    List,
+    /// Instala uno o más skills.
+    Add {
+        #[arg(required = true)]
+        skills: Vec<String>,
+    },
+    /// Quita skills que instaló keel (nunca uno escrito a mano).
+    Remove {
+        #[arg(required = true)]
+        skills: Vec<String>,
+    },
+    /// Actualiza los skills que keel instaló aquí.
+    Update,
+}
+
+#[derive(clap::Args)]
+pub struct SkillsScope {
+    /// Para tu usuario (~/.claude/skills, ~/.agents/skills) en vez de este repo.
+    #[arg(short = 'g', long, global = true)]
+    global: bool,
+    /// Solo estos agentes: claude, codex, copilot (separados por comas).
+    #[arg(long, global = true, value_name = "AGENTES")]
+    agent: Option<String>,
+    /// Lee los skills de una copia local del repo de keel en vez de GitHub.
+    #[arg(long, global = true, value_name = "RUTA")]
+    from: Option<PathBuf>,
+    /// Rama o tag de reitmas32/keel (por defecto el de esta versión, o main).
+    #[arg(long = "ref", global = true, value_name = "REF")]
+    reference: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -263,7 +385,7 @@ pub async fn run(cli: Cli) -> Result<()> {
     let state = || paths::state_dir(cli.state_dir.clone());
     let config = || paths::load_config(config_arg.clone());
     match cli.command {
-        Command::Login { api_url } => kc::login(&ctx, cli.org.clone(), api_url),
+        Command::Login { api_url, token } => kc::login(&ctx, cli.org.clone(), api_url, token).await,
         Command::Use { org } => kc::use_org(&ctx, org),
         Command::CreateVersion {
             version,
@@ -277,6 +399,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             latest,
             latest_ready,
             wait,
+            rollback_on_failure,
         } => {
             kc::deploy(
                 &ctx,
@@ -286,6 +409,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                     latest,
                     latest_ready,
                     wait,
+                    rollback_on_failure,
                 },
             )
             .await
@@ -296,6 +420,53 @@ pub async fn run(cli: Cli) -> Result<()> {
             yes,
             wait,
         } => kc::rollback(&ctx, service, to, yes, wait).await,
+        Command::Promote {
+            from,
+            to,
+            wait,
+            rollback_on_failure,
+            yes,
+            force,
+        } => {
+            ops::promote(
+                &ctx,
+                ops::PromoteArgs {
+                    from,
+                    to,
+                    wait,
+                    rollback_on_failure,
+                    yes,
+                    force,
+                },
+            )
+            .await
+        }
+        Command::Changes { service, version } => ops::changes(&ctx, service, version).await,
+        Command::Lock { service, message } => ops::lock(&ctx, service, message).await,
+        Command::Unlock { service } => ops::unlock(&ctx, service).await,
+        Command::Init { check, force } => crate::keel::init::init(&ctx, check, force).await,
+        Command::Skills { command, scope } => {
+            let action = match command {
+                None | Some(SkillsCommand::List) => skills::SkillsAction::List,
+                Some(SkillsCommand::Add { skills }) => skills::SkillsAction::Add(skills),
+                Some(SkillsCommand::Remove { skills }) => skills::SkillsAction::Remove(skills),
+                Some(SkillsCommand::Update) => skills::SkillsAction::Update,
+            };
+            skills::skills(
+                &ctx,
+                action,
+                skills::Scope {
+                    global: scope.global,
+                    agents: scope.agent,
+                },
+                scope.from,
+                scope.reference,
+            )
+            .await
+        }
+        Command::Env {
+            command: EnvCommand::Diff { target, a, b },
+        } => extra::env_diff_command(&config()?, &target, &a, &b, ctx.json).await,
         Command::Scopes => kc::scopes(&ctx).await,
         Command::Deploys {
             id,
@@ -342,7 +513,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             let config = config()?;
             print_json(&json!({"ok": true, "instances": config.instances.len(),
                 "config": paths::config_location(config_arg)?.path,
-                "message": "Configuration is structurally valid. Credentials were not read."}))
+                "message": "La configuración es válida. No se leyeron credenciales."}))
         }
         Command::Config {
             command: ConfigCommand::Migrate { dry_run },
@@ -378,7 +549,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             if all && !yes {
                 if !ui::interactive() {
                     return Err(fail(
-                        Kind::Error,
+                        Kind::MissingInput,
                         "--all borra también planes pendientes: confirma con -y",
                     ));
                 }
@@ -444,8 +615,22 @@ fn context(ctx: &Ctx, target: &Target, config_arg: Option<PathBuf>) -> Result<()
 async fn doctor(ctx: &Ctx, target: &Target, config_arg: Option<PathBuf>) -> Result<()> {
     // keel: the active org's API answers /health.
     let keel = match crate::keel::config::active_org(&ctx.home, ctx.org.as_deref()) {
-        Ok(org) => match crate::keel::api::KeelApi::new(&org.api_url)?.health().await {
-            Ok(body) => json!({"ok": true, "org": org.org, "api_url": org.api_url, "health": body}),
+        Ok(org) => match crate::keel::api::KeelApi::for_org(&org)?.health().await {
+            Ok(body) => {
+                let api = crate::keel::api::KeelApi::for_org(&org)?;
+                let (user, ok) = match api.whoami().await {
+                    Ok(Some(who)) => (
+                        json!({"name": who.name, "auth": who.auth, "token": api.has_token()}),
+                        true,
+                    ),
+                    Ok(None) => (json!({"supported": false, "token": api.has_token()}), true),
+                    Err(error) => (
+                        json!({"error": failure::report(&error).0["error"], "token": api.has_token()}),
+                        false,
+                    ),
+                };
+                json!({"ok": ok, "org": org.org, "api_url": org.api_url, "health": body, "user": user})
+            }
             Err(error) => {
                 json!({"ok": false, "org": org.org, "api_url": org.api_url, "error": failure::report(&error).0["error"]})
             }
@@ -505,9 +690,9 @@ async fn compose_diff(
     let remote = remote
         .get("composeFile")
         .and_then(serde_json::Value::as_str)
-        .context("Dokploy response contains no composeFile")?;
-    let local =
-        std::fs::read_to_string(file).with_context(|| format!("cannot read {}", file.display()))?;
+        .context("la respuesta de Dokploy no trae composeFile")?;
+    let local = std::fs::read_to_string(file)
+        .with_context(|| format!("no se pudo leer {}", file.display()))?;
     let diff = extra::compose_diff(remote, &local);
     if std::io::stdout().is_terminal() && !diff.is_empty() {
         let c = ui::stdout_colors();
@@ -607,6 +792,39 @@ mod tests {
         assert!(parse(&["deploys", "-s", "staging", "-n", "50"]).is_ok());
         assert!(parse(&["services", "--json"]).is_ok());
         assert!(parse(&["remote"]).is_ok());
+        assert!(parse(&["login", "--token", "keel_pat_x"]).is_ok());
+        assert!(
+            parse(&[
+                "deploy",
+                "-s",
+                "prod",
+                "-v",
+                "v1.0.0",
+                "--rollback-on-failure"
+            ])
+            .is_ok()
+        );
+        assert!(parse(&["promote", "--from", "stg", "--to", "prod", "-y", "--wait"]).is_ok());
+        assert!(parse(&["promote", "--from", "stg"]).is_err());
+        assert!(parse(&["changes", "-s", "prod", "-v", "v1.2.0"]).is_ok());
+        assert!(parse(&["lock", "-s", "prod", "-m", "incidente"]).is_ok());
+        assert!(parse(&["unlock", "-s", "prod"]).is_ok());
+        assert!(parse(&["init", "--check", "--json"]).is_ok());
+        assert!(parse(&["skills"]).is_ok());
+        assert!(parse(&["skills", "add", "keel-cli", "-g", "--agent", "claude"]).is_ok());
+        assert!(parse(&["skills", "add"]).is_err());
+        assert!(parse(&["skills", "remove", "keel-cli", "--from", "/tmp/keel"]).is_ok());
+        assert!(
+            parse(&[
+                "env",
+                "diff",
+                "shop/stg/api",
+                "shop/prod/api",
+                "--target",
+                "acme"
+            ])
+            .is_ok()
+        );
         assert!(
             parse(&[
                 "login",

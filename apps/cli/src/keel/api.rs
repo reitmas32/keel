@@ -59,6 +59,9 @@ pub struct Deploy {
     pub deploy_started_at: Option<String>,
     #[serde(default)]
     pub finished_at: Option<String>,
+    /// Name of the personal token that asked for it (servers with API tokens).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_by: Option<String>,
 }
 
 impl Deploy {
@@ -125,6 +128,28 @@ pub struct ServiceSummary {
     pub current: Option<Deploy>,
     #[serde(default)]
     pub last: Option<Deploy>,
+    /// Set while deploys to the scope are frozen with `keel lock`.
+    #[serde(default)]
+    pub lock: Option<Lock>,
+}
+
+/// A frozen scope: keel refuses new deploys until `keel unlock`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Lock {
+    #[serde(default)]
+    pub alias: Option<String>,
+    pub reason: String,
+    #[serde(default)]
+    pub locked_by: Option<String>,
+    pub created_at: String,
+}
+
+/// Who the token belongs to, from `GET /whoami`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WhoAmI {
+    pub name: Option<String>,
+    pub auth: String,
 }
 
 impl ServiceSummary {
@@ -166,24 +191,91 @@ pub fn is_unsupported(error: &anyhow::Error) -> bool {
         .chain()
         .find_map(|e| e.downcast_ref::<Failure>())
         .and_then(|f| f.details.as_ref())
-        .is_some_and(|d| d["http_status"] == 404 && d["from_keel"] == false)
+        .is_some_and(|d| {
+            (d["http_status"] == 404 || d["http_status"] == 405) && d["from_keel"] == false
+        })
 }
 
 pub struct KeelApi {
     base_url: String,
+    token: Option<String>,
     http: reqwest::Client,
+}
+
+/// The personal token to send: `KEEL_TOKEN` wins over the one saved by `keel login`.
+pub fn effective_token(saved: Option<&str>) -> Option<String> {
+    std::env::var("KEEL_TOKEN")
+        .ok()
+        .or_else(|| saved.map(str::to_owned))
+        .map(|t| t.trim().to_owned())
+        .filter(|t| !t.is_empty())
+}
+
+/// The `Authorization` header value for a token.
+pub fn bearer(token: &str) -> String {
+    format!("Bearer {token}")
 }
 
 impl KeelApi {
     pub fn new(base_url: &str) -> Result<Self> {
+        Self::with_token(base_url, None)
+    }
+
+    /// The API of an org, with its token (or `KEEL_TOKEN`).
+    pub fn for_org(org: &crate::keel::config::OrgConfig) -> Result<Self> {
+        Self::with_token(&org.api_url, effective_token(org.token.as_deref()))
+    }
+
+    pub fn with_token(base_url: &str, token: Option<String>) -> Result<Self> {
         let http = reqwest::Client::builder()
             .user_agent(concat!("keel-cli/", env!("CARGO_PKG_VERSION")))
             .timeout(Duration::from_secs(30))
             .build()?;
         Ok(Self {
             base_url: base_url.trim_end_matches('/').to_owned(),
+            token,
             http,
         })
+    }
+
+    pub fn has_token(&self) -> bool {
+        self.token.is_some()
+    }
+
+    /// Who keel thinks we are; `None` when the server predates API tokens.
+    pub async fn whoami(&self) -> Result<Option<WhoAmI>> {
+        match self
+            .request::<WhoAmI>(reqwest::Method::GET, "/whoami", None)
+            .await
+        {
+            Ok(who) => Ok(Some(who)),
+            Err(error) if is_unsupported(&error) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Freezes deploys to a scope.
+    pub async fn lock(&self, repo: &str, alias: &str, reason: &str) -> Result<Lock> {
+        self.request(
+            reqwest::Method::PUT,
+            &format!("/repos/{repo}/services/{}/lock", encode(alias)),
+            Some(serde_json::json!({ "reason": reason })),
+        )
+        .await
+        .map_err(locks_unsupported)
+    }
+
+    /// Lets deploys to a scope through again; returns whether it was locked.
+    pub async fn unlock(&self, repo: &str, alias: &str) -> Result<bool> {
+        let body = self
+            .request_value(
+                reqwest::Method::DELETE,
+                &format!("/repos/{repo}/services/{}/lock", encode(alias)),
+                None,
+            )
+            .await
+            .map_err(locks_unsupported)?;
+        Ok(body["wasLocked"].as_bool().unwrap_or(true))
     }
 
     pub fn base_url(&self) -> &str {
@@ -355,6 +447,9 @@ impl KeelApi {
             .http
             .request(method, &url)
             .header("accept", "application/json");
+        if let Some(token) = &self.token {
+            request = request.header("authorization", bearer(token));
+        }
         if let Some(body) = body {
             request = request.json(&body);
         }
@@ -377,22 +472,57 @@ impl KeelApi {
                 .and_then(Value::as_str)
                 .map(str::to_owned);
             let from_keel = keel_error.is_some();
-            let unsupported = status.as_u16() == 404 && !from_keel;
-            let message = keel_error.unwrap_or_else(|| {
-                format!("La API de keel respondió {} en {path}.", status.as_u16())
-            });
+            let code = status.as_u16();
+            let unsupported = (code == 404 || code == 405) && !from_keel;
+            let kind = match code {
+                401 => Kind::Unauthorized,
+                423 => Kind::Locked,
+                _ if unsupported => Kind::KeelUnreachable,
+                _ => Kind::Error,
+            };
+            let message = match (code, keel_error) {
+                // Newer servers already say how to get a token; don't repeat it.
+                (401, Some(error)) if error.contains("keel login") => {
+                    format!("{} (o exporta KEEL_TOKEN).", error.trim_end_matches('.'))
+                }
+                (401, error) => format!(
+                    "keel rechazó la petición ({}). Crea un token en el admin de keel, en «Tokens de API», y guárdalo con `keel login --token <token>` (o exporta KEEL_TOKEN).",
+                    error.unwrap_or_else(|| if self.token.is_some() {
+                        "token inválido o revocado".to_owned()
+                    } else {
+                        "este servidor exige un token personal".to_owned()
+                    })
+                ),
+                (_, Some(error)) => error,
+                (_, None) => format!("La API de keel respondió {code} en {path}."),
+            };
             return Err(fail_with(
-                if unsupported {
-                    Kind::KeelUnreachable
-                } else {
-                    Kind::Error
-                },
+                kind,
                 message,
                 serde_json::json!({"http_status": status.as_u16(), "from_keel": from_keel}),
             ));
         }
         Ok(json.unwrap_or(Value::Null))
     }
+}
+
+/// A lock route the server does not have becomes a clear message.
+fn locks_unsupported(error: anyhow::Error) -> anyhow::Error {
+    let details = error
+        .chain()
+        .find_map(|e| e.downcast_ref::<Failure>())
+        .and_then(|f| f.details.clone());
+    let unsupported = details.as_ref().is_some_and(|d| {
+        (d["http_status"] == 404 || d["http_status"] == 405) && d["from_keel"] == false
+    });
+    if unsupported {
+        return fail_with(
+            Kind::KeelUnreachable,
+            "Este servidor de keel no soporta locks; actualízalo.",
+            details.unwrap_or_default(),
+        );
+    }
+    error
 }
 
 fn root_cause(error: &(dyn std::error::Error + 'static)) -> String {
@@ -424,6 +554,66 @@ mod tests {
             .await;
         let api = KeelApi::new(&server.uri()).unwrap();
         assert!(api.list_versions("acme/app", None).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn sends_the_token_and_maps_401_and_423() {
+        use wiremock::matchers::header;
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/whoami"))
+            .and(header("authorization", "Bearer keel_pat_ok"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"name": "rafa", "auth": "optional"})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/whoami"))
+            .respond_with(
+                ResponseTemplate::new(401)
+                    .set_body_json(serde_json::json!({"error": "Token inválido."})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/deploys"))
+            .respond_with(
+                ResponseTemplate::new(423)
+                    .set_body_json(serde_json::json!({"error": "El servicio prod está bloqueado"})),
+            )
+            .mount(&server)
+            .await;
+        let ok = KeelApi::with_token(&server.uri(), Some("keel_pat_ok".into())).unwrap();
+        assert_eq!(
+            ok.whoami().await.unwrap().unwrap().name.as_deref(),
+            Some("rafa")
+        );
+        let bad = KeelApi::with_token(&server.uri(), Some("keel_pat_bad".into())).unwrap();
+        let error = bad.whoami().await.unwrap_err();
+        assert_eq!(crate::failure::report(&error).1, 29);
+        assert!(error.to_string().contains("Tokens de API"));
+        let error = ok
+            .create_deploy(&CreateDeploy {
+                repo: "a/b",
+                tag: "v1.0.0",
+                sha: "abcdef0",
+                service: "prod",
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(crate::failure::report(&error).1, 31);
+        assert_eq!(bearer("t"), "Bearer t");
+    }
+
+    #[tokio::test]
+    async fn old_servers_have_no_whoami_or_locks() {
+        let server = MockServer::start().await;
+        let api = KeelApi::new(&server.uri()).unwrap();
+        assert!(api.whoami().await.unwrap().is_none());
+        let error = api.lock("a/b", "prod", "x").await.unwrap_err();
+        assert!(error.to_string().contains("no soporta locks"));
     }
 
     #[tokio::test]

@@ -160,3 +160,12 @@ pub fn secret(message: &str) -> Result<String> {
         .interact()
         .map_err(|_| cancelled())
 }
+
+/// A secret typed without echo that may be left empty.
+pub fn secret_optional(message: &str) -> Result<String> {
+    dialoguer::Password::new()
+        .with_prompt(message)
+        .allow_empty_password(true)
+        .interact()
+        .map_err(|_| cancelled())
+}

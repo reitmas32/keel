@@ -20,13 +20,13 @@ pub fn confirm_in_terminal(plan: &Plan) -> Result<()> {
     if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
         return Err(fail(
             Kind::TerminalApprovalRequired,
-            "this instance requires terminal approval: a person must run `apply` from an interactive terminal (no TTY here)",
+            "esta instancia exige aprobación en terminal: una persona debe ejecutar `apply` desde una terminal interactiva (aquí no hay TTY)",
         ));
     }
     let mut stderr = std::io::stderr();
     writeln!(
         stderr,
-        "Plan {} on {}/{}",
+        "Plan {} en {}/{}",
         plan.id, plan.organization, plan.instance
     )?;
     writeln!(stderr, "  operation: {}", plan.action.operation_name())?;
@@ -35,14 +35,14 @@ pub fn confirm_in_terminal(plan: &Plan) -> Result<()> {
         "  changes:   {}",
         serde_json::to_string_pretty(&plan.action.safe_summary())?
     )?;
-    write!(stderr, "Type {} to apply it: ", short_id(plan))?;
+    write!(stderr, "Escribe {} para aplicarlo: ", short_id(plan))?;
     stderr.flush()?;
     let mut answer = String::new();
     std::io::stdin().lock().read_line(&mut answer)?;
     if !answer_matches(&answer, &short_id(plan)) {
         return Err(fail(
             Kind::ApprovalMismatch,
-            "approval not confirmed; nothing was changed",
+            "aprobación no confirmada; no se cambió nada",
         ));
     }
     Ok(())

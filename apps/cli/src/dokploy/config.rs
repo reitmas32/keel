@@ -131,7 +131,7 @@ impl InstanceConfig {
         match (&self.api_key_env, &self.api_key_file) {
             (Some(name), _) => secret_from_env(name),
             (None, Some(path)) => secret_from_file(path),
-            (None, None) => bail!("{} has no api_key_env or api_key_file", self.label()),
+            (None, None) => bail!("{} no tiene api_key_env ni api_key_file", self.label()),
         }
     }
 }
@@ -175,8 +175,8 @@ impl Config {
         let mut config: Self = if fs::symlink_metadata(path).is_ok() {
             assert_secure_config_file(path)?;
             let text = fs::read_to_string(path)
-                .with_context(|| format!("cannot read config {}", path.display()))?;
-            toml::from_str(&text).context("invalid TOML configuration")?
+                .with_context(|| format!("no se pudo leer la configuración {}", path.display()))?;
+            toml::from_str(&text).context("configuración TOML inválida")?
         } else {
             Self {
                 security: SecurityConfig::default(),
@@ -192,13 +192,13 @@ impl Config {
         if fs::symlink_metadata(&directory).is_ok() {
             let home = directories::BaseDirs::new()
                 .map(|b| b.home_dir().to_path_buf())
-                .context("cannot determine the home directory")?;
+                .context("no se pudo determinar la carpeta personal")?;
             config
                 .instances
                 .extend(crate::dokploy::envfile::load_dir(&directory, &home)?);
         } else if config.instances.is_empty() {
             bail!(
-                "no instances: create {} with one <organization>.env per Dokploy, or write {}",
+                "no hay instancias: crea {} con un <organización>.env por Dokploy, o escribe {}",
                 directory.display(),
                 path.display()
             );
@@ -209,24 +209,24 @@ impl Config {
 
     pub fn validate(&self) -> Result<()> {
         if self.instances.is_empty() {
-            bail!("configuration must contain at least one instance");
+            bail!("la configuración debe tener al menos una instancia");
         }
         if !(60..=3600).contains(&self.security.plan_ttl_seconds) {
-            bail!("security.plan_ttl_seconds must be between 60 and 3600");
+            bail!("security.plan_ttl_seconds debe estar entre 60 y 3600");
         }
         if !(1..=crate::dokploy::logs::DOKPLOY_TAIL_MAX).contains(&self.security.log_tail_max) {
             bail!(
-                "security.log_tail_max must be between 1 and {}",
+                "security.log_tail_max debe estar entre 1 y {}",
                 crate::dokploy::logs::DOKPLOY_TAIL_MAX
             );
         }
         for instance in &self.instances {
             if instance.organization.trim().is_empty() || instance.name.trim().is_empty() {
-                bail!("instance organization and name cannot be empty");
+                bail!("la organización y el nombre de la instancia no pueden estar vacíos");
             }
             if !matches!(instance.base_url.scheme(), "https" | "http") {
                 bail!(
-                    "{} / {} has unsupported URL scheme",
+                    "{} / {} tiene un esquema de URL no soportado",
                     instance.organization,
                     instance.name
                 );
@@ -234,7 +234,7 @@ impl Config {
             if instance.base_url.scheme() == "http" {
                 if !self.security.allow_http && !instance.allow_http {
                     bail!(
-                        "{} / {} uses HTTP; set allow_http (DOKPLOY_ALLOW_HTTP=true in its env file) only on a trusted private network",
+                        "{} / {} usa HTTP; activa allow_http (DOKPLOY_ALLOW_HTTP=true en su archivo env) solo en una red privada de confianza",
                         instance.organization,
                         instance.name
                     );
@@ -242,29 +242,29 @@ impl Config {
                 // The API key travels in a header: in clear text only inside a private network.
                 if !crate::dokploy::net::is_private_host(&instance.base_url) {
                     bail!(
-                        "{} / {} uses HTTP towards a non-private host; the API key would travel in clear text. Use HTTPS",
+                        "{} / {} usa HTTP hacia un host no privado; la API key viajaría en claro. Usa HTTPS",
                         instance.organization,
                         instance.name
                     );
                 }
             }
             if instance.base_url.host_str().is_none() {
-                bail!("instance URL must include a host");
+                bail!("la URL de la instancia debe incluir un host");
             }
             match (&instance.api_key_env, &instance.api_key_file) {
                 _ if instance.env_file.is_some() => {}
                 (Some(name), None) => validate_env_name(name)?,
                 (None, Some(path)) if path.is_absolute() => {}
-                (None, Some(_)) => bail!("{}: api_key_file must be absolute", instance.label()),
+                (None, Some(_)) => bail!("{}: api_key_file debe ser absoluta", instance.label()),
                 _ => bail!(
-                    "{}: set exactly one of api_key_env or api_key_file",
+                    "{}: define exactamente uno de api_key_env o api_key_file",
                     instance.label()
                 ),
             }
             for path in &instance.paths {
                 if !path.is_absolute() {
                     bail!(
-                        "{}: paths must be absolute ({})",
+                        "{}: paths debe ser absoluto ({})",
                         instance.label(),
                         path.display()
                     );
@@ -278,7 +278,7 @@ impl Config {
                     .find(|o| o.paths.contains(path))
                 {
                     bail!(
-                        "{} is mapped to both {} and {}",
+                        "{} está asignado a {} y a {}",
                         path.display(),
                         other.label(),
                         instance.label()
@@ -287,12 +287,14 @@ impl Config {
             }
         }
         if self.instances.iter().filter(|i| i.default).count() > 1 {
-            bail!("only one instance can set default = true");
+            bail!("solo una instancia puede tener default = true");
         }
         for procedure in &self.security.raw_post_allowlist {
             crate::dokploy::client::validate_procedure(procedure)?;
             if crate::dokploy::client::is_destructive(procedure) {
-                bail!("raw_post_allowlist cannot contain destructive procedure {procedure:?}");
+                bail!(
+                    "raw_post_allowlist no puede tener el procedimiento destructivo {procedure:?}"
+                );
             }
         }
         for (index, instance) in self.instances.iter().enumerate() {
@@ -300,24 +302,24 @@ impl Config {
                 other.organization == instance.organization && other.name == instance.name
             }) {
                 bail!(
-                    "{} is defined twice (TOML and an env file, or two env files)",
+                    "{} está definida dos veces (TOML y un archivo env, o dos archivos env)",
                     instance.label()
                 );
             }
         }
         if let Some(backup) = &self.compose_backup {
             if !backup.repository_path.is_absolute() {
-                bail!("compose_backup.repository_path must be absolute");
+                bail!("compose_backup.repository_path debe ser absoluta");
             }
             if backup.branch.trim().is_empty() {
-                bail!("compose_backup.branch cannot be empty");
+                bail!("compose_backup.branch no puede estar vacío");
             }
             if backup
                 .repository_url
                 .as_deref()
                 .is_some_and(|url| url.trim().is_empty() || url.contains(['\r', '\n']))
             {
-                bail!("compose_backup.repository_url must be a single non-empty line");
+                bail!("compose_backup.repository_url debe ser una sola línea no vacía");
             }
         }
         Ok(())
@@ -354,7 +356,7 @@ impl Config {
         if let Some(target) = env_target.filter(|t| !t.trim().is_empty()) {
             let (organization, name) = target
                 .split_once('/')
-                .ok_or_else(|| fail(Kind::Config, "KEEL_TARGET must be organization/instance"))?;
+                .ok_or_else(|| fail(Kind::Config, "KEEL_TARGET debe ser organización/instancia"))?;
             return selection(self.instance(organization, name)?, SelectedBy::Environment);
         }
         if let Some(cwd) = cwd {
@@ -383,7 +385,7 @@ impl Config {
                     return Err(fail_with(
                         Kind::TargetAmbiguous,
                         format!(
-                            "{} is inside paths of several instances ({}); pass --target org/instance",
+                            "{} está en paths de varias instancias ({}); usa --target org/instancia",
                             cwd.display(),
                             labels.join(", ")
                         ),
@@ -402,7 +404,7 @@ impl Config {
             [only] if !mapped => selection(only, SelectedBy::OnlyInstance),
             _ => Err(fail_with(
                 Kind::TargetUnmapped,
-                "no instance matches this directory: pass --target org/instance, set KEEL_TARGET, add the directory to an instance's paths, or mark one default = true",
+                "ninguna instancia corresponde a esta carpeta: usa --target org/instancia, define KEEL_TARGET, agrega la carpeta a los paths de una instancia o marca una con default = true",
                 serde_json::json!({
                     "directory": cwd,
                     "instances": self.instances.iter().map(|i| serde_json::json!({"target": i.label(), "paths": i.paths})).collect::<Vec<_>>()
@@ -428,7 +430,7 @@ impl Config {
             .ok_or_else(|| {
                 fail_with(
                     Kind::TargetUnknown,
-                    format!("no instance configured for {organization}/{name}"),
+                    format!("no hay ninguna instancia configurada para {organization}/{name}"),
                     serde_json::json!({"instances": self.instances.iter().map(InstanceConfig::label).collect::<Vec<_>>()}),
                 )
             })
@@ -436,16 +438,22 @@ impl Config {
 }
 
 fn assert_secure_config_file(path: &Path) -> Result<()> {
-    let metadata = fs::symlink_metadata(path)
-        .with_context(|| format!("cannot inspect config {}", path.display()))?;
+    let metadata = fs::symlink_metadata(path).with_context(|| {
+        format!(
+            "no se pudo inspeccionar la configuración {}",
+            path.display()
+        )
+    })?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
-        bail!("configuration must be a regular file, not a symbolic link");
+        bail!("la configuración debe ser un archivo normal, no un enlace simbólico");
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         if metadata.permissions().mode() & 0o022 != 0 {
-            bail!("configuration is group/world writable; set permissions to 0600 or 0644");
+            bail!(
+                "la configuración la pueden escribir otros usuarios; cambia sus permisos a 0600 o 0644"
+            );
         }
     }
     Ok(())
@@ -459,10 +467,10 @@ fn canonical(path: &Path) -> PathBuf {
 /// Reads an API key from an owner-only regular file.
 pub fn secret_from_file(path: &Path) -> Result<String> {
     let metadata = fs::symlink_metadata(path)
-        .with_context(|| format!("cannot read API key file {}", path.display()))?;
+        .with_context(|| format!("no se pudo leer el archivo de API key {}", path.display()))?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         bail!(
-            "API key file {} must be a regular file, not a symbolic link",
+            "el archivo de API key {} debe ser un archivo normal, no un enlace simbólico",
             path.display()
         );
     }
@@ -471,26 +479,26 @@ pub fn secret_from_file(path: &Path) -> Result<String> {
         use std::os::unix::fs::PermissionsExt;
         if metadata.permissions().mode() & 0o077 != 0 {
             bail!(
-                "API key file {} must be owner-only (chmod 600)",
+                "el archivo de API key {} debe ser solo del dueño (chmod 600)",
                 path.display()
             );
         }
     }
     let value = fs::read_to_string(path)
-        .with_context(|| format!("cannot read API key file {}", path.display()))?;
+        .with_context(|| format!("no se pudo leer el archivo de API key {}", path.display()))?;
     let value = value.trim();
     if value.is_empty() {
-        bail!("API key file {} is empty", path.display());
+        bail!("el archivo de API key {} está vacío", path.display());
     }
     Ok(value.to_owned())
 }
 
 pub fn secret_from_env(name: &str) -> Result<String> {
     validate_env_name(name)?;
-    let value = env::var(name)
-        .with_context(|| format!("required secret environment variable {name} is not set"))?;
+    let value =
+        env::var(name).with_context(|| format!("falta la variable de entorno secreta {name}"))?;
     if value.trim().is_empty() {
-        bail!("secret environment variable {name} is empty");
+        bail!("la variable de entorno secreta {name} está vacía");
     }
     Ok(value)
 }
@@ -503,7 +511,7 @@ pub fn validate_env_name(name: &str) -> Result<()> {
             .all(|(i, ch)| ch == b'_' || ch.is_ascii_uppercase() || (i > 0 && ch.is_ascii_digit()))
     {
         bail!(
-            "environment variable references must use uppercase letters, digits, and underscores"
+            "las referencias a variables de entorno solo pueden usar mayúsculas, dígitos y guiones bajos"
         );
     }
     Ok(())

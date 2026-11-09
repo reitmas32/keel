@@ -333,6 +333,9 @@ pub fn render_deploy_detail(d: &DeployDetail, options: &ViewOptions) -> String {
                 .apply(c, &format!("{} {}", style.icon, style.label)),
         ),
     ];
+    if let Some(who) = &deploy.requested_by {
+        fields.push(("Pedido por", who.clone()));
+    }
     if let Some(error) = &deploy.error {
         fields.push(("Error", error.clone()));
     }
@@ -494,6 +497,16 @@ fn last_deploy_cell(s: &ServiceSummary, options: &ViewOptions) -> String {
     format!("{} {} {} · {when}", style.icon, last.tag, style.label)
 }
 
+/// `bloqueado por <quién> <cuándo>: <motivo>`.
+pub fn lock_text(lock: &crate::keel::api::Lock, options: &ViewOptions) -> String {
+    format!(
+        "bloqueado por {} {}: {}",
+        lock.locked_by.as_deref().unwrap_or("alguien"),
+        format_when(&lock.created_at, options, false),
+        lock.reason
+    )
+}
+
 pub fn render_scopes(
     header: &Header,
     services: &[ServiceSummary],
@@ -568,6 +581,12 @@ pub fn render_scopes(
                 "{INDENT}{}{}",
                 " ".repeat(offset),
                 c.dim(&format!("└ {error}"))
+            ));
+        }
+        if let Some(lock) = &service.lock {
+            lines.push(format!(
+                "{INDENT}{}",
+                c.yellow(&format!("└ 🔒 {}", lock_text(lock, options)))
             ));
         }
     }
@@ -838,6 +857,7 @@ mod tests {
             ci_passed_at: None,
             deploy_started_at: None,
             finished_at: None,
+            requested_by: None,
         }
     }
 

@@ -24,6 +24,9 @@ pub struct OrgConfig {
     pub org: String,
     #[serde(rename = "apiUrl")]
     pub api_url: String,
+    /// Personal API token (`keel_pat_…`) from the admin's «Tokens de API».
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
 }
 
 impl OrgConfig {
@@ -81,10 +84,17 @@ pub fn save_org(home: &Path, config: &OrgConfig) -> Result<()> {
     }
     let dir = org_dir(home, &config.org);
     fs::create_dir_all(&dir).with_context(|| format!("no se pudo crear {}", dir.display()))?;
+    let path = dir.join(CONFIG_FILE);
     fs::write(
-        dir.join(CONFIG_FILE),
+        &path,
         format!("{}\n", serde_json::to_string_pretty(config)?),
     )?;
+    // It may hold a personal token: only the owner reads it.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+    }
     Ok(())
 }
 
@@ -183,6 +193,7 @@ mod tests {
         let config = OrgConfig {
             org: "github.com:konectus-io".into(),
             api_url: "https://keel.example.com/api".into(),
+            token: None,
         };
         save_org(home.path(), &config).unwrap();
         save_org(
@@ -190,6 +201,7 @@ mod tests {
             &OrgConfig {
                 org: "github.com:acme".into(),
                 api_url: "https://keel.acme.dev/api".into(),
+                token: Some("keel_pat_x".into()),
             },
         )
         .unwrap();

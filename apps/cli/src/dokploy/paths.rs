@@ -15,9 +15,9 @@ use std::path::{Path, PathBuf};
 // command that flattens this struct.)
 #[derive(Args, Clone, Default, Debug)]
 pub struct Target {
-    /// Dokploy instance as `organization/instance` (`organization` alone means
-    /// organization/production). Default: $KEEL_TARGET, then the instance whose
-    /// paths contain this directory, then the default one.
+    /// Instancia de Dokploy como `organización/instancia` (solo `organización` es
+    /// organización/production). Por defecto: $KEEL_TARGET, luego la instancia cuyas
+    /// rutas contienen esta carpeta y luego la predeterminada.
     #[arg(long, value_name = "ORG/INSTANCIA")]
     pub target: Option<String>,
 }
@@ -50,7 +50,7 @@ pub fn keel_home() -> Result<PathBuf> {
         return Ok(PathBuf::from(home));
     }
     Ok(BaseDirs::new()
-        .context("cannot determine the home directory; set KEEL_HOME")?
+        .context("no se pudo determinar la carpeta personal; define KEEL_HOME")?
         .home_dir()
         .join(".keel"))
 }
@@ -137,7 +137,7 @@ pub fn load_config(argument: Option<PathBuf>) -> Result<Config> {
 pub fn state_dir(argument: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(path) = argument {
         if !path.is_absolute() {
-            bail!("--state-dir must be absolute");
+            bail!("--state-dir debe ser absoluta");
         }
         return Ok(path);
     }
@@ -152,12 +152,12 @@ pub fn state_dir(argument: Option<PathBuf>) -> Result<PathBuf> {
 
 pub fn keel_state_dir() -> Result<PathBuf> {
     let directories = ProjectDirs::from("dev", "keel", "keel")
-        .context("cannot determine platform state directory")?;
+        .context("no se pudo determinar el directorio de estado de la plataforma")?;
     directories
         .state_dir()
         .or_else(|| Some(directories.data_local_dir()))
         .map(Path::to_path_buf)
-        .context("platform has no writable state directory; provide --state-dir")
+        .context("la plataforma no tiene un directorio de estado escribible; usa --state-dir")
 }
 
 #[cfg(test)]

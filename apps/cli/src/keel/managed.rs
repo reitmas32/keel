@@ -58,7 +58,7 @@ pub async fn lookup(cwd: &Path, dokploy_id: &str) -> Result<Managed> {
         Ok(found) => found,
         Err(reason) => return Ok(Managed::Unknown(reason)),
     };
-    let api = KeelApi::new(&org.api_url)?;
+    let api = KeelApi::for_org(&org)?;
     let scopes = api.list_service_summaries(&repo).await?;
     if scopes.iter().all(|s| s.dokploy_id.is_none()) && !scopes.is_empty() {
         return Ok(Managed::Unknown(

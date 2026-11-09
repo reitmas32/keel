@@ -32,11 +32,11 @@ const SEARCH_MAX_LEN: usize = 500;
 /// `--tail`: at least one line and at most `max` (`security.log_tail_max`).
 pub fn validate_tail(tail: u32, max: u32) -> Result<()> {
     if tail == 0 {
-        bail!("--tail must be at least 1");
+        bail!("--tail debe ser al menos 1");
     }
     if tail > max {
         bail!(
-            "--tail {tail} is above the limit of {max} lines; narrow it with --since or --search, or raise security.log_tail_max (at most {DOKPLOY_TAIL_MAX})"
+            "--tail {tail} supera el límite de {max} líneas; acótalo con --since o --search, o sube security.log_tail_max (como máximo {DOKPLOY_TAIL_MAX})"
         );
     }
     Ok(())
@@ -52,7 +52,7 @@ pub fn docker_since(since: &str) -> Result<String> {
     }
     let invalid = || {
         anyhow::anyhow!(
-            "--since must be `all` or a duration such as 30s, 10m, 1h or 2d, got {since:?}"
+            "--since debe ser `all` o una duración como 30s, 10m, 1h o 2d, no {since:?}"
         )
     };
     let unit = since
@@ -77,13 +77,13 @@ pub fn docker_since(since: &str) -> Result<String> {
 /// works except control characters.
 pub fn validate_search(search: &str) -> Result<()> {
     if search.is_empty() {
-        bail!("--search cannot be empty");
+        bail!("--search no puede estar vacío");
     }
     if search.chars().count() > SEARCH_MAX_LEN {
-        bail!("--search is longer than {SEARCH_MAX_LEN} characters");
+        bail!("--search tiene más de {SEARCH_MAX_LEN} caracteres");
     }
     if search.chars().any(char::is_control) {
-        bail!("--search cannot contain control characters");
+        bail!("--search no puede tener caracteres de control");
     }
     Ok(())
 }
@@ -158,13 +158,15 @@ pub fn pick_container<'a>(
             [only] => Ok(only),
             [] => Err(fail_with(
                 Kind::ServiceNotFound,
-                format!("{label} has no containers; check that it is deployed (`get service`)"),
+                format!(
+                    "{label} no tiene contenedores; revisa que esté desplegado (`get service`)"
+                ),
                 details(),
             )),
             _ => Err(fail_with(
                 Kind::ServiceAmbiguous,
                 format!(
-                    "{label} runs {} containers: pass --container with one of details.candidates",
+                    "{label} corre {} contenedores: usa --container con uno de details.candidates",
                     containers.len()
                 ),
                 details(),
@@ -189,13 +191,15 @@ pub fn pick_container<'a>(
         ([only], _) | (_, [only]) => Ok(*only),
         ([], _) => Err(fail_with(
             Kind::ServiceNotFound,
-            format!("no container of {label} matches {wanted:?}; see details.candidates"),
+            format!(
+                "ningún contenedor de {label} coincide con {wanted:?}; mira details.candidates"
+            ),
             details(),
         )),
         _ => Err(fail_with(
             Kind::ServiceAmbiguous,
             format!(
-                "{wanted:?} matches {} containers of {label}: pass one container name",
+                "{wanted:?} coincide con {} contenedores de {label}: indica un solo nombre de contenedor",
                 matches.len()
             ),
             json!({"candidates": matches.iter().map(|c| &c.name).collect::<Vec<_>>()}),

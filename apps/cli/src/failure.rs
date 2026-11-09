@@ -54,6 +54,12 @@ pub enum Kind {
     CiFailed,
     /// A person answered no to a confirmation.
     Cancelled,
+    /// keel rejected the personal token, or requires one.
+    Unauthorized,
+    /// The keel scope is locked: deploys are refused until `keel unlock`.
+    Locked,
+    /// A required value is missing and there is no terminal to ask for it.
+    MissingInput,
 }
 
 impl Kind {
@@ -76,7 +82,10 @@ impl Kind {
             Self::KeelUnreachable => 26,
             Self::GitState => 27,
             Self::CiFailed => 28,
+            Self::Unauthorized => 29,
             Self::Cancelled => 30,
+            Self::Locked => 31,
+            Self::MissingInput => 32,
         }
     }
 }

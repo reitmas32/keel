@@ -138,7 +138,7 @@ pub fn validate_env_key(key: &str) -> Result<()> {
         && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
     if !valid {
         bail!(
-            "{key:?} is not a valid variable name (letters, digits and _; not starting with a digit)"
+            "{key:?} no es un nombre de variable válido (letras, dígitos y _; sin empezar por dígito)"
         );
     }
     Ok(())
@@ -156,11 +156,11 @@ pub fn patch_env(
         if env_value(current, key).is_none() {
             return Err(fail(
                 Kind::Refused,
-                format!("--unset {key}: the env has no {key}"),
+                format!("--unset {key}: el env no tiene {key}"),
             ));
         }
         if set.iter().any(|(k, _)| k == key) {
-            bail!("{key} is both --set and --unset");
+            bail!("{key} está en --set y en --unset");
         }
     }
     let mut pending: BTreeMap<&str, &str> =
@@ -257,14 +257,16 @@ pub fn read_set_value(key: &str, only_one: bool) -> Result<(String, &'static str
         return Err(fail(
             Kind::Refused,
             format!(
-                "no value for {key}: export {variable} before running the plan (stdin only carries the value of a single --set)"
+                "no hay valor para {key}: exporta {variable} antes de ejecutar el plan (stdin solo sirve para un único --set)"
             ),
         ));
     };
     if value.is_empty() {
         return Err(fail(
             Kind::Refused,
-            format!("the value for {key} ({source}) is empty; to remove the key use --unset {key}"),
+            format!(
+                "el valor de {key} ({source}) está vacío; para quitar la variable usa --unset {key}"
+            ),
         ));
     }
     Ok((value, source))
@@ -274,14 +276,14 @@ pub fn read_set_value(key: &str, only_one: bool) -> Result<(String, &'static str
 pub fn read_set_from_file(spec: &str) -> Result<(String, String)> {
     let (key, path) = spec
         .split_once('=')
-        .context("--set-from-file takes KEY=/absolute/path")?;
+        .context("--set-from-file recibe CLAVE=/ruta/absoluta")?;
     validate_env_key(key)?;
     let path = Path::new(path);
     if !path.is_absolute() {
-        bail!("--set-from-file {key}: the path must be absolute");
+        bail!("--set-from-file {key}: la ruta debe ser absoluta");
     }
     let content =
-        fs::read_to_string(path).with_context(|| format!("cannot read {}", path.display()))?;
+        fs::read_to_string(path).with_context(|| format!("no se pudo leer {}", path.display()))?;
     Ok((key.to_owned(), content.trim_end_matches('\n').to_owned()))
 }
 
@@ -354,7 +356,7 @@ pub fn env_backups_view(state: &Path, label: Option<&str>) -> Result<Value> {
         .collect();
     Ok(
         json!({"backups_dir": state.join("backups"), "backups": rows,
-        "next_step": "restore one with `keel plan env-restore <service> --backup <backup>`"}),
+        "next_step": "restaura uno con `keel plan env-restore <servicio> --backup <backup>`"}),
     )
 }
 
@@ -368,11 +370,13 @@ pub fn read_env_backup(state: &Path, label: &str, timestamp: &str) -> Result<(St
         [one] => Ok((one.timestamp.clone(), fs::read_to_string(&one.path)?)),
         [] => Err(fail(
             Kind::ServiceNotFound,
-            format!("{label} has no env backup {timestamp}; see `keel get env-backups {label}`"),
+            format!(
+                "{label} no tiene el backup de env {timestamp}; mira `keel get env-backups {label}`"
+            ),
         )),
         many => Err(crate::failure::fail_with(
             Kind::ServiceAmbiguous,
-            format!("{timestamp} matches {} backups of {label}", many.len()),
+            format!("{timestamp} coincide con {} backups de {label}", many.len()),
             json!({"candidates": many.iter().map(|b| &b.timestamp).collect::<Vec<_>>()}),
         )),
     }
@@ -385,10 +389,10 @@ pub fn read_env_backup(state: &Path, label: &str, timestamp: &str) -> Result<(St
 /// `[REDACTED]`; the structure (images, ports, volumes, labels) stays.
 pub fn sanitize_compose(content: &str) -> String {
     let Ok(yaml) = serde_yaml::from_str::<serde_yaml::Value>(content) else {
-        return "[REDACTED: Compose could not be safely parsed]\n".into();
+        return "[REDACTED: no se pudo leer el Compose de forma segura]\n".into();
     };
     let Ok(mut json) = serde_json::to_value(&yaml) else {
-        return "[REDACTED: Compose could not be safely parsed]\n".into();
+        return "[REDACTED: no se pudo leer el Compose de forma segura]\n".into();
     };
     if let Some(services) = json.get_mut("services").and_then(Value::as_object_mut) {
         for service in services.values_mut() {
@@ -549,7 +553,7 @@ pub fn prune_plans(state: &Path, all: bool) -> Result<Value> {
         }
     }
     Ok(json!({"ok": true, "removed": removed, "pending_kept": kept,
-        "note": "backups and audit.jsonl are never touched"}))
+        "note": "los backups y audit.jsonl nunca se tocan"}))
 }
 
 // ------------------------------------------------------------- follow logs
@@ -689,5 +693,106 @@ mod tests {
                 .0,
             "20261105T104811.090Z"
         );
+    }
+}
+
+// ------------------------------------------------------------------ env diff
+
+/// Which env keys two services share, and whether their values match.
+/// Values are only hashed in memory: none is returned.
+pub fn env_diff(a: &str, b: &str) -> Value {
+    use sha2::{Digest, Sha256};
+    let hashes = |env: &str| -> BTreeMap<String, Vec<u8>> {
+        redact::env_pairs(env)
+            .map(|(k, v)| (k.to_owned(), Sha256::digest(v.as_bytes()).to_vec()))
+            .collect()
+    };
+    let (a, b) = (hashes(a), hashes(b));
+    let only_a: Vec<&String> = a.keys().filter(|k| !b.contains_key(*k)).collect();
+    let only_b: Vec<&String> = b.keys().filter(|k| !a.contains_key(*k)).collect();
+    let shared = a.iter().filter(|(k, _)| b.contains_key(*k));
+    let (same, different): (Vec<_>, Vec<_>) = shared.partition(|(k, v)| b[*k] == **v);
+    let same: Vec<&String> = same.into_iter().map(|(k, _)| k).collect();
+    let different: Vec<&String> = different.into_iter().map(|(k, _)| k).collect();
+    serde_json::json!({
+        "only_in_a": only_a, "only_in_b": only_b,
+        "different_value": different, "same_value": same,
+    })
+}
+
+/// `keel env diff`: compares two services' env keys, never their values.
+pub async fn env_diff_command(
+    config: &crate::dokploy::config::Config,
+    target: &crate::dokploy::paths::Target,
+    a: &str,
+    b: &str,
+    json_output: bool,
+) -> Result<()> {
+    let instance = target.resolve(config)?;
+    let client = crate::dokploy::client::DokployClient::new(instance)?;
+    let mut envs = Vec::new();
+    for query in [a, b] {
+        let (service, detail) = crate::dokploy::commands::resolve_detail(&client, query).await?;
+        if !service.kind.has_environment() {
+            return Err(fail(
+                Kind::Refused,
+                format!(
+                    "{} es un {}: Dokploy no guarda un bloque de env para él",
+                    service.label(),
+                    service.kind.label()
+                ),
+            ));
+        }
+        let env = detail
+            .get("env")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        envs.push((service.label(), env));
+    }
+    let diff = env_diff(&envs[0].1, &envs[1].1);
+    let data = serde_json::json!({"a": envs[0].0, "b": envs[1].0, "diff": diff,
+        "values": "nunca se muestran; solo se comparan sus hashes en memoria"});
+    if json_output || !std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+        return crate::dokploy::print_json(&crate::dokploy::commands::envelope(instance, data));
+    }
+    let c = crate::ui::stdout_colors();
+    println!("{}  A = {}\n   B = {}\n", c.cyan("◇"), envs[0].0, envs[1].0);
+    let section = |title: &str, keys: &Value, paint: &dyn Fn(&str) -> String| {
+        let keys: Vec<&str> = keys
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        if !keys.is_empty() {
+            println!("  {} ({})", title, keys.len());
+            for key in keys {
+                println!("    {}", paint(key));
+            }
+        }
+    };
+    section("Solo en A", &diff["only_in_a"], &|k| c.red(k));
+    section("Solo en B", &diff["only_in_b"], &|k| c.green(k));
+    section("Valor distinto", &diff["different_value"], &|k| c.yellow(k));
+    section("Mismo valor", &diff["same_value"], &|k| c.dim(k));
+    Ok(())
+}
+
+#[cfg(test)]
+mod env_diff_tests {
+    use super::*;
+
+    #[test]
+    fn compares_keys_without_values() {
+        let a = "A=1\nB=2\nC=3\n# X=9\n";
+        let b = "B=2\nC=4\nD=5\n";
+        let diff = env_diff(a, b);
+        assert_eq!(diff["only_in_a"], serde_json::json!(["A"]));
+        assert_eq!(diff["only_in_b"], serde_json::json!(["D"]));
+        assert_eq!(diff["different_value"], serde_json::json!(["C"]));
+        assert_eq!(diff["same_value"], serde_json::json!(["B"]));
+        let text = diff.to_string();
+        assert!(!text.contains('4') && !text.contains('5'));
     }
 }

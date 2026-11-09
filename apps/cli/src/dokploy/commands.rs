@@ -33,163 +33,163 @@ macro_rules! refuse {
 
 #[derive(Subcommand)]
 pub enum GetCommand {
-    /// Env backups saved before each env-set, env-patch or env-restore (local, no values).
+    /// Backups de env guardados antes de cada env-set, env-patch o env-restore (locales, sin valores).
     EnvBackups {
-        /// Only the backups of this service (as `get service` names it).
+        /// Solo los backups de este servicio (como lo nombra `get service`).
         service: Option<String>,
     },
-    /// Volumes, bind mounts and file mounts of a service.
+    /// Volúmenes, bind mounts y file mounts de un servicio.
     Mounts {
         #[command(flatten)]
         target: Target,
-        /// Service: `name`, `environment/name` or `project/environment/name`.
+        /// Servicio: `nombre`, `entorno/nombre` o `proyecto/entorno/nombre`.
         query: String,
     },
-    /// Backup destinations (S3 and compatible), without credentials.
+    /// Destinos de backup (S3 y compatibles), sin credenciales.
     Destinations(Target),
-    /// Scheduled backups of a database.
+    /// Backups programados de una base de datos.
     Backups {
         #[command(flatten)]
         target: Target,
-        /// Service: `name`, `environment/name` or `project/environment/name`.
+        /// Servicio: `nombre`, `entorno/nombre` o `proyecto/entorno/nombre`.
         query: String,
     },
-    /// Projects with their number of services.
+    /// Proyectos con su número de servicios.
     Projects(Target),
-    /// Servers registered in the panel.
+    /// Servidores registrados en el panel.
     Servers(Target),
-    /// Detail of one server.
+    /// Detalle de un servidor.
     Server {
         #[command(flatten)]
         target: Target,
-        /// Server id (see get servers).
+        /// Id del servidor (ver get servers).
         #[arg(long)]
         id: String,
     },
-    /// Services running on one server.
+    /// Servicios que corren en un servidor.
     ServerServices {
         #[command(flatten)]
         target: Target,
-        /// Server id (see get servers).
+        /// Id del servidor (ver get servers).
         #[arg(long)]
         id: String,
     },
-    /// Every service (apps, composes, databases) with its environment and status.
+    /// Todos los servicios (apps, composes, bases de datos) con su entorno y estado.
     Services {
         #[command(flatten)]
         target: Target,
-        /// Only services whose project, environment, name or kind contain this text.
+        /// Solo los servicios cuyo proyecto, entorno, nombre o tipo contengan este texto.
         filter: Option<String>,
     },
-    /// Detail of one service: `name`, `environment/name` or `project/environment/name`.
+    /// Detalle de un servicio: `nombre`, `entorno/nombre` o `proyecto/entorno/nombre`.
     Service {
         #[command(flatten)]
         target: Target,
-        /// Service: `name`, `environment/name` or `project/environment/name`.
+        /// Servicio: `nombre`, `entorno/nombre` o `proyecto/entorno/nombre`.
         query: String,
-        /// The full redacted API response instead of the summary.
+        /// La respuesta completa de la API, redactada, en lugar del resumen.
         #[arg(long)]
         raw: bool,
     },
-    /// The env keys of a service. Values never reach stdout.
+    /// Las variables de entorno de un servicio. Los valores nunca salen por stdout.
     Env {
         #[command(flatten)]
         target: Target,
-        /// Service: `name`, `environment/name` or `project/environment/name`.
+        /// Servicio: `nombre`, `entorno/nombre` o `proyecto/entorno/nombre`.
         query: String,
-        /// Save the real env block to a new owner-only file (absolute path that must not exist).
+        /// Guarda el bloque de env real en un archivo nuevo solo para ti (ruta absoluta que no exista).
         #[arg(long)]
         write_to: Option<PathBuf>,
     },
-    /// A Compose: its settings and, on request, a sanitized view or the real file.
+    /// Un Compose: su configuración y, si se pide, una vista saneada o el archivo real.
     Compose {
         #[command(flatten)]
         target: Target,
-        /// Compose id. Use --service to find it by name instead.
+        /// Id del Compose. Con --service se busca por nombre.
         #[arg(long, required_unless_present = "service", conflicts_with = "service")]
         id: Option<String>,
-        /// Compose name: `name`, `environment/name` or `project/environment/name`.
+        /// Nombre del Compose: `nombre`, `entorno/nombre` o `proyecto/entorno/nombre`.
         #[arg(long)]
         service: Option<String>,
-        /// Include a sanitized Compose definition; environment and secret blocks are removed.
+        /// Incluye la definición del Compose saneada, sin bloques de environment ni secretos.
         #[arg(long)]
         show_compose: bool,
-        /// Save the original Compose, including any secrets, to a new owner-only file.
-        /// The path must be absolute and must not already exist.
+        /// Guarda el Compose original, con sus secretos, en un archivo nuevo solo para ti.
+        /// La ruta debe ser absoluta y no existir.
         #[arg(long)]
         write_to: Option<PathBuf>,
     },
-    /// Domains in Dokploy's registry (routing defined in Traefik labels is not listed here).
+    /// Dominios registrados en Dokploy (las rutas definidas con labels de Traefik no salen aquí).
     Domains {
         #[command(flatten)]
         target: Target,
-        /// Service: `name`, `environment/name` or `project/environment/name`.
+        /// Servicio: `nombre`, `entorno/nombre` o `proyecto/entorno/nombre`.
         query: String,
     },
-    /// Latest deployments of an application or Compose.
+    /// Últimos deployments de una aplicación o Compose.
     Deployments {
         #[command(flatten)]
         target: Target,
-        /// Service: `name`, `environment/name` or `project/environment/name`.
+        /// Servicio: `nombre`, `entorno/nombre` o `proyecto/entorno/nombre`.
         query: String,
         #[arg(long, default_value_t = 15)]
         limit: usize,
     },
-    /// The last lines a service's containers printed, with secrets redacted.
+    /// Las últimas líneas de los contenedores de un servicio, con los secretos redactados.
     Logs {
         #[command(flatten)]
         target: Target,
-        /// `name`, `environment/name` or `project/environment/name`.
+        /// `nombre`, `entorno/nombre` o `proyecto/entorno/nombre`.
         query: String,
-        /// Compose service (`web`), container name or id. Needed when a Compose
-        /// runs several containers.
+        /// Servicio del Compose (`web`), nombre o id del contenedor. Necesario cuando
+        /// un Compose corre varios contenedores.
         #[arg(long)]
         container: Option<String>,
-        /// Keep printing new lines until Ctrl-C (polls every few seconds).
+        /// Sigue mostrando líneas nuevas hasta Ctrl-C (consulta cada pocos segundos).
         #[arg(short = 'f', long)]
         follow: bool,
-        /// Lines to read, before --search (at most security.log_tail_max).
+        /// Líneas a leer, antes de --search (como máximo security.log_tail_max).
         #[arg(long, default_value_t = 200)]
         tail: u32,
-        /// `all` or a duration: 30s, 10m, 1h, 2d.
+        /// `all` o una duración: 30s, 10m, 1h, 2d.
         #[arg(long, default_value = "all")]
         since: String,
-        /// Only lines containing this text, ignoring case. Matched here, after
-        /// redaction; Dokploy never receives it.
+        /// Solo líneas con este texto, sin distinguir mayúsculas. Se filtra aquí,
+        /// después de redactar; Dokploy nunca lo recibe.
         #[arg(long)]
         search: Option<String>,
     },
-    /// The build and deploy log of an application or Compose, with secrets redacted.
+    /// El log de build y deploy de una aplicación o Compose, con los secretos redactados.
     DeployLog {
         #[command(flatten)]
         target: Target,
-        /// Service: `name`, `environment/name` or `project/environment/name`.
+        /// Servicio: `nombre`, `entorno/nombre` o `proyecto/entorno/nombre`.
         query: String,
-        /// Deployment id (see `get deployments`); the latest when omitted.
+        /// Id del deployment (ver `get deployments`); el último si se omite.
         #[arg(long)]
         deployment: Option<String>,
-        /// Last lines to read, before --search (at most security.log_tail_max).
+        /// Últimas líneas a leer, antes de --search (como máximo security.log_tail_max).
         #[arg(long, default_value_t = 200)]
         tail: u32,
-        /// Only lines containing this text, ignoring case, matched after redaction.
+        /// Solo líneas con este texto, sin distinguir mayúsculas, después de redactar.
         #[arg(long)]
         search: Option<String>,
     },
-    /// Docker containers the panel sees.
+    /// Contenedores Docker que ve el panel.
     Containers {
         #[command(flatten)]
         target: Target,
-        /// Server id; the panel's own host when omitted.
+        /// Id del servidor; el host del panel si se omite.
         #[arg(long)]
         server_id: Option<String>,
     },
-    /// Any read procedure, redacted: `get raw project.one --param projectId=…`.
+    /// Cualquier procedimiento de lectura, redactado: `get raw project.one --param projectId=…`.
     Raw {
         #[command(flatten)]
         target: Target,
-        /// Read procedure, e.g. project.one (router.procedure).
+        /// Procedimiento, p. ej. project.one (router.procedure).
         procedure: String,
-        /// Query parameter as key=value; repeatable.
+        /// Parámetro de la consulta como clave=valor; repetible.
         #[arg(long = "param")]
         params: Vec<String>,
     },
@@ -197,69 +197,69 @@ pub enum GetCommand {
 
 #[derive(Subcommand)]
 pub enum PlanCommand {
-    /// Plans waiting to be applied, with their target and expiry.
+    /// Planes pendientes de aplicar, con su destino y caducidad.
     List,
-    /// Remove expired plans (with --all, pending ones too) from the state dir.
+    /// Borra los planes caducados (con --all, también los pendientes) del directorio de estado.
     Prune {
         #[arg(long)]
         all: bool,
-        /// Skip the confirmation --all asks for.
+        /// Omite la confirmación que pide --all.
         #[arg(short = 'y', long)]
         yes: bool,
     },
-    /// Change only some variables of a service's env.
+    /// Cambia solo algunas variables del env de un servicio.
     EnvPatch(EnvPatchArgs),
-    /// Put back an env saved before an earlier change (see get env-backups).
+    /// Restaura un env guardado antes de un cambio anterior (ver get env-backups).
     EnvRestore(EnvRestoreArgs),
-    /// Add a volume, bind mount or file mount to a service.
+    /// Agrega un volumen, bind mount o file mount a un servicio.
     MountCreate(MountCreateArgs),
-    /// One pending plan again: its summary, target and approval token.
+    /// Muestra de nuevo un plan pendiente: resumen, destino y token de aprobación.
     Show {
-        /// Plan id (from plan, plan list or plan show).
+        /// Id del plan (de plan, plan list o plan show).
         plan: String,
     },
-    /// Replace a Compose file (refused if the remote one changed since the plan).
+    /// Reemplaza el archivo de un Compose (se rechaza si el remoto cambió desde el plan).
     ComposeUpdate(ComposeUpdateArgs),
-    /// Create a Postgres database; deploy it afterwards with plan deploy.
+    /// Crea una base de datos Postgres; despliégala después con plan deploy.
     PostgresCreate(PostgresCreateArgs),
-    /// Create a Mongo database; deploy it afterwards with plan deploy.
+    /// Crea una base de datos Mongo; despliégala después con plan deploy.
     MongoCreate(MongoCreateArgs),
-    /// Add a scheduled backup to a Postgres, MySQL, MariaDB or Mongo service.
+    /// Agrega un backup programado a un servicio Postgres, MySQL, MariaDB o Mongo.
     BackupCreate(BackupCreateArgs),
-    /// Deploy a service.
+    /// Despliega un servicio.
     Deploy(ServiceArgs),
-    /// Redeploy an application or Compose.
+    /// Redespliega una aplicación o Compose.
     Redeploy(ServiceArgs),
-    /// Start a stopped service.
+    /// Arranca un servicio detenido.
     Start(ServiceArgs),
-    /// Stop a service.
+    /// Detiene un servicio.
     Stop(ServiceArgs),
-    /// Replace ALL env variables of a service with the content of a file.
+    /// Reemplaza TODAS las variables de entorno de un servicio con el contenido de un archivo.
     EnvSet(EnvSetArgs),
-    /// Create a raw Compose from a file.
+    /// Crea un Compose raw a partir de un archivo.
     ComposeCreate(ComposeCreateArgs),
-    /// Change a Compose's source type, name or description.
+    /// Cambia el tipo de origen, nombre o descripción de un Compose.
     ComposeSettings(ComposeSettingsArgs),
-    /// POST to a procedure listed in security.raw_post_allowlist.
+    /// POST a un procedimiento de security.raw_post_allowlist.
     RawPost(RawPostArgs),
 }
 #[derive(Args)]
 pub struct ComposeUpdateArgs {
     #[command(flatten)]
     target: Target,
-    /// Compose id; or use --service to find it by name.
+    /// Id del Compose; o --service para buscarlo por nombre.
     #[arg(long, required_unless_present = "service", conflicts_with = "service")]
     compose_id: Option<String>,
-    /// Compose name: `name`, `environment/name` or `project/environment/name`.
+    /// Nombre del Compose: `nombre`, `entorno/nombre` o `proyecto/entorno/nombre`.
     #[arg(long)]
     service: Option<String>,
-    /// Local file to plan with.
+    /// Archivo local con el que planear.
     #[arg(long)]
     file: PathBuf,
-    /// Redeploy the Compose in the same plan.
+    /// Redespliega el Compose en el mismo plan.
     #[arg(long)]
     redeploy: bool,
-    /// Plan even if keel cannot be asked whether this service is a keel scope.
+    /// Planea aunque no se pueda preguntar a keel si este servicio es un scope de keel.
     #[arg(long)]
     not_keel_managed: bool,
 }
@@ -267,25 +267,25 @@ pub struct ComposeUpdateArgs {
 pub struct PostgresCreateArgs {
     #[command(flatten)]
     target: Target,
-    /// Environment id (see get projects).
+    /// Id del entorno (ver get projects).
     #[arg(long)]
     environment_id: String,
-    /// Name of the new service.
+    /// Nombre del servicio nuevo.
     #[arg(long)]
     name: String,
-    /// Database to create.
+    /// Base de datos a crear.
     #[arg(long)]
     database_name: String,
-    /// Database user.
+    /// Usuario de la base de datos.
     #[arg(long)]
     database_user: String,
-    /// Environment variable holding the password; read only at apply time.
+    /// Variable de entorno con la contraseña; se lee solo al aplicar.
     #[arg(long)]
     password_env: String,
-    /// Docker image (Dokploy default when omitted).
+    /// Imagen de Docker (la de Dokploy por defecto si se omite).
     #[arg(long)]
     docker_image: Option<String>,
-    /// Server id; the panel host when omitted.
+    /// Id del servidor; el host del panel si se omite.
     #[arg(long)]
     server_id: Option<String>,
 }
@@ -293,27 +293,27 @@ pub struct PostgresCreateArgs {
 pub struct MongoCreateArgs {
     #[command(flatten)]
     target: Target,
-    /// Environment id, or `project/environment` (e.g. landing/production).
+    /// Id del entorno, o `proyecto/entorno` (p. ej. landing/production).
     #[arg(long)]
     environment: String,
-    /// Server id or name; the panel's own host when omitted.
+    /// Id o nombre del servidor; el host del panel si se omite.
     #[arg(long)]
     server: Option<String>,
-    /// Name of the new service.
+    /// Nombre del servicio nuevo.
     #[arg(long)]
     name: String,
     #[arg(long)]
     description: Option<String>,
-    /// Database user.
+    /// Usuario de la base de datos.
     #[arg(long)]
     database_user: String,
-    /// Env var holding the password; read at apply time only.
+    /// Variable de entorno con la contraseña; se lee solo al aplicar.
     #[arg(long)]
     password_env: String,
-    /// Required: the panel's default image is not a real Mongo tag.
+    /// Obligatoria: la imagen por defecto del panel no es un tag real de Mongo.
     #[arg(long)]
     docker_image: String,
-    /// Memory limit in bytes.
+    /// Límite de memoria en bytes.
     #[arg(long)]
     memory_limit_bytes: Option<u64>,
 }
@@ -321,21 +321,21 @@ pub struct MongoCreateArgs {
 pub struct BackupCreateArgs {
     #[command(flatten)]
     target: Target,
-    /// `name`, `environment/name` or `project/environment/name`.
+    /// `nombre`, `entorno/nombre` o `proyecto/entorno/nombre`.
     service: String,
-    /// Database to back up.
+    /// Base de datos a respaldar.
     #[arg(long)]
     database: String,
-    /// Destination id or name; see `keel get destinations`.
+    /// Id o nombre del destino; ver `keel get destinations`.
     #[arg(long)]
     destination: String,
-    /// Cron expression with five fields, e.g. "30 3 * * *".
+    /// Expresión cron de cinco campos, p. ej. "30 3 * * *".
     #[arg(long)]
     schedule: String,
-    /// Path inside the destination, e.g. prod/shop-db/.
+    /// Ruta dentro del destino, p. ej. prod/shop-db/.
     #[arg(long)]
     prefix: String,
-    /// Backups to keep.
+    /// Backups a conservar.
     #[arg(long)]
     keep_latest_count: u32,
 }
@@ -343,9 +343,9 @@ pub struct BackupCreateArgs {
 pub struct ServiceArgs {
     #[command(flatten)]
     target: Target,
-    /// `name`, `environment/name` or `project/environment/name`.
+    /// `nombre`, `entorno/nombre` o `proyecto/entorno/nombre`.
     service: String,
-    /// Plan even when keel cannot be asked whether this is a keel scope.
+    /// Planea aunque no se pueda preguntar a keel si es un scope de keel.
     #[arg(long)]
     not_keel_managed: bool,
 }
@@ -355,21 +355,21 @@ pub struct EnvPatchArgs {
     #[command(flatten)]
     target: Target,
     service: String,
-    /// Add or change KEY. The value comes from $KEEL_SET_<KEY>, is typed
-    /// without echo, or (for a single --set) is read from stdin; never from
-    /// the command line. Empty values are refused.
+    /// Agrega o cambia KEY. El valor sale de $KEEL_SET_<KEY>, se escribe
+    /// sin eco o (con un solo --set) se lee de stdin; nunca de la línea
+    /// de comandos. Los valores vacíos se rechazan.
     #[arg(long = "set", value_name = "KEY")]
     set: Vec<String>,
-    /// Add or change KEY with the content of a file (certificates, JSON).
+    /// Agrega o cambia KEY con el contenido de un archivo (certificados, JSON).
     #[arg(long = "set-from-file", value_name = "KEY=/ABS/PATH")]
     set_from_file: Vec<String>,
-    /// Remove KEY; fails if the env has no such key.
+    /// Quita KEY; falla si el env no la tiene.
     #[arg(long = "unset", value_name = "KEY")]
     unset: Vec<String>,
-    /// Redeploy the service in the same plan.
+    /// Redespliega el servicio en el mismo plan.
     #[arg(long)]
     redeploy: bool,
-    /// Plan even if keel cannot be asked whether this service is a keel scope.
+    /// Planea aunque no se pueda preguntar a keel si este servicio es un scope de keel.
     #[arg(long)]
     not_keel_managed: bool,
 }
@@ -379,13 +379,13 @@ pub struct EnvRestoreArgs {
     #[command(flatten)]
     target: Target,
     service: String,
-    /// Timestamp of the backup (or a unique prefix), from get env-backups.
+    /// Fecha del backup (o un prefijo único), de get env-backups.
     #[arg(long)]
     backup: String,
-    /// Redeploy the service in the same plan.
+    /// Redespliega el servicio en el mismo plan.
     #[arg(long)]
     redeploy: bool,
-    /// Plan even if keel cannot be asked whether this service is a keel scope.
+    /// Planea aunque no se pueda preguntar a keel si este servicio es un scope de keel.
     #[arg(long)]
     not_keel_managed: bool,
 }
@@ -404,19 +404,19 @@ pub struct MountCreateArgs {
     service: String,
     #[arg(long = "type", value_enum)]
     mount_type: MountType,
-    /// Path inside the container.
+    /// Ruta dentro del contenedor.
     #[arg(long)]
     mount_path: String,
-    /// Docker volume name (--type volume).
+    /// Nombre del volumen de Docker (--type volume).
     #[arg(long)]
     volume_name: Option<String>,
-    /// Absolute path on the host (--type bind).
+    /// Ruta absoluta en el host (--type bind).
     #[arg(long)]
     host_path: Option<String>,
-    /// Local file whose content is mounted (--type file).
+    /// Archivo local cuyo contenido se monta (--type file).
     #[arg(long)]
     file: Option<PathBuf>,
-    /// Redeploy the service in the same plan.
+    /// Redespliega el servicio en el mismo plan.
     #[arg(long)]
     redeploy: bool,
 }
@@ -425,13 +425,13 @@ pub struct EnvSetArgs {
     #[command(flatten)]
     target: Target,
     service: String,
-    /// dotenv file with the complete new env block.
+    /// Archivo dotenv con el bloque de env nuevo completo.
     #[arg(long)]
     file: PathBuf,
-    /// Redeploy the service in the same plan.
+    /// Redespliega el servicio en el mismo plan.
     #[arg(long)]
     redeploy: bool,
-    /// Plan even if keel cannot be asked whether this service is a keel scope.
+    /// Planea aunque no se pueda preguntar a keel si este servicio es un scope de keel.
     #[arg(long)]
     not_keel_managed: bool,
 }
@@ -439,18 +439,18 @@ pub struct EnvSetArgs {
 pub struct ComposeCreateArgs {
     #[command(flatten)]
     target: Target,
-    /// Environment id, or `project/environment` (e.g. landing/production).
+    /// Id del entorno, o `proyecto/entorno` (p. ej. landing/production).
     #[arg(long)]
     environment: String,
-    /// Server id or name; the panel's own host when omitted.
+    /// Id o nombre del servidor; el host del panel si se omite.
     #[arg(long)]
     server: Option<String>,
-    /// Name of the new service.
+    /// Nombre del servicio nuevo.
     #[arg(long)]
     name: String,
     #[arg(long)]
     description: Option<String>,
-    /// Local file to plan with.
+    /// Archivo local con el que planear.
     #[arg(long)]
     file: PathBuf,
 }
@@ -491,37 +491,37 @@ pub struct ComposeSettingsArgs {
 pub struct RawPostArgs {
     #[command(flatten)]
     target: Target,
-    /// Read procedure, e.g. project.one (router.procedure).
+    /// Procedimiento, p. ej. project.one (router.procedure).
     procedure: String,
-    /// JSON object sent as the request body.
+    /// Objeto JSON que se envía como cuerpo.
     #[arg(long)]
     body_file: PathBuf,
 }
 #[derive(Args)]
 pub struct ApplyArgs {
-    /// Plan id (from plan, plan list or plan show).
+    /// Id del plan (de plan, plan list o plan show).
     #[arg(long)]
     plan: String,
-    /// The plan approval_token_sha256, after a person reviewed the plan.
+    /// El approval_token_sha256 del plan, después de que una persona lo revisó.
     #[arg(long)]
     approve: String,
 }
 #[derive(Subcommand)]
 pub enum BackupCommand {
-    /// Save a Compose file into a local, already-cloned backup repository.
+    /// Guarda el archivo de un Compose en un repo de backups local ya clonado.
     Compose(BackupComposeArgs),
 }
 #[derive(Args)]
 pub struct BackupComposeArgs {
     #[command(flatten)]
     target: Target,
-    /// Compose id.
+    /// Id del Compose.
     #[arg(long)]
     compose_id: String,
-    /// Label of this backup (e.g. a date), used in the file name and commit.
+    /// Etiqueta del backup (p. ej. una fecha), para el nombre del archivo y el commit.
     #[arg(long)]
     version: String,
-    /// Commit the backup in the backup repository (never pushes).
+    /// Hace commit del backup en el repo de backups (nunca hace push).
     #[arg(long)]
     commit: bool,
 }
@@ -561,13 +561,13 @@ pub(crate) async fn doctor(config: &Config, target: &Target) -> Result<(Value, O
             checks.push(json!({
                 "check": "dns", "ok": !public_http, "host": host,
                 "addresses": addresses.iter().map(ToString::to_string).collect::<Vec<_>>(),
-                "hint": if public_http { json!("an http panel resolves to a public address: the API key would leave the private network") } else { Value::Null }
+                "hint": if public_http { json!("un panel http resuelve a una dirección pública: la API key saldría de la red privada") } else { Value::Null }
             }));
             ok &= !public_http;
         }
         Err(_) => {
             checks.push(json!({"check": "dns", "ok": false, "host": host,
-                "hint": "the name does not resolve; for a .internal panel, connect to the VPN"}));
+                "hint": "el nombre no resuelve; para un panel .internal, conéctate a la VPN"}));
             return finish_doctor(instance, checks, Some(Kind::Network));
         }
     }
@@ -581,7 +581,7 @@ pub(crate) async fn doctor(config: &Config, target: &Target) -> Result<(Value, O
             .push(json!({"check": "panel", "ok": true, "http_status": response.status().as_u16()})),
         Err(_) => {
             checks.push(json!({"check": "panel", "ok": false,
-                "hint": "the name resolves but nothing answers: is the VPN routing to it, is the panel up?"}));
+                "hint": "el nombre resuelve pero nada responde: ¿la VPN enruta hacia él?, ¿el panel está arriba?"}));
             return finish_doctor(instance, checks, Some(Kind::Network));
         }
     }
@@ -658,7 +658,7 @@ pub(crate) async fn get(config: &Config, state: &Path, command: GetCommand) -> R
             if service.kind.backup_database_type().is_none() {
                 refuse!(
                     Kind::Refused,
-                    "{} is a {}: only Postgres, MySQL, MariaDB and Mongo have scheduled backups",
+                    "{} es un {}: solo Postgres, MySQL, MariaDB y Mongo tienen backups programados",
                     service.label(),
                     service.kind.label()
                 );
@@ -752,7 +752,7 @@ pub(crate) async fn get(config: &Config, state: &Path, command: GetCommand) -> R
             if !service.kind.has_environment() {
                 refuse!(
                     Kind::Refused,
-                    "{} is a {}: Dokploy keeps no env block for it",
+                    "{} es un {}: Dokploy no guarda un bloque de env para él",
                     service.label(),
                     service.kind.label()
                 );
@@ -763,7 +763,7 @@ pub(crate) async fn get(config: &Config, state: &Path, command: GetCommand) -> R
                 .unwrap_or_default();
             let mut data = json!({
                 "service": service.label(), "variables": env_keys(env),
-                "values": "hidden; use --write-to to save them to an owner-only file"
+                "values": "ocultos; usa --write-to para guardarlos en un archivo solo para ti"
             });
             if let Some(path) = write_to {
                 ensure_new_absolute(&path)?;
@@ -785,7 +785,7 @@ pub(crate) async fn get(config: &Config, state: &Path, command: GetCommand) -> R
             let compose_id = match (id, service) {
                 (Some(id), _) => id,
                 (None, Some(query)) => compose_by_name(&client, &query).await?.id,
-                (None, None) => bail!("pass --id or --service"),
+                (None, None) => bail!("usa --id o --service"),
             };
             let result = client
                 .get(
@@ -811,7 +811,7 @@ pub(crate) async fn get(config: &Config, state: &Path, command: GetCommand) -> R
                 .collect();
             let note = if domains.is_empty() {
                 json!(
-                    "no domains in Dokploy's registry; routing may live in Traefik labels inside the Compose"
+                    "no hay dominios en el registro de Dokploy; las rutas pueden estar en labels de Traefik dentro del Compose"
                 )
             } else {
                 Value::Null
@@ -833,7 +833,7 @@ pub(crate) async fn get(config: &Config, state: &Path, command: GetCommand) -> R
             let Some(procedure) = service.kind.deployments_procedure() else {
                 refuse!(
                     Kind::Refused,
-                    "{} is a {}: Dokploy keeps no deployment history for it; see `get service`",
+                    "{} es un {}: Dokploy no guarda historial de deployments para él; mira `get service`",
                     service.label(),
                     service.kind.label()
                 );
@@ -929,14 +929,14 @@ pub(crate) async fn get(config: &Config, state: &Path, command: GetCommand) -> R
                 .map(|p| {
                     p.split_once('=')
                         .map(|(k, v)| (k.to_owned(), v.to_owned()))
-                        .with_context(|| format!("--param must be key=value, got {p:?}"))
+                        .with_context(|| format!("--param debe ser clave=valor, no {p:?}"))
                 })
                 .collect::<Result<Vec<_>>>()?;
             let action = procedure.split_once('.').map_or("", |(_, action)| action);
             if action.to_ascii_lowercase().contains("logs") {
                 refuse!(
                     Kind::Refused,
-                    "{procedure} returns raw logs that `get raw` cannot redact; use `get logs` or `get deploy-log`"
+                    "{procedure} devuelve logs sin procesar que `get raw` no puede redactar; usa `get logs` o `get deploy-log`"
                 );
             }
             raw_read(config, &target, &procedure, &params).await
@@ -960,7 +960,7 @@ pub async fn resolve_ref(client: &DokployClient, service: &ServiceRef) -> Result
             let Some(found) = services.iter().find(|s| &s.id == id) else {
                 refuse!(
                     Kind::ServiceNotFound,
-                    "Dokploy has no service with id {id}; it was deleted or belongs to another instance (see `keel context`)"
+                    "Dokploy no tiene ningún servicio con id {id}; se borró o es de otra instancia (mira `keel context`)"
                 );
             };
             let found = found.clone();
@@ -1004,7 +1004,7 @@ pub async fn fetch_logs(
         if container.is_some() {
             refuse!(
                 Kind::Refused,
-                "--container only applies to a Compose; {} is a {} with a single container",
+                "--container solo aplica a un Compose; {} es un {} con un solo contenedor",
                 service.label(),
                 service.kind.label()
             );
@@ -1048,7 +1048,7 @@ pub async fn fetch_deploy_log(
         if deployment.is_some() {
             refuse!(
                 Kind::Refused,
-                "{} is a {}: Dokploy keeps no deployments for it, so there is no deployment id to pick",
+                "{} es un {}: Dokploy no guarda deployments para él, así que no hay id de deployment que elegir",
                 service.label(),
                 service.kind.label()
             );
@@ -1066,7 +1066,7 @@ pub async fn fetch_deploy_log(
         .await?;
         data["deployment"] = Value::Null;
         data["note"] = json!(format!(
-            "{} is a {}: Dokploy keeps no deployment log for databases, so these are the service's own logs, where a failed start shows",
+            "{} es un {}: Dokploy no guarda log de deployment para bases de datos; estos son los logs del propio servicio, donde se ve un arranque fallido",
             service.label(),
             service.kind.label()
         ));
@@ -1107,16 +1107,16 @@ pub async fn fetch_deploy_log(
     let Some(chosen) = chosen else {
         refuse!(
             Kind::ServiceNotFound,
-            "{} has no deployment {}; see `get deployments`",
+            "{} no tiene el deployment {}; mira `get deployments`",
             service.label(),
             deployment.unwrap_or(if after.is_some() {
-                "after that deploy"
+                "después de ese deploy"
             } else {
                 "yet"
             })
         );
     };
-    let deployment_id = id_of(chosen).context("Dokploy listed a deployment without an id")?;
+    let deployment_id = id_of(chosen).context("Dokploy listó un deployment sin id")?;
     let text = client
         .get_procedure(
             "deployment.readLogs",
@@ -1205,7 +1205,7 @@ pub(crate) fn redacted_lines(
     let text = match response {
         Value::String(text) => text.as_str(),
         Value::Null => "",
-        _ => bail!("Dokploy answered the logs with something other than text"),
+        _ => bail!("Dokploy respondió los logs con algo que no es texto"),
     };
     Ok(logs::Redactor::for_service(detail)
         .lines(text)
@@ -1238,7 +1238,7 @@ pub(crate) async fn compose_by_name(client: &DokployClient, query: &str) -> Resu
     if service.kind != ServiceKind::Compose {
         refuse!(
             Kind::Refused,
-            "{} is a {}, not a Compose",
+            "{} es un {}, no un Compose",
             service.label(),
             service.kind.label()
         );
@@ -1370,8 +1370,8 @@ pub(crate) async fn api(config: &Config, target: &Target, filter: Option<&str>) 
     while let Some(Ok((procedure, status))) = tasks.join_next().await {
         let status = match status {
             Ok(200) => "ok".to_owned(),
-            Ok(400) => "ok, needs parameters".to_owned(),
-            Ok(405) => "post only".to_owned(),
+            Ok(400) => "ok, necesita parámetros".to_owned(),
+            Ok(405) => "solo POST".to_owned(),
             Ok(404) => continue,
             Ok(code) => format!("HTTP {code}"),
             Err(error) => format!("error: {error}"),
@@ -1391,7 +1391,7 @@ pub(crate) async fn api(config: &Config, target: &Target, filter: Option<&str>) 
     ]);
     // Reads with their own command: the raw answer would carry secrets.
     let logs = json!([
-        {"get": "logs", "procedures": "<router>.readLogs (+ docker.getContainersByAppNameMatch for a Compose)", "redacted": true},
+        {"get": "logs", "procedures": "<router>.readLogs (+ docker.getContainersByAppNameMatch para un Compose)", "redacted": true},
         {"get": "deploy-log", "procedures": "deployment.readLogs", "redacted": true},
     ]);
     let keep =
@@ -1402,7 +1402,7 @@ pub(crate) async fn api(config: &Config, target: &Target, filter: Option<&str>) 
             "reads": reads.into_iter().filter(keep).collect::<Vec<_>>(),
             "logs": logs.as_array().unwrap().iter().filter(|v| keep(v)).collect::<Vec<_>>(),
             "mutations": mutations.as_array().unwrap().iter().filter(|v| keep(v)).collect::<Vec<_>>(),
-            "destructive": "never available: deletes are run by a person from the Dokploy panel"
+            "destructive": "nunca disponible: los borrados los hace una persona desde el panel de Dokploy"
         }),
     ))
 }
@@ -1424,19 +1424,19 @@ pub(crate) async fn create_plan(config: &Config, state: &Path, command: PlanComm
                         .0
                 }
                 (None, Some(query)) => compose_by_name(&client, &query).await?,
-                (None, None) => bail!("pass --compose-id or --service"),
+                (None, None) => bail!("usa --compose-id o --service"),
             };
             if service.kind != ServiceKind::Compose {
                 refuse!(
                     Kind::Refused,
-                    "{} is a {}, not a Compose",
+                    "{} es un {}, no un Compose",
                     service.label(),
                     service.kind.label()
                 );
             }
             let compose_id = service.id.clone();
             let content = fs::read_to_string(&args.file)
-                .with_context(|| format!("cannot read {}", args.file.display()))?;
+                .with_context(|| format!("no se pudo leer {}", args.file.display()))?;
             validate_compose(&content)?;
             let digest = plan::content_sha256(&content);
             let remote = client
@@ -1448,7 +1448,7 @@ pub(crate) async fn create_plan(config: &Config, state: &Path, command: PlanComm
             let remote_compose = remote
                 .get("composeFile")
                 .and_then(Value::as_str)
-                .context("Dokploy response contains no composeFile")?;
+                .context("la respuesta de Dokploy no trae composeFile")?;
             let guard = keel_guard(
                 &service,
                 Intent::ComposeFile { next: &content },
@@ -1494,7 +1494,7 @@ pub(crate) async fn create_plan(config: &Config, state: &Path, command: PlanComm
             let instance = args.target.resolve(config)?;
             crate::dokploy::config::validate_env_name(&args.password_env)?;
             if args.memory_limit_bytes == Some(0) {
-                bail!("memory_limit_bytes must be greater than zero");
+                bail!("memory_limit_bytes debe ser mayor que cero");
             }
             let client = DokployClient::new(instance)?;
             let environment_id = resolve_environment(&client, &args.environment).await?;
@@ -1520,14 +1520,14 @@ pub(crate) async fn create_plan(config: &Config, state: &Path, command: PlanComm
             let instance = args.target.resolve(config)?;
             validate_schedule(&args.schedule)?;
             if args.keep_latest_count == 0 {
-                bail!("keep_latest_count must be greater than zero");
+                bail!("keep_latest_count debe ser mayor que cero");
             }
             let client = DokployClient::new(instance)?;
             let (service, detail) = resolve_detail(&client, &args.service).await?;
             let Some(database_type) = service.kind.backup_database_type() else {
                 refuse!(
                     Kind::Refused,
-                    "{} is a {}: backup-create only covers Postgres, MySQL, MariaDB and Mongo",
+                    "{} es un {}: backup-create solo cubre Postgres, MySQL, MariaDB y Mongo",
                     service.label(),
                     service.kind.label()
                 );
@@ -1547,7 +1547,7 @@ pub(crate) async fn create_plan(config: &Config, state: &Path, command: PlanComm
             if already {
                 refuse!(
                     Kind::Refused,
-                    "{} already has a backup to {destination} with prefix {prefix}",
+                    "{} ya tiene un backup a {destination} con el prefijo {prefix}",
                     service.label()
                 );
             }
@@ -1601,13 +1601,13 @@ pub(crate) async fn create_plan(config: &Config, state: &Path, command: PlanComm
             if !service.kind.has_environment() {
                 refuse!(
                     Kind::Refused,
-                    "{} is a {}: Dokploy keeps no env block for it",
+                    "{} es un {}: Dokploy no guarda un bloque de env para él",
                     service.label(),
                     service.kind.label()
                 );
             }
             if args.set.is_empty() && args.set_from_file.is_empty() && args.unset.is_empty() {
-                bail!("nothing to change: pass --set, --set-from-file or --unset");
+                bail!("nada que cambiar: usa --set, --set-from-file o --unset");
             }
             let mut values = Vec::new();
             let only_one = args.set.len() == 1 && args.set_from_file.is_empty();
@@ -1623,7 +1623,7 @@ pub(crate) async fn create_plan(config: &Config, state: &Path, command: PlanComm
                 if value.is_empty() {
                     refuse!(
                         Kind::Refused,
-                        "--set-from-file {key}: the file is empty; to remove the key use --unset {key}"
+                        "--set-from-file {key}: el archivo está vacío; para quitar la variable usa --unset {key}"
                     );
                 }
                 sources.insert(key.clone(), json!("file"));
@@ -1676,7 +1676,7 @@ pub(crate) async fn create_plan(config: &Config, state: &Path, command: PlanComm
             if env == current {
                 refuse!(
                     Kind::Refused,
-                    "{} already has the env of backup {timestamp}",
+                    "{} ya tiene el env del backup {timestamp}",
                     service.label()
                 );
             }
@@ -1711,7 +1711,7 @@ pub(crate) async fn create_plan(config: &Config, state: &Path, command: PlanComm
             let client = DokployClient::new(instance)?;
             let (service, detail) = resolve_detail(&client, &args.service).await?;
             if !args.mount_path.starts_with('/') {
-                bail!("--mount-path must be an absolute path inside the container");
+                bail!("--mount-path debe ser una ruta absoluta dentro del contenedor");
             }
             let already = detail
                 .get("mounts")
@@ -1724,7 +1724,7 @@ pub(crate) async fn create_plan(config: &Config, state: &Path, command: PlanComm
             if already {
                 refuse!(
                     Kind::Refused,
-                    "{} already has a mount at {}",
+                    "{} ya tiene un mount en {}",
                     service.label(),
                     args.mount_path
                 );
@@ -1733,20 +1733,20 @@ pub(crate) async fn create_plan(config: &Config, state: &Path, command: PlanComm
                 MountType::Volume => {
                     let name = args
                         .volume_name
-                        .context("--type volume needs --volume-name")?;
+                        .context("--type volume necesita --volume-name")?;
                     ("volume", None, Some(required("volume_name", name)?), None)
                 }
                 MountType::Bind => {
-                    let host = args.host_path.context("--type bind needs --host-path")?;
+                    let host = args.host_path.context("--type bind necesita --host-path")?;
                     if !host.starts_with('/') {
-                        bail!("--host-path must be absolute");
+                        bail!("--host-path debe ser absoluta");
                     }
                     ("bind", Some(host), None, None)
                 }
                 MountType::File => {
-                    let file = args.file.context("--type file needs --file")?;
+                    let file = args.file.context("--type file necesita --file")?;
                     let content = fs::read_to_string(&file)
-                        .with_context(|| format!("cannot read {}", file.display()))?;
+                        .with_context(|| format!("no se pudo leer {}", file.display()))?;
                     ("file", None, None, Some(content))
                 }
             };
@@ -1773,13 +1773,13 @@ pub(crate) async fn create_plan(config: &Config, state: &Path, command: PlanComm
             if !service.kind.has_environment() {
                 refuse!(
                     Kind::Refused,
-                    "{} is a {}: Dokploy keeps no env block for it",
+                    "{} es un {}: Dokploy no guarda un bloque de env para él",
                     service.label(),
                     service.kind.label()
                 );
             }
             let env = fs::read_to_string(&args.file)
-                .with_context(|| format!("cannot read {}", args.file.display()))?;
+                .with_context(|| format!("no se pudo leer {}", args.file.display()))?;
             let keys = env_keys(&env)
                 .into_iter()
                 .map(|line| line.key)
@@ -1787,7 +1787,7 @@ pub(crate) async fn create_plan(config: &Config, state: &Path, command: PlanComm
             if keys.is_empty() {
                 refuse!(
                     Kind::Refused,
-                    "{} has no KEY=value lines; refusing to wipe every variable",
+                    "{} no tiene líneas CLAVE=valor; no se borran todas las variables",
                     args.file.display()
                 );
             }
@@ -1825,7 +1825,7 @@ pub(crate) async fn create_plan(config: &Config, state: &Path, command: PlanComm
             let instance = args.target.resolve(config)?;
             let client = DokployClient::new(instance)?;
             let content = fs::read_to_string(&args.file)
-                .with_context(|| format!("cannot read {}", args.file.display()))?;
+                .with_context(|| format!("no se pudo leer {}", args.file.display()))?;
             validate_compose(&content)?;
             let environment_id = resolve_environment(&client, &args.environment).await?;
             let server_id = match args.server.as_deref() {
@@ -1848,7 +1848,7 @@ pub(crate) async fn create_plan(config: &Config, state: &Path, command: PlanComm
             let instance = args.target.resolve(config)?;
             let client = DokployClient::new(instance)?;
             if args.source_type.is_none() && args.name.is_none() && args.description.is_none() {
-                bail!("nothing to change: pass --source-type, --name or --description");
+                bail!("nada que cambiar: usa --source-type, --name o --description");
             }
             let service = compose_by_name(&client, &args.service).await?;
             (
@@ -1868,24 +1868,24 @@ pub(crate) async fn create_plan(config: &Config, state: &Path, command: PlanComm
             if is_destructive(&args.procedure) {
                 refuse!(
                     Kind::Refused,
-                    "{} is destructive: deletes are run by a person from the Dokploy panel",
+                    "{} es destructivo: los borrados los hace una persona desde el panel de Dokploy",
                     args.procedure
                 );
             }
             if !config.security.raw_post_allowlist.contains(&args.procedure) {
                 refuse!(
                     Kind::Refused,
-                    "{} is not in security.raw_post_allowlist; add it there after reviewing its schema, or use a typed plan",
+                    "{} no está en security.raw_post_allowlist; agrégalo ahí después de revisar su esquema, o usa un plan tipado",
                     args.procedure
                 );
             }
             let body: Value = serde_json::from_str(
                 &fs::read_to_string(&args.body_file)
-                    .with_context(|| format!("cannot read {}", args.body_file.display()))?,
+                    .with_context(|| format!("no se pudo leer {}", args.body_file.display()))?,
             )
-            .context("--body-file must contain JSON")?;
+            .context("--body-file debe contener JSON")?;
             if !body.is_object() {
-                bail!("--body-file must contain a JSON object");
+                bail!("--body-file debe contener un objeto JSON");
             }
             (
                 instance,
@@ -1913,7 +1913,7 @@ pub(crate) async fn create_plan(config: &Config, state: &Path, command: PlanComm
     }
     if instance.approval(&config.security) == ApprovalMode::Terminal {
         output["approval"] = json!(format!(
-            "terminal: a person must run `keel apply --plan {} --approve <token>` in an interactive terminal and retype {}",
+            "terminal: una persona debe ejecutar `keel apply --plan {} --approve <token>` en una terminal interactiva y volver a escribir {}",
             plan.id,
             approval::short_id(&plan)
         ));
@@ -1932,13 +1932,13 @@ pub(crate) fn plan_view(config: &Config, plan: &Plan) -> Value {
         view["target"] = json!({"instance": instance.label(), "base_url": instance.base_url});
         if instance.approval(&config.security) == ApprovalMode::Terminal {
             view["approval"] = json!(format!(
-                "terminal: a person must apply it from an interactive terminal and retype {}",
+                "terminal: una persona debe aplicarlo desde una terminal interactiva y volver a escribir {}",
                 approval::short_id(plan)
             ));
         }
     }
     if expired {
-        view["next_step"] = json!("expired: create and review a new plan");
+        view["next_step"] = json!("caducado: crea y revisa un plan nuevo");
     }
     view
 }
@@ -2027,7 +2027,7 @@ pub(crate) async fn service_action(
     if !service.kind.supports(action) {
         refuse!(
             Kind::Refused,
-            "{} is a {}: Dokploy has no {} for it",
+            "{} es un {}: Dokploy no tiene {} para él",
             service.label(),
             service.kind.label(),
             action.name()
@@ -2082,11 +2082,11 @@ pub(crate) async fn resolve_environment(client: &DokployClient, query: &str) -> 
         [only] => Ok(only.clone()),
         [] => refuse!(
             Kind::ServiceNotFound,
-            "no environment matches {query:?}; use an id or project/environment (see `get projects`)"
+            "ningún entorno coincide con {query:?}; usa un id o proyecto/entorno (mira `get projects`)"
         ),
         _ => refuse!(
             Kind::ServiceAmbiguous,
-            "{query:?} matches several environments; use the environment id"
+            "{query:?} coincide con varios entornos; usa el id del entorno"
         ),
     }
 }
@@ -2110,11 +2110,11 @@ pub(crate) async fn resolve_server(client: &DokployClient, query: &str) -> Resul
         [only] => Ok(only.clone()),
         [] => refuse!(
             Kind::ServiceNotFound,
-            "no server matches {query:?}; see `get servers`"
+            "ningún servidor coincide con {query:?}; mira `get servers`"
         ),
         _ => refuse!(
             Kind::ServiceAmbiguous,
-            "{query:?} matches several servers; use the server id"
+            "{query:?} coincide con varios servidores; usa el id del servidor"
         ),
     }
 }
@@ -2145,11 +2145,11 @@ pub(crate) async fn resolve_destination(
         [only] => Ok(only.clone()),
         [] => refuse!(
             Kind::ServiceNotFound,
-            "no backup destination matches {query:?}; see `keel get destinations`"
+            "ningún destino de backup coincide con {query:?}; mira `keel get destinations`"
         ),
         _ => refuse!(
             Kind::ServiceAmbiguous,
-            "{query:?} matches several backup destinations; use the destination id"
+            "{query:?} coincide con varios destinos de backup; usa el id del destino"
         ),
     }
 }
@@ -2164,7 +2164,7 @@ pub(crate) fn validate_schedule(schedule: &str) -> Result<()> {
     };
     let fields: Vec<&str> = schedule.split_whitespace().collect();
     if fields.len() != 5 || !fields.iter().all(|field| valid_field(field)) {
-        bail!("schedule must be a cron expression with five fields, got {schedule:?}");
+        bail!("schedule debe ser una expresión cron de cinco campos, no {schedule:?}");
     }
     Ok(())
 }
@@ -2179,7 +2179,7 @@ pub(crate) async fn apply(config: &Config, state: &Path, args: ApplyArgs) -> Res
     if args.approve != reviewed.digest {
         refuse!(
             Kind::ApprovalMismatch,
-            "approval token does not match the reviewed plan"
+            "el token de aprobación no corresponde al plan revisado"
         );
     }
     let instance = config.instance(&reviewed.organization, &reviewed.instance)?;
@@ -2190,7 +2190,7 @@ pub(crate) async fn apply(config: &Config, state: &Path, args: ApplyArgs) -> Res
     if plan.digest != reviewed.digest {
         refuse!(
             Kind::PlanUnavailable,
-            "plan changed between review and claim"
+            "el plan cambió entre la revisión y el apply"
         );
     }
     let client = DokployClient::new(instance)?;
@@ -2224,11 +2224,11 @@ pub(crate) async fn execute(client: &DokployClient, state: &Path, plan: &Plan) -
             let remote_compose = remote
                 .get("composeFile")
                 .and_then(Value::as_str)
-                .context("Dokploy response contains no composeFile")?;
+                .context("la respuesta de Dokploy no trae composeFile")?;
             if plan::content_sha256(remote_compose) != *base_remote_sha256 {
                 refuse!(
                     Kind::Drift,
-                    "remote Compose changed since this plan was created; download, review, and create a new plan"
+                    "el Compose remoto cambió desde que se creó este plan; descárgalo, revísalo y crea un plan nuevo"
                 );
             }
         }
@@ -2252,14 +2252,14 @@ pub(crate) async fn execute(client: &DokployClient, state: &Path, plan: &Plan) -
             if plan::content_sha256(current) != *base_env_sha256 {
                 refuse!(
                     Kind::Drift,
-                    "the env of {label} changed since this plan was created; create a new plan"
+                    "el env de {label} cambió desde que se creó este plan; crea un plan nuevo"
                 );
             }
             let backup = backup_env(state, label, current)?;
             extra.insert("previous_env_backup".into(), json!(backup));
             extra.insert(
                 "next_step".into(),
-                json!("the new env applies on the next deploy"),
+                json!("el env nuevo aplica en el próximo deploy"),
             );
         }
         PlannedAction::ComposeCreate { .. } => {
@@ -2267,17 +2267,17 @@ pub(crate) async fn execute(client: &DokployClient, state: &Path, plan: &Plan) -
                 .post(plan.action.endpoint(), plan::request_body(plan)?)
                 .await?;
             let compose_id = created.get("composeId").and_then(Value::as_str).context(
-                "compose.create answered without a composeId; check the panel before retrying",
+                "compose.create respondió sin composeId; revisa el panel antes de reintentar",
             )?;
             // Dokploy creates a Compose with a git source; a raw one needs this second call.
             let settings = client
                 .post_procedure("compose.update", json!({"composeId": compose_id, "sourceType": "raw"}))
                 .await
-                .with_context(|| format!("Compose {compose_id} was created but setting sourceType raw failed; fix it with plan compose-settings"))?;
+                .with_context(|| format!("el Compose {compose_id} se creó pero falló poner sourceType raw; corrígelo con plan compose-settings"))?;
             return Ok(json!({
                 "ok": true, "plan_id": plan.id, "operation": plan.action.operation_name(),
                 "compose_id": compose_id, "source_type": settings.get("sourceType"),
-                "next_step": "deploy it with plan deploy"
+                "next_step": "despliégalo con plan deploy"
             }));
         }
         PlannedAction::MongoCreate {
@@ -2287,7 +2287,7 @@ pub(crate) async fn execute(client: &DokployClient, state: &Path, plan: &Plan) -
                 .post(plan.action.endpoint(), plan::request_body(plan)?)
                 .await?;
             let mongo_id = created.get("mongoId").and_then(Value::as_str).context(
-                "mongo.create answered without a mongoId; check the panel before retrying",
+                "mongo.create respondió sin mongoId; revisa el panel antes de reintentar",
             )?;
             if let Some(limit) = memory_limit_bytes {
                 // The limit is a string in Dokploy's schema.
@@ -2298,14 +2298,14 @@ pub(crate) async fn execute(client: &DokployClient, state: &Path, plan: &Plan) -
                     )
                     .await
                     .with_context(|| {
-                        format!("Mongo {mongo_id} was created but setting its memory limit failed; it has no limit yet")
+                        format!("el Mongo {mongo_id} se creó pero falló su límite de memoria; todavía no tiene límite")
                     })?;
             }
             return Ok(json!({
                 "ok": true, "plan_id": plan.id, "operation": plan.action.operation_name(),
                 "mongo_id": mongo_id, "app_name": created.get("appName"),
                 "memory_limit_bytes": memory_limit_bytes,
-                "next_step": "deploy it with plan deploy"
+                "next_step": "despliégalo con plan deploy"
             }));
         }
         _ => {}
@@ -2330,16 +2330,16 @@ pub(crate) async fn execute(client: &DokployClient, state: &Path, plan: &Plan) -
                 output["redeploy"] =
                     json!({"ok": true, "action": action, "response": redact::redact(redeploy)});
                 output["next_step"] =
-                    json!("follow it with `keel get deploy-log` or `keel get logs -f`");
+                    json!("síguelo con `keel get deploy-log` o `keel get logs -f`");
             }
             Err(error) => {
                 // The change is saved, as in Dokploy; say how to undo it.
                 return Err(error.context(format!(
-                    "the change was saved but the {} failed; redeploy with `keel plan {} <service>`{}",
+                    "el cambio se guardó pero falló el {}; redespliega con `keel plan {} <servicio>`{}",
                     action.name(),
                     action.name(),
                     match output.get("previous_env_backup") {
-                        Some(_) => ", or undo it with `keel plan env-restore <service> --backup <backup>`",
+                        Some(_) => ", o deshazlo con `keel plan env-restore <servicio> --backup <backup>`",
                         None => "",
                     }
                 )));
@@ -2382,18 +2382,18 @@ pub(crate) async fn backup_compose(config: &Config, args: BackupComposeArgs) -> 
     let backup = config
         .compose_backup
         .as_ref()
-        .context("compose_backup is not configured")?;
+        .context("compose_backup no está configurado")?;
     if !backup.repository_path.join(".git").is_dir() {
-        bail!("compose_backup.repository_path must be an existing Git checkout");
+        bail!("compose_backup.repository_path debe ser un clon de Git existente");
     }
     if let Some(expected_url) = &backup.repository_url {
         if git_output(&backup.repository_path, &["remote", "get-url", "origin"])? != *expected_url {
-            bail!("backup repository origin does not match compose_backup.repository_url");
+            bail!("el origin del repo de backups no coincide con compose_backup.repository_url");
         }
     }
     if git_output(&backup.repository_path, &["branch", "--show-current"])? != backup.branch {
         bail!(
-            "backup repository is not on configured branch {:?}",
+            "el repo de backups no está en la rama configurada {:?}",
             backup.branch
         );
     }
@@ -2407,7 +2407,7 @@ pub(crate) async fn backup_compose(config: &Config, args: BackupComposeArgs) -> 
     let content = result
         .get("composeFile")
         .and_then(|v| v.as_str())
-        .context("Dokploy response contains no composeFile")?;
+        .context("la respuesta de Dokploy no trae composeFile")?;
     validate_compose(content)?;
     let directory = backup
         .repository_path
@@ -2418,7 +2418,7 @@ pub(crate) async fn backup_compose(config: &Config, args: BackupComposeArgs) -> 
     fs::create_dir_all(&directory)?;
     let file = directory.join(format!("{}.yaml", safe_segment(&args.version)?));
     if file.exists() {
-        bail!("snapshot already exists: {}", file.display());
+        bail!("el snapshot ya existe: {}", file.display());
     }
     write_private(&file, content.as_bytes())?;
     if args.commit {
@@ -2456,9 +2456,9 @@ pub(crate) fn git(dir: &Path, arguments: &[&str]) -> Result<()> {
         .args(["-c", "core.hooksPath=/dev/null"])
         .args(arguments)
         .status()
-        .context("cannot invoke git")?;
+        .context("no se pudo ejecutar git")?;
     if !status.success() {
-        bail!("git command failed");
+        bail!("falló el comando git");
     }
     Ok(())
 }
@@ -2469,9 +2469,9 @@ pub(crate) fn git_output(dir: &Path, arguments: &[&str]) -> Result<String> {
         .args(["-c", "core.hooksPath=/dev/null"])
         .args(arguments)
         .output()
-        .context("cannot invoke git")?;
+        .context("no se pudo ejecutar git")?;
     if !output.status.success() {
-        bail!("git command failed");
+        bail!("falló el comando git");
     }
     Ok(String::from_utf8(output.stdout)
         .context("git emitted non-UTF8 output")?
@@ -2483,10 +2483,10 @@ pub(crate) fn git_output(dir: &Path, arguments: &[&str]) -> Result<String> {
 
 pub(crate) fn ensure_new_absolute(path: &Path) -> Result<()> {
     if !path.is_absolute() {
-        bail!("--write-to must be an absolute path");
+        bail!("--write-to debe ser una ruta absoluta");
     }
     if path.exists() {
-        bail!("refusing to overwrite existing file: {}", path.display());
+        bail!("no se sobrescribe un archivo existente: {}", path.display());
     }
     Ok(())
 }
@@ -2506,15 +2506,15 @@ pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 pub(crate) fn validate_compose(content: &str) -> Result<()> {
     let yaml: serde_yaml::Value =
-        serde_yaml::from_str(content).context("Compose YAML is invalid")?;
+        serde_yaml::from_str(content).context("el YAML del Compose es inválido")?;
     if yaml.get("services").is_none() {
-        bail!("Compose YAML must contain a top-level services mapping");
+        bail!("el YAML del Compose debe tener un mapa services en la raíz");
     }
     Ok(())
 }
 pub(crate) fn required(name: &str, value: String) -> Result<String> {
     if value.trim().is_empty() {
-        bail!("{name} cannot be empty")
+        bail!("{name} no puede estar vacío")
     } else {
         Ok(value)
     }
@@ -2526,7 +2526,9 @@ pub(crate) fn safe_segment(value: &str) -> Result<&str> {
             .bytes()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b'-'))
     {
-        bail!("backup path values must contain only letters, numbers, dot, underscore, or hyphen")
+        bail!(
+            "los valores de la ruta del backup solo pueden tener letras, números, punto, guion bajo o guion"
+        )
     }
     Ok(value)
 }
@@ -2564,7 +2566,7 @@ pub(crate) fn compose_output(
     } else {
         output.insert(
             "compose".into(),
-            Value::String("[REDACTED: pass --show-compose for a sanitized service view]".into()),
+            Value::String("[REDACTED: usa --show-compose para una vista saneada]".into()),
         );
     }
     if let Some(path) = downloaded_to {
@@ -2587,7 +2589,7 @@ pub(crate) fn export_compose(response: &Value, path: &Path) -> Result<PathBuf> {
     let content = response
         .get("composeFile")
         .and_then(Value::as_str)
-        .context("Dokploy response contains no composeFile")?;
+        .context("la respuesta de Dokploy no trae composeFile")?;
     validate_compose(content)?;
     write_private(path, content.as_bytes())?;
     Ok(path.to_path_buf())
@@ -2597,10 +2599,10 @@ pub(crate) fn export_compose(response: &Value, path: &Path) -> Result<PathBuf> {
 /// they carry Traefik routing (hosts, ports), which is what operators check.
 pub(crate) fn safe_compose_view(content: &str) -> Value {
     let Ok(yaml) = serde_yaml::from_str::<serde_yaml::Value>(content) else {
-        return Value::String("[REDACTED: Compose could not be safely parsed]".into());
+        return Value::String("[REDACTED: no se pudo leer el Compose de forma segura]".into());
     };
     let Some(services) = yaml.get("services").and_then(serde_yaml::Value::as_mapping) else {
-        return Value::String("[REDACTED: Compose has no services mapping]".into());
+        return Value::String("[REDACTED: el Compose no tiene un mapa services]".into());
     };
     let mut output = serde_json::Map::new();
     for (name, service) in services {

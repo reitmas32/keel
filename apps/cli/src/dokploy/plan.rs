@@ -288,9 +288,9 @@ impl PlannedAction {
                     "replaces_all_variables_with": keys, "env_sha256": env_sha256, "base_env_sha256": base_env_sha256,
                     "redeploy": redeploy,
                     "note": if *redeploy {
-                        "values stay in the protected plan file; the current env is backed up before the change, then the service is redeployed"
+                        "los valores quedan en el archivo protegido del plan; el env actual se respalda antes del cambio y luego se redespliega el servicio"
                     } else {
-                        "values stay in the protected plan file; the current env is backed up before the change and applies on the next deploy"
+                        "los valores quedan en el archivo protegido del plan; el env actual se respalda antes del cambio y el nuevo aplica en el próximo deploy"
                     }
                 });
                 if let Some(changes) = key_changes {
@@ -317,7 +317,7 @@ impl PlannedAction {
                 "volume_name": volume_name,
                 "file_content_length": file_content.as_ref().map(|c| c.chars().count()),
                 "redeploy": redeploy,
-                "note": if *redeploy { "the service is redeployed to pick up the mount" } else { "the mount applies on the next deploy" }
+                "note": if *redeploy { "el servicio se redespliega para tomar el mount" } else { "el mount aplica en el próximo deploy" }
             }),
             Self::ComposeCreate {
                 environment_id,
@@ -398,7 +398,7 @@ impl Plan {
         if self.expires_at <= Utc::now() {
             return Err(fail(
                 Kind::PlanUnavailable,
-                "plan has expired; generate and review a new plan",
+                "el plan caducó; genera y revisa uno nuevo",
             ));
         }
         let expected = digest_fields(
@@ -411,7 +411,7 @@ impl Plan {
             &self.action,
         )?;
         if expected != self.digest {
-            bail!("plan integrity check failed");
+            bail!("falló la verificación de integridad del plan");
         }
         Ok(())
     }
@@ -419,7 +419,7 @@ impl Plan {
         json!({
             "plan_id": self.id, "expires_at": self.expires_at, "organization": self.organization, "instance": self.instance,
             "operation": self.action.operation_name(), "changes": self.action.safe_summary(), "approval_token_sha256": self.digest,
-            "next_step": "A human must review this plan, then use apply with the exact approval_token_sha256 before expiry."
+            "next_step": "Una persona debe revisar este plan y luego usar apply con el approval_token_sha256 exacto antes de que caduque."
         })
     }
 }
@@ -469,7 +469,7 @@ pub fn save(root: &Path, plan: &Plan) -> Result<PathBuf> {
         .write(true)
         .create_new(true)
         .open(&temporary)
-        .context("cannot create protected plan")?;
+        .context("no se pudo crear el plan protegido")?;
     restrict(&file)?;
     file.write_all(&contents)?;
     file.sync_all()?;
@@ -479,34 +479,34 @@ pub fn save(root: &Path, plan: &Plan) -> Result<PathBuf> {
 }
 
 pub fn load(root: &Path, id: &str) -> Result<Plan> {
-    let id = Uuid::parse_str(id).context("plan must be a UUID")?;
+    let id = Uuid::parse_str(id).context("el plan debe ser un UUID")?;
     let path = root.join("plans").join(format!("{id}.json"));
     let metadata = fs::symlink_metadata(&path).map_err(|_| {
         fail(
             Kind::PlanUnavailable,
-            format!("plan {id} not found: it was never created here, or it was already applied"),
+            format!("no se encontró el plan {id}: nunca se creó aquí o ya se aplicó"),
         )
     })?;
     if metadata.file_type().is_symlink() {
-        bail!("refusing to load symbolic-link plan");
+        bail!("no se carga un plan que es un enlace simbólico");
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         if metadata.permissions().mode() & 0o077 != 0 {
-            bail!("refusing plan with group/world permissions");
+            bail!("no se acepta un plan con permisos para otros usuarios");
         }
     }
     let mut file = File::open(path)?;
     let mut contents = Vec::new();
     file.read_to_end(&mut contents)?;
-    serde_json::from_slice(&contents).context("invalid plan file")
+    serde_json::from_slice(&contents).context("archivo de plan inválido")
 }
 
 /// Atomically removes a plan from the runnable directory before a remote
 /// mutation. Failures leave it in `inflight/` to prevent unsafe replays.
 pub fn claim(root: &Path, id: &str) -> Result<Plan> {
-    let id = Uuid::parse_str(id).context("plan must be a UUID")?;
+    let id = Uuid::parse_str(id).context("el plan debe ser un UUID")?;
     let source = root.join("plans").join(format!("{id}.json"));
     let destination_dir = root.join("inflight");
     fs::create_dir_all(&destination_dir)?;
@@ -514,7 +514,7 @@ pub fn claim(root: &Path, id: &str) -> Result<Plan> {
     fs::rename(&source, &destination).map_err(|_| {
         fail(
             Kind::PlanUnavailable,
-            "plan is unavailable, already claimed, or not found",
+            "el plan no está disponible, ya se usó o no existe",
         )
     })?;
     let metadata = fs::symlink_metadata(&destination)?;
@@ -523,7 +523,7 @@ pub fn claim(root: &Path, id: &str) -> Result<Plan> {
     }
     let mut content = Vec::new();
     File::open(destination)?.read_to_end(&mut content)?;
-    let plan: Plan = serde_json::from_slice(&content).context("invalid plan file")?;
+    let plan: Plan = serde_json::from_slice(&content).context("archivo de plan inválido")?;
     plan.verify()?;
     Ok(plan)
 }

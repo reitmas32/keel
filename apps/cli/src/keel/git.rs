@@ -30,7 +30,7 @@ pub fn git(cwd: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
-fn git_ok(cwd: &Path, args: &[&str]) -> Option<String> {
+pub fn git_ok(cwd: &Path, args: &[&str]) -> Option<String> {
     Command::new("git")
         .args(args)
         .current_dir(cwd)

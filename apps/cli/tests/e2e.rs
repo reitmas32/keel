@@ -4,7 +4,7 @@
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use wiremock::matchers::{method, path, query_param};
+use wiremock::matchers::{body_partial_json, header, method, path, query_param};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 const NULL_DEVICE: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
@@ -285,7 +285,8 @@ async fn versions_deploys_and_rollbacks_go_through_keel() {
 
     // Without a terminal, missing choices are errors, not prompts.
     let out = w.keel(&w.repo, &["deploy", "-s", "stg"]);
-    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(out.status.code(), Some(32));
+    assert_eq!(json_of(&out)["error"]["kind"], "missing_input");
     assert!(String::from_utf8_lossy(&out.stdout).contains("Sin terminal interactiva"));
 
     // rollback goes back to the previous deployed version, with its commit.
@@ -302,7 +303,7 @@ async fn versions_deploys_and_rollbacks_go_through_keel() {
     let out = w.keel(&w.repo, &["rollback", "-s", "stg", "--json"]);
     assert_eq!(
         out.status.code(),
-        Some(1),
+        Some(32),
         "rollback without -y and without a terminal"
     );
     let out = w.keel(&w.repo, &["rollback", "-s", "stg", "-y", "--json"]);
@@ -414,7 +415,7 @@ async fn dokploy_plans_respect_keel_scopes() {
         json_of(&out)["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("empty")
+            .contains("vacío")
     );
 
     // Other variables change, with lengths only in the plan, and redeploy in the same plan.
@@ -538,4 +539,466 @@ async fn dokploy_needs_a_config_but_keel_commands_do_not() {
     );
     let out = w.keel(&w.repo, &["scopes", "--json"]);
     assert!(out.status.success());
+}
+
+/// Commits `file` with `message` and pushes it with tag `tag`; returns its sha.
+fn commit_and_tag(w: &World, file: &str, message: &str, tag: &str) -> String {
+    std::fs::write(w.repo.join(file), message).unwrap();
+    git(&w.repo, &["add", "."]);
+    git(&w.repo, &["commit", "--quiet", "-m", message]);
+    git(&w.repo, &["tag", tag]);
+    git(&w.repo, &["push", "--quiet", "origin", "main", tag]);
+    let out = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&w.repo)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().to_owned()
+}
+
+fn deploy_on(id: &str, service: &str, tag: &str, sha: &str, status: &str) -> Value {
+    let mut deploy = deploy_json(id, tag, sha, status);
+    deploy["service"] = json!(service);
+    deploy
+}
+
+#[tokio::test]
+async fn tokens_and_locks() {
+    let keel = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/whoami"))
+        .and(header("authorization", "Bearer keel_pat_ok"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"name": "ana", "auth": "required"})),
+        )
+        .mount(&keel)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/whoami"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({"error": "Token inválido."})))
+        .mount(&keel)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/app/services"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(scope_json()))
+        .mount(&keel)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/repos/acme/app/services/stg/lock"))
+        .and(body_partial_json(json!({"reason": "incidente"})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "alias": "stg", "reason": "incidente", "lockedBy": "ana", "createdAt": "2026-11-09T10:00:00Z"
+        })))
+        .mount(&keel)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/repos/acme/app/services/stg/lock"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"ok": true, "wasLocked": true})),
+        )
+        .mount(&keel)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/deploys"))
+        .respond_with(ResponseTemplate::new(423).set_body_json(json!({
+            "error": "El servicio stg está bloqueado: incidente (por ana, 09/11/26). Desbloquéalo con `keel unlock -s stg`."
+        })))
+        .mount(&keel)
+        .await;
+    let w = world(&keel.uri());
+    let login = |token: &str| {
+        w.keel(
+            &w.repo,
+            &[
+                "login",
+                "--org",
+                "github.com:acme",
+                "--api-url",
+                &keel.uri(),
+                "--token",
+                token,
+                "--json",
+            ],
+        )
+    };
+
+    // A rejected token is not saved.
+    let out = login("keel_pat_bad");
+    assert_eq!(
+        out.status.code(),
+        Some(29),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert_eq!(json_of(&out)["error"]["kind"], "unauthorized");
+    let out = login("keel_pat_ok");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert_eq!(json_of(&out)["user"], "ana");
+    let org_dir = w.home.join(if cfg!(windows) {
+        "github.com_acme"
+    } else {
+        "github.com:acme"
+    });
+    let saved = std::fs::read_to_string(org_dir.join("config.json")).unwrap();
+    assert!(saved.contains("keel_pat_ok"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(org_dir.join("config.json"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    // Every request carries it; KEEL_TOKEN wins over the saved one.
+    assert!(w.keel(&w.repo, &["scopes", "--json"]).status.success());
+    let out = w.keel_env(
+        &w.repo,
+        &["scopes", "--json"],
+        &[("KEEL_TOKEN", "keel_pat_env")],
+    );
+    assert!(out.status.success());
+    let requests = keel.received_requests().await.unwrap();
+    let auth: Vec<&str> = requests
+        .iter()
+        .filter(|r| r.url.path() == "/repos/acme/app/services")
+        .map(|r| r.headers.get("authorization").unwrap().to_str().unwrap())
+        .collect();
+    assert_eq!(auth, ["Bearer keel_pat_ok", "Bearer keel_pat_env"]);
+
+    // lock, a refused deploy, unlock.
+    let out = w.keel(&w.repo, &["lock", "-s", "stg", "-m", "incidente", "--json"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert_eq!(json_of(&out)["lock"]["lockedBy"], "ana");
+    let out = w.keel(&w.repo, &["lock", "-s", "stg", "--json"]);
+    assert_eq!(out.status.code(), Some(32));
+    commit_and_tag(&w, "a.txt", "feat: a", "v1.0.0");
+    let out = w.keel(&w.repo, &["deploy", "-s", "stg", "-v", "v1.0.0", "--json"]);
+    assert_eq!(
+        out.status.code(),
+        Some(31),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert_eq!(json_of(&out)["error"]["kind"], "locked");
+    let out = w.keel(&w.repo, &["unlock", "-s", "stg", "--json"]);
+    assert!(out.status.success());
+    assert_eq!(json_of(&out)["wasLocked"], true);
+}
+
+#[tokio::test]
+async fn promote_changes_and_rollback_on_failure() {
+    let keel = MockServer::start().await;
+    let w = world(&keel.uri());
+    let old = commit_and_tag(&w, "a.txt", "feat: base", "v1.0.0");
+    let new = commit_and_tag(&w, "b.txt", "feat: login (#7)", "v1.1.0");
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/app/services"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"services": [
+                {"alias": "stg", "kind": "compose", "dokployId": "c1",
+                 "current": deploy_on("s1", "stg", "v1.1.0", &new, "deployed"), "last": null},
+                {"alias": "prod", "kind": "compose", "dokployId": "c2",
+                 "current": deploy_on("p1", "prod", "v1.0.0", &old, "deployed"), "last": null},
+            ]})),
+        )
+        .mount(&keel)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/app/deploys"))
+        .and(query_param("service", "prod"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"deploys": [
+            deploy_on("p1", "prod", "v1.0.0", &old, "deployed"),
+        ]})))
+        .mount(&keel)
+        .await;
+    // v1.1.0 fails in Dokploy; going back to v1.0.0 works.
+    Mock::given(method("POST"))
+        .and(path("/deploys"))
+        .respond_with(|req: &Request| {
+            let body: Value = serde_json::from_slice(&req.body).unwrap();
+            let tag = body["tag"].as_str().unwrap();
+            let id = if tag == "v1.1.0" {
+                "dnew0000"
+            } else {
+                "drb00000"
+            };
+            ResponseTemplate::new(201).set_body_json(deploy_on(
+                id,
+                "prod",
+                tag,
+                body["sha"].as_str().unwrap(),
+                "deploying",
+            ))
+        })
+        .mount(&keel)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/deploys/dnew0000"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(deploy_on(
+            "dnew0000",
+            "prod",
+            "v1.1.0",
+            &new,
+            "deploy_failed",
+        )))
+        .mount(&keel)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/deploys/drb00000"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(deploy_on("drb00000", "prod", "v1.0.0", &old, "deployed")),
+        )
+        .mount(&keel)
+        .await;
+    let fast = [("KEEL_POLL_MS", "10")];
+
+    // changes: what v1.1.0 brings over what prod runs.
+    let out = w.keel(&w.repo, &["changes", "-s", "prod", "--json"]);
+    assert!(
+        out.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let changes = json_of(&out);
+    assert_eq!(changes["to"]["tag"], "v1.1.0");
+    assert_eq!(changes["commits"].as_array().unwrap().len(), 1);
+    assert_eq!(changes["prs"], json!([7]));
+
+    // promote needs -y without a terminal, then rolls back when Dokploy fails.
+    let out = w.keel(
+        &w.repo,
+        &["promote", "--from", "stg", "--to", "prod", "--json"],
+    );
+    assert_eq!(out.status.code(), Some(32));
+    let out = w.keel_env(
+        &w.repo,
+        &[
+            "promote",
+            "--from",
+            "stg",
+            "--to",
+            "prod",
+            "-y",
+            "--rollback-on-failure",
+            "--json",
+        ],
+        &fast,
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(28),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let error = json_of(&out);
+    assert_eq!(
+        error["error"]["details"]["deploy"]["status"],
+        "deploy_failed"
+    );
+    assert_eq!(error["error"]["details"]["rollback"]["status"], "deployed");
+    assert!(
+        error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("rollback a v1.0.0")
+    );
+    let posts: Vec<Value> = keel
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.url.path() == "/deploys" && r.method.as_str() == "POST")
+        .map(|r| serde_json::from_slice(&r.body).unwrap())
+        .collect();
+    assert_eq!(posts[0]["tag"], "v1.1.0");
+    assert_eq!(posts[0]["service"], "prod");
+    assert_eq!(posts[1]["tag"], "v1.0.0");
+    assert_eq!(posts[1]["sha"], old.as_str());
+
+    // The same through deploy.
+    let out = w.keel_env(
+        &w.repo,
+        &[
+            "deploy",
+            "-s",
+            "prod",
+            "-v",
+            "v1.1.0",
+            "--rollback-on-failure",
+            "--json",
+        ],
+        &fast,
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(28),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert_eq!(
+        json_of(&out)["error"]["details"]["rollback"]["tag"],
+        "v1.0.0"
+    );
+
+    // The other way round is a plain promote: stg runs something else.
+    let out = w.keel(
+        &w.repo,
+        &["promote", "--from", "prod", "--to", "stg", "-y", "--json"],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
+
+#[tokio::test]
+async fn env_diff_compares_names_only() {
+    let dokploy = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/project.all"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
+            "projectId": "p1", "name": "Shop",
+            "environments": [
+                {"environmentId": "e1", "name": "staging",
+                 "compose": [{"composeId": "cmp1", "name": "web", "appName": "shop-web-a", "composeStatus": "done"}]},
+                {"environmentId": "e2", "name": "production",
+                 "compose": [{"composeId": "cmp2", "name": "web", "appName": "shop-web-b", "composeStatus": "done"}]}
+            ]
+        }])))
+        .mount(&dokploy)
+        .await;
+    for (id, env) in [
+        ("cmp1", "A=only-a\nSHARED=same\nTOKEN=stg-secret\n"),
+        ("cmp2", "SHARED=same\nTOKEN=prod-secret\nB=only-b\n"),
+    ] {
+        Mock::given(method("GET"))
+            .and(path("/api/compose.one"))
+            .and(query_param("composeId", id))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "composeId": id, "name": "web", "appName": "x", "composeStatus": "done",
+                "env": env, "composeFile": "services: {}\n", "sourceType": "raw"
+            })))
+            .mount(&dokploy)
+            .await;
+    }
+    let keel = fake_keel().await;
+    let w = world(&keel.uri());
+    w.dokploy(&dokploy.uri());
+    let out = w.keel(
+        &w.outside,
+        &["env", "diff", "staging/web", "production/web", "--json"],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    for secret in ["only-a", "only-b", "stg-secret", "prod-secret", "=same"] {
+        assert!(!text.contains(secret), "{text}");
+    }
+    let diff = &json_of(&out)["data"]["diff"];
+    assert_eq!(diff["only_in_a"], json!(["A"]));
+    assert_eq!(diff["only_in_b"], json!(["B"]));
+    assert_eq!(diff["different_value"], json!(["TOKEN"]));
+    assert_eq!(diff["same_value"], json!(["SHARED"]));
+}
+
+#[tokio::test]
+async fn init_and_skills() {
+    let keel = fake_keel().await;
+    let w = world(&keel.uri());
+    let no_gh = [("KEEL_GH", "keel-test-no-gh")];
+
+    // init --check reports what is missing; init writes the workflow.
+    let out = w.keel_env(&w.repo, &["init", "--check", "--json"], &no_gh);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let report = json_of(&out);
+    assert_eq!(report["error"]["details"]["workflow"]["status"], "missing");
+    assert_eq!(report["error"]["details"]["keel"]["linked"], true);
+    let out = w.keel_env(&w.repo, &["init", "--json"], &no_gh);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert_eq!(json_of(&out)["workflow"]["status"], "created");
+    assert!(w.repo.join(".github/workflows/keel-release.yml").exists());
+    let out = w.keel_env(&w.repo, &["init", "--check", "--json"], &no_gh);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    std::fs::write(
+        w.repo.join(".github/workflows/keel-release.yml"),
+        "name: mine\n",
+    )
+    .unwrap();
+    let out = w.keel_env(&w.repo, &["init", "--json"], &no_gh);
+    assert_eq!(out.status.code(), Some(20));
+    let out = w.keel_env(&w.repo, &["init", "--force", "--json"], &no_gh);
+    assert!(out.status.success());
+
+    // skills from this checkout, for Claude and Codex/Copilot.
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let source = source.to_str().unwrap();
+    let out = w.keel(
+        &w.repo,
+        &["skills", "add", "keel-cli", "--from", source, "--json"],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    for dir in [".claude/skills/keel-cli", ".agents/skills/keel-cli"] {
+        assert!(w.repo.join(dir).join("SKILL.md").exists(), "{dir}");
+        assert!(w.repo.join(dir).join(".keel-skill.json").exists(), "{dir}");
+    }
+    let list = json_of(&w.keel(&w.repo, &["skills", "--from", source, "--json"]));
+    assert!(
+        list["available"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("keel-cli"))
+    );
+    assert_eq!(list["installed"].as_array().unwrap().len(), 2);
+    // A skill somebody wrote by hand is never touched.
+    std::fs::create_dir_all(w.repo.join(".claude/skills/keel-docs")).unwrap();
+    let out = w.keel(
+        &w.repo,
+        &[
+            "skills",
+            "add",
+            "keel-docs",
+            "--agent",
+            "claude",
+            "--from",
+            source,
+            "--json",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(20));
+    let out = w.keel(&w.repo, &["skills", "remove", "keel-cli", "--json"]);
+    assert!(out.status.success());
+    assert!(!w.repo.join(".claude/skills/keel-cli").exists());
 }

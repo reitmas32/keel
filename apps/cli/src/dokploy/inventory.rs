@@ -210,11 +210,11 @@ pub fn resolve<'a>(services: &'a [Service], query: &str) -> Result<&'a Service> 
         [head, name] => (Some(*head), None, *name),
         [project, environment, name] => (Some(*project), Some(*environment), *name),
         _ => bail!(
-            "invalid service query {query:?}: use service, environment/service or project/environment/service"
+            "consulta de servicio inválida {query:?}: usa servicio, entorno/servicio o proyecto/entorno/servicio"
         ),
     };
     if name.is_empty() {
-        bail!("invalid service query {query:?}");
+        bail!("consulta de servicio inválida {query:?}");
     }
     let pool: Vec<&Service> = services
         .iter()
@@ -241,12 +241,12 @@ pub fn resolve<'a>(services: &'a [Service], query: &str) -> Result<&'a Service> 
         [only] => Ok(only),
         [] => Err(fail(
             Kind::ServiceNotFound,
-            format!("no service matches {query:?}; list them with `get services`"),
+            format!("ningún servicio coincide con {query:?}; lístalos con `get services`"),
         )),
         many => Err(fail_with(
             Kind::ServiceAmbiguous,
             format!(
-                "{query:?} matches {} services; repeat with project/environment/service",
+                "{query:?} coincide con {} servicios; repite con proyecto/entorno/servicio",
                 many.len()
             ),
             serde_json::json!({"candidates": many.iter().map(|s| s.label()).collect::<Vec<_>>()}),
