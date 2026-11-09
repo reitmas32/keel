@@ -14,10 +14,34 @@ services:
       KEEL_ADMIN_PASSWORD: ${KEEL_ADMIN_PASSWORD:?Contraseña del admin, mínimo 12 caracteres}
       KEEL_CI_EXPIRY_MINUTES: ${KEEL_CI_EXPIRY_MINUTES:-60}
       KEEL_DEPLOY_TIMEOUT_MINUTES: ${KEEL_DEPLOY_TIMEOUT_MINUTES:-15}
+      # Base de datos: SQLite en el volumen /data por defecto. Para Postgres (p.ej. varias réplicas de keel),
+      # descomenta estas dos líneas y define POSTGRES_DSN en el Environment.
+      # DB_ENGINE: postgres
+      # POSTGRES_DSN: ${POSTGRES_DSN:?DSN de Postgres, p.ej. postgres://keel:contraseña@postgres:5432/keel}
     volumes:
       - keel-data:/data
     expose:
       - "3000"
+    # depends_on:
+    #   postgres:
+    #     condition: service_healthy
+
+  # Opcional: un Postgres junto a keel. Con uno externo (o una base de Dokploy) basta con POSTGRES_DSN.
+  # postgres:
+  #   image: postgres:17
+  #   restart: unless-stopped
+  #   environment:
+  #     POSTGRES_USER: keel
+  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Contraseña de Postgres}
+  #     POSTGRES_DB: keel
+  #   volumes:
+  #     - keel-postgres:/var/lib/postgresql/data
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U keel -d keel"]
+  #     interval: 5s
+  #     timeout: 5s
+  #     retries: 10
 
 volumes:
   keel-data:
+  # keel-postgres:

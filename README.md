@@ -189,7 +189,7 @@ python3 -m unittest discover -s plugins/tests
 
 ## Levantar una instancia del servidor en Dokploy
 
-La API, el admin y el worker corren en **una sola imagen** (`getfoundathyon/keel-api`) y en un solo contenedor: comparten la base SQLite del volumen `/data`. Levanta una instancia por organización (p.ej. `keel.jalo…` y `keel.konectus…`).
+La API, el admin y el worker corren en **una sola imagen** (`getfoundathyon/keel-api`) y en un solo contenedor: comparten la base SQLite del volumen `/data` (o un Postgres, ver [Usar Postgres](#usar-postgres-en-lugar-de-sqlite)). Levanta una instancia por organización (p.ej. `keel.jalo…` y `keel.konectus…`).
 
 ### 1. Crea el servicio Compose
 
@@ -206,6 +206,10 @@ services:
       KEEL_ADMIN_PASSWORD: ${KEEL_ADMIN_PASSWORD:?Contraseña del admin, mínimo 12 caracteres}
       KEEL_CI_EXPIRY_MINUTES: ${KEEL_CI_EXPIRY_MINUTES:-60}
       KEEL_DEPLOY_TIMEOUT_MINUTES: ${KEEL_DEPLOY_TIMEOUT_MINUTES:-15}
+      # Base de datos: SQLite en el volumen /data por defecto. Para Postgres (p.ej. varias réplicas de keel),
+      # descomenta estas dos líneas y define POSTGRES_DSN en el Environment.
+      # DB_ENGINE: postgres
+      # POSTGRES_DSN: ${POSTGRES_DSN:?DSN de Postgres, p.ej. postgres://keel:contraseña@postgres:5432/keel}
     volumes:
       - keel-data:/data
     expose:
@@ -214,6 +218,8 @@ services:
 volumes:
   keel-data:
 ```
+
+El archivo del repo trae además, comentado, un servicio `postgres` de ejemplo.
 
 - Usa una versión fija (`:v0.3.0`) en lugar de `:latest`, así un redeploy no cambia de versión sin que lo decidas. Para actualizar keel, cambia la tag y redespliega.
 - `keel-data` es un volumen con nombre: la base (scopes, servicios, tokens de CI e historial) sobrevive a redeploys y actualizaciones de la imagen.
@@ -237,6 +243,8 @@ KEEL_ADMIN_PASSWORD=<contraseña larga y aleatoria>
 | `KEEL_CI_EXPIRY_MINUTES`      | no (60)              | Minutos que un deploy espera al CI antes de expirar          |
 | `KEEL_DEPLOY_TIMEOUT_MINUTES` | no (15)              | Minutos que Dokploy tiene para terminar un deployment        |
 | `KEEL_DB_PATH`                | no (`/data/keel.db`) | Ruta de la base SQLite dentro del contenedor                 |
+| `DB_ENGINE`                   | no (`sqlite`)        | `sqlite` o `postgres`                                        |
+| `POSTGRES_DSN`                | con `postgres`       | `postgres://usuario:contraseña@host:5432/base`               |
 
 Si falta una variable requerida, el deploy del compose falla mostrando su descripción. Para generar la contraseña: `openssl rand -base64 24`.
 
@@ -264,6 +272,22 @@ Debe devolver `{"ok":true}`. El admin queda en `https://keel.konectus.com/` (ent
 
 > La GitHub Action tiene que poder llegar a `https://<dominio>/api/ci-result`. Con runners hospedados por GitHub, el dominio debe ser público (el resto de la API y el admin pueden protegerse aparte); si keel solo es accesible en una red interna, usa runners self-hosted dentro de esa red.
 
+### Usar Postgres en lugar de SQLite
+
+Con `DB_ENGINE=postgres` y `POSTGRES_DSN`, keel guarda todo en Postgres (probado con la 17) y al arrancar crea o migra sus tablas (registradas en `schema_migrations`). Con Postgres puedes correr **varias réplicas** de keel: los cambios de estado de un deploy son atómicos y solo una réplica lo ejecuta en Dokploy. Con SQLite, una sola réplica.
+
+Para pasar una instancia existente de SQLite a Postgres, una sola vez:
+
+1. Detén keel y copia la carpeta de la base fuera del volumen, con sus archivos `-wal` si los hay (p.ej. `docker cp <contenedor>:/data ./keel-data`).
+2. Desde un clon de este repo, con `pnpm install` hecho:
+
+   ```bash
+   pnpm --filter @keel/server db:sqlite-to-postgres "$PWD/keel-data/keel.db" postgres://keel:contraseña@host:5432/keel
+   ```
+
+   Crea las tablas, copia todas en una transacción (si algo falla no escribe nada) e imprime las filas copiadas por tabla. Si Postgres ya tiene datos de keel se niega; `--force` los borra y copia de nuevo.
+3. Define `DB_ENGINE=postgres` y `POSTGRES_DSN` en el Environment y redespliega.
+
 ## Vincular un repo
 
 1. Entra al admin (`https://<dominio>/`) con `KEEL_ADMIN_PASSWORD`.
@@ -286,7 +310,7 @@ Debe devolver `{"ok":true}`. El admin queda en `https://keel.konectus.com/` (ent
 
 ```bash
 pnpm install
-pnpm test        # vitest en todos los paquetes
+pnpm test        # vitest en todos los paquetes; los tests del store del servidor corren en SQLite y en Postgres (PGlite)
 pnpm typecheck
 pnpm lint
 pnpm build
@@ -299,13 +323,15 @@ cargo run -p keel -- --help
 
 ```
 apps/cli        CLI keel (Rust): versiones y deploys vía keel, operación de Dokploy
-apps/server     Next.js: API (route handlers), admin y worker (instrumentation.ts), SQLite con node:sqlite
+apps/server     Next.js: API (route handlers), admin y worker (instrumentation.ts), SQLite (node:sqlite) o Postgres (pg)
 packages/shared Esquemas de la API y máquina de estados del deploy
 deploy/         docker-compose de ejemplo para Dokploy
 templates/      Workflow de GitHub para los repos que se despliegan con keel
 ```
 
 Para el servidor en local, copia `apps/server/.env.example` a `apps/server/.env` y ejecuta `pnpm --filter @keel/server dev`.
+
+Los tests de Postgres usan PGlite (Postgres en WASM, sin Docker). Para correrlos contra un servidor real, define `TEST_POSTGRES_DSN=postgres://…` (cada contexto de test usa su propio schema); así lo hace el CI con `postgres:17`.
 
 ### Publicar una versión de keel
 
@@ -325,5 +351,5 @@ El token se crea en Docker Hub → Account settings → Personal access tokens.
 
 - Application solo con proveedor Docker; Compose solo si la imagen toma el tag de una variable de su Environment.
 - `POST /api/deploys` no tiene autenticación: cualquiera que alcance la API puede pedir un deploy (solo se ejecuta si el CI de ese commit pasó).
-- El worker corre dentro del proceso de Next.js: una sola réplica por instancia.
+- El worker corre dentro del proceso de Next.js. Con SQLite, una sola réplica por instancia; con Postgres pueden ser varias.
 - En Windows, las carpetas de `~/.keel` se llaman `github.com_<org>` (`:` no es válido en un nombre de archivo).
