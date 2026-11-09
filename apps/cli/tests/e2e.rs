@@ -32,7 +32,13 @@ fn git(dir: &Path, args: &[&str]) {
 /// A repo whose origin reads as github.com:acme/app but pushes to a local bare repo.
 fn world(keel_url: &str) -> World {
     let root = tempfile::tempdir().unwrap();
-    let base = root.path().canonicalize().unwrap();
+    // macOS needs the canonical /private/var path; on Windows canonicalize gives a
+    // \\?\ verbatim path that git can't use.
+    let base = if cfg!(windows) {
+        root.path().to_path_buf()
+    } else {
+        root.path().canonicalize().unwrap()
+    };
     let bare = base.join("origin.git");
     let repo = base.join("app");
     let outside = base.join("elsewhere");
@@ -62,7 +68,10 @@ fn world(keel_url: &str) -> World {
         &repo,
         &[
             "config",
-            &format!("url.{}.insteadOf", bare.display()),
+            &format!(
+                "url.{}.insteadOf",
+                bare.display().to_string().replace('\\', "/")
+            ),
             "git@github.com:acme/app.git",
         ],
     );
