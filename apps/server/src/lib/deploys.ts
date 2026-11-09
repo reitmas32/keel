@@ -107,7 +107,8 @@ export async function recordCiResult(
 
 /**
  * Registers a version `keel create-version` just pushed, so keel can show it as pending before its CI
- * reports. Unauthenticated and informational: deploys still wait for the token-signed `ci-result`.
+ * reports. Needs the publisher role (checked by the handler) and is informational: deploys still wait for the
+ * token-signed `ci-result`.
  */
 export async function registerVersion(store: Store, req: RegisterVersionRequest, now: Date): Promise<Version> {
   const scope = await store.getScopeByRepo(req.repo);

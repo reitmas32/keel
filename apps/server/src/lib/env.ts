@@ -1,4 +1,4 @@
-import { API_AUTH_MODES } from "@keel/shared";
+import { ANONYMOUS_ROLES, API_AUTH_MODES } from "@keel/shared";
 import { z } from "zod";
 
 export const DB_ENGINES = ["sqlite", "postgres"] as const;
@@ -38,6 +38,12 @@ const envSchema = z
     KEEL_DEPLOY_TIMEOUT_MINUTES: z.coerce.number().int().positive().default(15),
     // `required`: every /api route except /health and /ci-result needs a personal API token.
     KEEL_API_AUTH: z.enum(API_AUTH_MODES).default("optional"),
+    // What /api calls without a token may do while KEEL_API_AUTH=optional. `deployer` keeps keel's old behavior.
+    KEEL_ANONYMOUS_ROLE: optional(
+      z
+        .enum(ANONYMOUS_ROLES, { error: "debe ser none, viewer, publisher o deployer (por defecto deployer)." })
+        .default("deployer"),
+    ),
   })
   .superRefine((env, ctx) => {
     if (env.DB_ENGINE === "postgres" && !env.POSTGRES_DSN) {

@@ -4,6 +4,15 @@
 // Byte order, like SQLite's BINARY collation, so ORDER BY and LIKE behave the same in both engines.
 const TEXT = 'TEXT COLLATE "C"';
 
+/**
+ * The member that owns the API tokens created before members existed, and the one `KEEL_ADMIN_PASSWORD` signs in as
+ * (break-glass). It has no password of its own. Both engines create it in their members migration.
+ */
+export const BOOTSTRAP_ADMIN = Object.freeze({ id: "bootstrap-admin", name: "admin", email: "admin@localhost" });
+
+/** SQL for "now" as an ISO-8601 UTC string, the format keel stores dates in. */
+export const POSTGRES_NOW_ISO = `to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`;
+
 /** Key of the advisory lock that serializes migrations when several replicas start at once. */
 export const MIGRATION_LOCK_KEY = 0x6b65656c; // "keel"
 
@@ -92,10 +101,87 @@ export const POSTGRES_MIGRATIONS = [
       )`,
     ],
   },
+  {
+    version: 2,
+    name: "miembros, roles, invitaciones y auditoría",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS members (
+        id            ${TEXT} PRIMARY KEY,
+        name          ${TEXT} NOT NULL,
+        email         ${TEXT} NOT NULL UNIQUE,
+        role          ${TEXT} NOT NULL,
+        password_hash ${TEXT},
+        status        ${TEXT} NOT NULL,
+        created_at    ${TEXT} NOT NULL,
+        last_login_at ${TEXT}
+      )`,
+      `CREATE TABLE IF NOT EXISTS member_grants (
+        id              ${TEXT} PRIMARY KEY,
+        member_id       ${TEXT} NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+        repo_pattern    ${TEXT} NOT NULL DEFAULT '*',
+        service_pattern ${TEXT} NOT NULL DEFAULT '*',
+        role            ${TEXT} NOT NULL,
+        created_at      ${TEXT} NOT NULL
+      )`,
+      "CREATE INDEX IF NOT EXISTS member_grants_member ON member_grants (member_id)",
+      `CREATE TABLE IF NOT EXISTS invites (
+        token_hash ${TEXT} PRIMARY KEY,
+        member_id  ${TEXT} NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+        expires_at ${TEXT} NOT NULL,
+        used_at    ${TEXT}
+      )`,
+      "CREATE INDEX IF NOT EXISTS invites_member ON invites (member_id)",
+      `ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS member_id ${TEXT} REFERENCES members(id) ON DELETE CASCADE`,
+      `ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS max_role ${TEXT}`,
+      "CREATE INDEX IF NOT EXISTS api_tokens_member ON api_tokens (member_id)",
+      // `seq`, like deploys': insertion order for entries written in the same millisecond.
+      `CREATE TABLE IF NOT EXISTS audit_log (
+        id              ${TEXT} PRIMARY KEY,
+        at              ${TEXT} NOT NULL,
+        actor           ${TEXT} NOT NULL,
+        actor_member_id ${TEXT} REFERENCES members(id) ON DELETE SET NULL,
+        action          ${TEXT} NOT NULL,
+        repo            ${TEXT},
+        service         ${TEXT},
+        details         ${TEXT},
+        seq             BIGSERIAL NOT NULL
+      )`,
+      "CREATE INDEX IF NOT EXISTS audit_log_at ON audit_log (at)",
+      "CREATE INDEX IF NOT EXISTS audit_log_repo ON audit_log (repo, at)",
+      bootstrapAdminSql(POSTGRES_NOW_ISO),
+      // Tokens created before members belong to the bootstrap admin.
+      `UPDATE api_tokens SET member_id = '${BOOTSTRAP_ADMIN.id}' WHERE member_id IS NULL`,
+    ],
+  },
 ];
 
+/**
+ * Inserts the bootstrap admin unless it (or its email) already exists. `createdAtSql` is the SQL expression for
+ * the creation date, which differs between engines.
+ *
+ * @param {string} createdAtSql
+ */
+export function bootstrapAdminSql(createdAtSql) {
+  const { id, name, email } = BOOTSTRAP_ADMIN;
+  return `INSERT INTO members (id, name, email, role, password_hash, status, created_at)
+    VALUES ('${id}', '${name}', '${email}', 'admin', NULL, 'active', ${createdAtSql})
+    ON CONFLICT DO NOTHING`;
+}
+
 /** keel's tables in foreign-key order: a table only references tables before it. */
-export const TABLES = ["scopes", "services", "ci_results", "deploys", "versions", "api_tokens", "service_locks"];
+export const TABLES = [
+  "scopes",
+  "services",
+  "ci_results",
+  "deploys",
+  "versions",
+  "members",
+  "member_grants",
+  "invites",
+  "api_tokens",
+  "service_locks",
+  "audit_log",
+];
 
 /**
  * Applies the pending migrations. `query` must run on one connection that is already inside a transaction,

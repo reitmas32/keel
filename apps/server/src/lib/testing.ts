@@ -1,10 +1,12 @@
+import type { Role } from "@keel/shared";
+import { createApiToken } from "./api-auth";
 import type { AppContext } from "./context";
 import type { Db } from "./db";
 import { openSqliteDb } from "./db-sqlite";
 import type { DokployClient, DokployDeploymentStatus, DokployTarget } from "./dokploy";
 import type { Env } from "./env";
 import { addService, createScope } from "./scopes";
-import { Store } from "./store";
+import { type Member, Store } from "./store";
 import { DeployWorker } from "./worker";
 
 export const SHA = "a".repeat(40);
@@ -101,7 +103,7 @@ export async function createTestContext() {
     },
     clock.now(),
   );
-  const env = { KEEL_API_AUTH: "optional" } as Env;
+  const env = { KEEL_API_AUTH: "optional", KEEL_ANONYMOUS_ROLE: "deployer" } as Env;
   const ctx = { env, store, dokploy, worker, now: clock.now } as unknown as AppContext;
   return { ctx, env, db, replica, store, dokploy, worker, clock, scope, service, ciToken };
 }
@@ -116,4 +118,38 @@ export function apiRequest(
     headers: { "content-type": "application/json", ...headers },
     ...(body !== undefined && { body: typeof body === "string" ? body : JSON.stringify(body) }),
   });
+}
+
+let memberCount = 0;
+
+/** An active member with `role` and these grants (`[repo, service, role]`). */
+export async function addMember(
+  store: Store,
+  now: Date,
+  { name, role = "deployer", grants = [] }: { name?: string; role?: Role; grants?: [string, string, Role][] } = {},
+): Promise<Member> {
+  const n = ++memberCount;
+  const member = await store.createMember(
+    { name: name ?? `miembro${n}`, email: `${name ?? "miembro"}${n}@example.com`, role, status: "active" },
+    now,
+  );
+  for (const [repoPattern, servicePattern, grantRole] of grants) {
+    await store.addGrant({ memberId: member.id, repoPattern, servicePattern, role: grantRole }, now);
+  }
+  return member;
+}
+
+/** A member (see addMember) and an API token of theirs, named like the member, optionally capped at `maxRole`. */
+export async function memberToken(
+  store: Store,
+  now: Date,
+  options: Parameters<typeof addMember>[2] & { maxRole?: Role } = {},
+): Promise<{ member: Member; token: string; headers: { authorization: string } }> {
+  const member = await addMember(store, now, options);
+  const { token } = await createApiToken(
+    store,
+    { name: `${member.name}-${member.id.slice(0, 6)}`, owner: member, maxRole: options.maxRole ?? null },
+    now,
+  );
+  return { member, token, headers: { authorization: `Bearer ${token}` } };
 }

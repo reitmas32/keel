@@ -7,6 +7,7 @@ import { copySqliteToPostgres } from "../../scripts/sqlite-to-postgres.mjs";
 import type { Db, SqlValue } from "./db";
 import { openSqliteDb } from "./db-sqlite";
 import { registerVersion, requestDeploy } from "./deploys";
+import { BOOTSTRAP_ADMIN } from "./postgres-schema.mjs";
 import { Store } from "./store";
 import { openTestDb, SHA, TEST_DB_ENGINE } from "./testing";
 
@@ -49,7 +50,21 @@ describe.runIf(TEST_DB_ENGINE === "postgres")("scripts/sqlite-to-postgres.mjs", 
     await requestDeploy(source, { repo: "konectus-io/app", tag: "v1", sha: SHA, service: "api-prod" }, now, "rafa");
     await requestDeploy(source, { repo: "konectus-io/app", tag: "v2", sha: "b".repeat(40), service: "api-prod" }, now);
     await source.upsertCiResult({ repo: "konectus-io/app", sha: SHA, tag: "v1", status: "success", receivedAt: "x" });
-    await source.createApiToken({ name: "rafa", tokenHash: "th" }, now);
+    const member = await source.createMember(
+      { name: "Rafa", email: "rafa@example.com", role: "deployer", status: "active" },
+      now,
+    );
+    await source.addGrant(
+      { memberId: member.id, repoPattern: "konectus-io/*", servicePattern: "prod*", role: "viewer" },
+      now,
+    );
+    await source.createInvite({ tokenHash: "ih", memberId: member.id, expiresAt: now });
+    await source.createApiToken({ name: "rafa", tokenHash: "th", memberId: member.id, maxRole: "publisher" }, now);
+    await source.recordAudit(
+      { actor: "Rafa", actorMemberId: member.id, action: "lock.set", repo: "konectus-io/app" },
+      now,
+    );
+    await source.recordAudit({ actor: "ci", action: "ci.result", details: { tag: "v1" } }, now);
     await source.lockService({ serviceId: service.id, reason: "release", lockedBy: "rafa" }, now);
     await sqliteDb.close();
 
@@ -60,8 +75,13 @@ describe.runIf(TEST_DB_ENGINE === "postgres")("scripts/sqlite-to-postgres.mjs", 
       { table: "ci_results", rows: 1 },
       { table: "deploys", rows: 2 },
       { table: "versions", rows: 1 },
+      // The bootstrap admin and Rafa.
+      { table: "members", rows: 2 },
+      { table: "member_grants", rows: 1 },
+      { table: "invites", rows: 1 },
       { table: "api_tokens", rows: 1 },
       { table: "service_locks", rows: 1 },
+      { table: "audit_log", rows: 2 },
     ]);
 
     const before = new Store(openSqliteDb(path));
@@ -74,6 +94,15 @@ describe.runIf(TEST_DB_ENGINE === "postgres")("scripts/sqlite-to-postgres.mjs", 
     );
     expect(await after.listVersions("konectus-io/app")).toEqual(await before.listVersions("konectus-io/app"));
     expect(await after.listApiTokens()).toEqual(await before.listApiTokens());
+    expect(await after.listMembers()).toEqual(await before.listMembers());
+    expect(await after.getMemberPasswordHash(member.id)).toBeNull();
+    expect(await after.listGrants(member.id)).toEqual(await before.listGrants(member.id));
+    expect(await after.getInvite("ih")).toEqual(await before.getInvite("ih"));
+    // Same order too: entries written in the same millisecond keep SQLite's insertion order.
+    expect(await after.listAudit()).toEqual(await before.listAudit());
+    // The copied audit log keeps growing after the copied entries.
+    await after.recordAudit({ actor: "x", action: "login" }, now);
+    expect((await after.listAudit())[0]?.actor).toBe("x");
     expect(await after.getServiceLock(service.id)).toEqual(await before.getServiceLock(service.id));
     expect(await after.getCiTokenHash(scope.id)).toBe("hash");
 
@@ -89,6 +118,26 @@ describe.runIf(TEST_DB_ENGINE === "postgres")("scripts/sqlite-to-postgres.mjs", 
       now,
     );
     expect((await after.listDeploys({}, { newestFirst: true }))[0]?.id).toBe(next.id);
+  });
+
+  it("gives the tokens of a database from before members to the bootstrap admin", async () => {
+    dir = await mkdtemp(join(tmpdir(), "keel-copy-"));
+    const path = join(dir, "v06.db");
+    const old = new DatabaseSync(path);
+    old.exec(`
+      CREATE TABLE api_tokens (id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL, last_used_at TEXT);
+      INSERT INTO api_tokens VALUES ('t1', 'rafa', 'h1', '2026-10-26T00:00:00Z', NULL);
+    `);
+    old.close();
+
+    const { db } = await openTestDb();
+    expect(await copy(db, path)).toContainEqual({ table: "api_tokens", rows: 1 });
+    const store = new Store(db);
+    expect(await store.listMembers()).toEqual([expect.objectContaining({ id: BOOTSTRAP_ADMIN.id, role: "admin" })]);
+    expect(await store.listApiTokens()).toEqual([
+      expect.objectContaining({ id: "t1", name: "rafa", memberId: BOOTSTRAP_ADMIN.id }),
+    ]);
   });
 
   it("copies a v0.1.0 database that lacks newer columns and tables", async () => {

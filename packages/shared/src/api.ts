@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { DEPLOY_STATUSES } from "./deploy";
+import { ANONYMOUS_ROLES, ROLES } from "./roles";
 
 export const CI_STATUSES = ["success", "failure", "cancelled"] as const;
 
@@ -103,10 +104,29 @@ export type UnlockServiceResponse = z.infer<typeof unlockServiceResponseSchema>;
 export const API_AUTH_MODES = ["optional", "required"] as const;
 export type ApiAuthMode = (typeof API_AUTH_MODES)[number];
 
-/** `GET /whoami`: the API token's name (null without one) and whether this server requires a token. */
+/** A member's grant as `GET /whoami` lists it: `role` on the repos and services matching the glob patterns. */
+export const whoamiGrantSchema = z.object({
+  repo: z.string(),
+  service: z.string(),
+  role: z.enum(ROLES),
+});
+export type WhoamiGrant = z.infer<typeof whoamiGrantSchema>;
+
+/**
+ * `GET /whoami`: who the call runs as and whether this server requires a token. Without a token `name`, `email`
+ * and `role` are null and `anonymousRole` says what anonymous calls may do. The fields after `auth` are optional
+ * because servers before members (v0.7.0) only send `name` (the token's name) and `auth`.
+ */
 export const whoamiResponseSchema = z.object({
+  /** The member's name (the token's name for tokens created before members); null without a token. */
   name: z.string().nullable(),
   auth: z.enum(API_AUTH_MODES),
+  email: z.string().nullable().optional(),
+  /** The member's base role, capped by the token's `tokenMaxRole`; null without a token. */
+  role: z.enum(ROLES).nullable().optional(),
+  grants: z.array(whoamiGrantSchema).optional(),
+  tokenMaxRole: z.enum(ROLES).nullable().optional(),
+  anonymousRole: z.enum(ANONYMOUS_ROLES).optional(),
 });
 export type WhoamiResponse = z.infer<typeof whoamiResponseSchema>;
 

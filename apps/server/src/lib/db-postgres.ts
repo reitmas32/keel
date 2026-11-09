@@ -103,8 +103,12 @@ export class PostgresDb extends PostgresConnection {
     }
   }
 
-  override async close(): Promise<void> {
-    await this.pool.end();
+  private closing: Promise<void> | undefined;
+
+  /** Ends the pool once; calling it again waits for that same end (pg throws if `end` runs twice). */
+  override close(): Promise<void> {
+    this.closing ??= this.pool.end();
+    return this.closing;
   }
 }
 

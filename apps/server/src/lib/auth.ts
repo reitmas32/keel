@@ -19,15 +19,16 @@ export function checkPassword(input: string, password: string): boolean {
   return safeEqual(input, password);
 }
 
-/** `<expiresAtMs>.<hmac>` — stateless, nothing to store server-side. */
-export function createSession(password: string, now: Date): string {
-  const expiresAt = String(now.getTime() + SESSION_HOURS * 3_600_000);
-  return `${expiresAt}.${sign(expiresAt, password)}`;
+/** `<memberId>.<expiresAtMs>.<hmac>` — stateless; the member is re-read (and must be active) on every request. */
+export function createSession(memberId: string, password: string, now: Date): string {
+  const payload = `${memberId}.${now.getTime() + SESSION_HOURS * 3_600_000}`;
+  return `${payload}.${sign(payload, password)}`;
 }
 
-export function verifySession(value: string | undefined, password: string, now: Date): boolean {
-  if (!value) return false;
-  const [expiresAt, signature] = value.split(".");
-  if (!expiresAt || !signature || !safeEqual(signature, sign(expiresAt, password))) return false;
-  return Number(expiresAt) > now.getTime();
+/** The member id of a valid, unexpired session, or undefined. */
+export function verifySession(value: string | undefined, password: string, now: Date): string | undefined {
+  const [memberId, expiresAt, signature, ...rest] = value?.split(".") ?? [];
+  if (!memberId || !expiresAt || !signature || rest.length > 0) return undefined;
+  if (!safeEqual(signature, sign(`${memberId}.${expiresAt}`, password))) return undefined;
+  return Number(expiresAt) > now.getTime() ? memberId : undefined;
 }

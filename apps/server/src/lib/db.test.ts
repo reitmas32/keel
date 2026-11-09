@@ -3,9 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
+import type { SqlValue } from "./db";
 import { toPostgresPlaceholders } from "./db-postgres";
 import { openSqliteDb } from "./db-sqlite";
-import { POSTGRES_MIGRATIONS } from "./postgres-schema.mjs";
+import { applyPostgresMigrations, BOOTSTRAP_ADMIN, POSTGRES_MIGRATIONS } from "./postgres-schema.mjs";
 import { Store } from "./store";
 import { openTestDb, TEST_DB_ENGINE } from "./testing";
 
@@ -49,6 +50,42 @@ describe.runIf(TEST_DB_ENGINE === "sqlite")("openSqliteDb", () => {
     await expect(openSqliteDb(path).close()).resolves.toBeUndefined();
   });
 
+  it("gives the API tokens of a v0.6.0 database to the bootstrap admin", async () => {
+    dir = await mkdtemp(join(tmpdir(), "keel-db-"));
+    const path = join(dir, "keel.db");
+    const old = new DatabaseSync(path);
+    old.exec(`
+      CREATE TABLE api_tokens (id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL, last_used_at TEXT);
+      INSERT INTO api_tokens VALUES ('t1', 'rafa', 'h1', '2026-10-26T00:00:00Z', NULL);
+    `);
+    old.close();
+
+    const db = openSqliteDb(path);
+    const store = new Store(db);
+    expect(await store.getMember(BOOTSTRAP_ADMIN.id)).toMatchObject({
+      name: "admin",
+      email: "admin@localhost",
+      role: "admin",
+      status: "active",
+      hasPassword: false,
+    });
+    expect(await store.listApiTokens()).toEqual([
+      expect.objectContaining({
+        id: "t1",
+        name: "rafa",
+        memberId: BOOTSTRAP_ADMIN.id,
+        maxRole: null,
+        ownerName: "admin",
+      }),
+    ]);
+    await db.close();
+    // Opening again neither duplicates the admin nor fails.
+    const again = openSqliteDb(path);
+    expect(await new Store(again).listMembers()).toHaveLength(1);
+    await again.close();
+  });
+
   it("rolls back a transaction that throws, and other statements wait for an open one", async () => {
     const { db } = await openTestDb();
     const insert = (id: string) =>
@@ -90,13 +127,38 @@ describe.runIf(TEST_DB_ENGINE === "postgres")("Postgres schema", () => {
     );
     expect(tables.map((r) => r.table_name)).toEqual([
       "api_tokens",
+      "audit_log",
       "ci_results",
       "deploys",
+      "invites",
+      "member_grants",
+      "members",
       "schema_migrations",
       "scopes",
       "service_locks",
       "services",
       "versions",
+    ]);
+  });
+
+  it("gives the API tokens of a database migrated before members to the bootstrap admin", async () => {
+    const { db } = await openTestDb();
+    // Back to the schema of migration 1, with a token from then.
+    await db.exec("DROP TABLE audit_log, invites, member_grants CASCADE");
+    await db.exec("ALTER TABLE api_tokens DROP COLUMN member_id, DROP COLUMN max_role");
+    await db.exec("DROP TABLE members CASCADE");
+    await db.run("DELETE FROM schema_migrations WHERE version >= 2");
+    await db.run("INSERT INTO api_tokens (id, name, token_hash, created_at) VALUES ('t1', 'rafa', 'h1', 'x')");
+
+    const applied = await db.transaction((tx) =>
+      applyPostgresMigrations(async (sql, params) => ({ rows: await tx.all(sql, params as SqlValue[]) })),
+    );
+    expect(applied).toEqual(POSTGRES_MIGRATIONS.filter((m) => m.version >= 2).map((m) => m.version));
+    const store = new Store(db);
+    expect(await store.getMember(BOOTSTRAP_ADMIN.id)).toMatchObject({ role: "admin", status: "active" });
+    expect((await store.getMember(BOOTSTRAP_ADMIN.id))?.createdAt).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);
+    expect(await store.listApiTokens()).toEqual([
+      expect.objectContaining({ id: "t1", memberId: BOOTSTRAP_ADMIN.id, ownerName: "admin" }),
     ]);
   });
 

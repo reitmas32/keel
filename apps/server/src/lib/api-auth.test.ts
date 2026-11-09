@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { authenticate, createApiToken } from "./api-auth";
 import { ApiError } from "./errors";
 import { handlers } from "./handlers";
-import { apiRequest, createTestContext, SHA } from "./testing";
+import { addMember, apiRequest, createTestContext, memberToken, SHA } from "./testing";
 import { API_TOKEN_PREFIX, hashToken } from "./tokens";
 
 const bearer = (token: string) => apiRequest("", { headers: { authorization: `Bearer ${token}` } });
@@ -20,26 +20,39 @@ const statusOf = async (fn: () => Promise<unknown>) => {
 describe("createApiToken", () => {
   it("returns a keel_pat_ token once and stores only its hash", async () => {
     const { store, clock } = await createTestContext();
-    const { record, token } = await createApiToken(store, "  rafa  ", clock.now());
+    const owner = await addMember(store, clock.now(), { name: "Rafa" });
+    const { record, token } = await createApiToken(store, { name: "  rafa  ", owner }, clock.now());
     expect(token).toMatch(new RegExp(`^${API_TOKEN_PREFIX}[A-Za-z0-9_-]{32}$`));
-    expect(record).toMatchObject({ name: "rafa", lastUsedAt: null });
+    expect(record).toMatchObject({ name: "rafa", lastUsedAt: null, memberId: owner.id, maxRole: null });
     expect((await store.getApiTokenByHash(hashToken(token)))?.id).toBe(record.id);
     expect(JSON.stringify(await store.listApiTokens())).not.toContain(token);
   });
 
-  it("rejects an empty or repeated name", async () => {
+  it("rejects an empty or repeated name, and a max role above the owner's", async () => {
     const { store, clock } = await createTestContext();
-    await createApiToken(store, "rafa", clock.now());
-    expect(await statusOf(() => createApiToken(store, " ", clock.now()))).toBe(400);
-    expect(await statusOf(() => createApiToken(store, "rafa", clock.now()))).toBe(409);
+    const owner = await addMember(store, clock.now(), { role: "deployer" });
+    await createApiToken(store, { name: "rafa", owner }, clock.now());
+    expect(await statusOf(() => createApiToken(store, { name: " ", owner }, clock.now()))).toBe(400);
+    expect(await statusOf(() => createApiToken(store, { name: "rafa", owner }, clock.now()))).toBe(409);
+    const above = () => createApiToken(store, { name: "x", owner, maxRole: "maintainer" }, clock.now());
+    expect(await statusOf(above)).toBe(400);
+    const capped = await createApiToken(store, { name: "y", owner, maxRole: "viewer" }, clock.now());
+    expect(capped.record.maxRole).toBe("viewer");
   });
 });
 
 describe("authenticate", () => {
-  it("resolves the token's name and touches last_used_at at most once a minute", async () => {
+  it("resolves the token's member and touches last_used_at at most once a minute", async () => {
     const { ctx, store, clock } = await createTestContext();
-    const { record, token } = await createApiToken(store, "rafa", clock.now());
-    expect(await authenticate(ctx, bearer(token))).toEqual({ name: "rafa" });
+    const owner = await addMember(store, clock.now(), { name: "Rafa", grants: [["*", "prod*", "viewer"]] });
+    const { record, token } = await createApiToken(store, { name: "rafa", owner }, clock.now());
+    expect(await authenticate(ctx, bearer(token))).toMatchObject({
+      name: "Rafa",
+      tokenName: "rafa",
+      member: { id: owner.id },
+      grants: [{ servicePattern: "prod*", role: "viewer" }],
+      maxRole: null,
+    });
     const first = (await store.listApiTokens())[0]?.lastUsedAt;
     expect(first).toBe(clock.now().toISOString());
 
@@ -64,7 +77,11 @@ describe("authenticate", () => {
 
   it("allows no token only when auth is optional", async () => {
     const { ctx, env } = await createTestContext();
-    expect(await authenticate(ctx, apiRequest())).toEqual({ name: null });
+    expect(await authenticate(ctx, apiRequest())).toMatchObject({
+      name: null,
+      member: null,
+      anonymousRole: "deployer",
+    });
     env.KEEL_API_AUTH = "required";
     await expect(authenticate(ctx, apiRequest())).rejects.toThrow(/Tokens de API.*keel login --token/);
   });
@@ -106,9 +123,24 @@ describe("API routes with tokens", () => {
     expect(ci.status).toBe(200);
   });
 
-  it("records the token name as requestedBy on POST /deploys", async () => {
+  it("rejects the tokens of a disabled member", async () => {
     const { ctx, store, clock } = await createTestContext();
-    const { token } = await createApiToken(store, "rafa", clock.now());
+    const { member, token } = await memberToken(store, clock.now());
+    await store.setMemberStatus(member.id, "disabled");
+    expect(await statusOf(() => authenticate(ctx, bearer(token)))).toBe(401);
+    await expect(authenticate(ctx, bearer(token))).rejects.toThrow(/deshabilitado/);
+  });
+
+  it("names legacy tokens of the bootstrap admin after the token", async () => {
+    const { ctx, store, clock } = await createTestContext();
+    const bootstrap = await store.ensureBootstrapAdmin(clock.now());
+    const { token } = await createApiToken(store, { name: "rafa-laptop", owner: bootstrap }, clock.now());
+    expect(await authenticate(ctx, bearer(token))).toMatchObject({ name: "rafa-laptop", member: { name: "admin" } });
+  });
+
+  it("records the member's name as requestedBy on POST /deploys", async () => {
+    const { ctx, store, clock } = await createTestContext();
+    const { token } = await memberToken(store, clock.now(), { name: "rafa" });
     const body = { repo: "konectus-io/app", tag: "v1.0.0", sha: SHA, service: "api-prod" };
     const withToken = await handlers.createDeploy(
       ctx,
@@ -126,15 +158,43 @@ describe("API routes with tokens", () => {
 });
 
 describe("GET /whoami", () => {
-  it("returns the token name and the auth mode", async () => {
+  it("returns the member, its role and grants, and the auth mode", async () => {
     const { ctx, env, store, clock } = await createTestContext();
-    const { token } = await createApiToken(store, "rafa", clock.now());
-    expect(await (await handlers.whoami(ctx, apiRequest())).json()).toEqual({ name: null, auth: "optional" });
-    expect(await (await handlers.whoami(ctx, bearer(token))).json()).toEqual({ name: "rafa", auth: "optional" });
+    const { member, token } = await memberToken(store, clock.now(), {
+      name: "rafa",
+      role: "maintainer",
+      grants: [["konectus-io/*", "prod*", "viewer"]],
+      maxRole: "deployer",
+    });
+    expect(await (await handlers.whoami(ctx, apiRequest())).json()).toEqual({
+      name: null,
+      email: null,
+      role: null,
+      grants: [],
+      tokenMaxRole: null,
+      auth: "optional",
+      anonymousRole: "deployer",
+    });
+    const mine = {
+      name: "rafa",
+      email: member.email,
+      // The base role capped by the token.
+      role: "deployer",
+      grants: [{ repo: "konectus-io/*", service: "prod*", role: "viewer" }],
+      tokenMaxRole: "deployer",
+      auth: "optional",
+      anonymousRole: "deployer",
+    };
+    expect(await (await handlers.whoami(ctx, bearer(token))).json()).toEqual(mine);
 
     env.KEEL_API_AUTH = "required";
+    env.KEEL_ANONYMOUS_ROLE = "none";
     expect((await handlers.whoami(ctx, apiRequest())).status).toBe(401);
-    expect(await (await handlers.whoami(ctx, bearer(token))).json()).toEqual({ name: "rafa", auth: "required" });
+    expect(await (await handlers.whoami(ctx, bearer(token))).json()).toEqual({
+      ...mine,
+      auth: "required",
+      anonymousRole: "none",
+    });
     expect((await handlers.whoami(ctx, bearer("keel_pat_bad"))).status).toBe(401);
   });
 });

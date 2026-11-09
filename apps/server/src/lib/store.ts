@@ -5,10 +5,12 @@ import {
   type Deploy,
   type DeployStatus,
   isTerminal,
+  type Role,
   type Version,
   type VersionCiStatus,
 } from "@keel/shared";
-import type { Db, Row } from "./db";
+import type { Db, Row, SqlValue } from "./db";
+import { BOOTSTRAP_ADMIN } from "./postgres-schema.mjs";
 
 export interface Scope {
   id: string;
@@ -51,6 +53,63 @@ export interface ApiToken {
   name: string;
   createdAt: string;
   lastUsedAt: string | null;
+  /** The member the token acts as. Null only in a database the members migration hasn't reached. */
+  memberId: string | null;
+  /** The token can't act above this role, whatever its owner's role is. Null: its owner's role. */
+  maxRole: Role | null;
+}
+
+/** A token with its owner's name, for the admin's list. */
+export interface ApiTokenWithOwner extends ApiToken {
+  ownerName: string | null;
+}
+
+export const MEMBER_STATUSES = ["invited", "active", "disabled"] as const;
+export type MemberStatus = (typeof MEMBER_STATUSES)[number];
+
+export interface Member {
+  id: string;
+  name: string;
+  /** Lowercased. */
+  email: string;
+  role: Role;
+  status: MemberStatus;
+  hasPassword: boolean;
+  createdAt: string;
+  lastLoginAt: string | null;
+}
+
+export interface MemberGrant {
+  id: string;
+  memberId: string;
+  repoPattern: string;
+  servicePattern: string;
+  role: Role;
+  createdAt: string;
+}
+
+export interface Invite {
+  memberId: string;
+  expiresAt: string;
+  usedAt: string | null;
+}
+
+export interface AuditEntry {
+  id: string;
+  at: string;
+  /** Member name, `anónimo` for an API call without a token, or `ci` for the GitHub Action. */
+  actor: string;
+  actorMemberId: string | null;
+  action: string;
+  repo: string | null;
+  service: string | null;
+  /** Parsed from the JSON column. Never holds secrets. */
+  details: Record<string, unknown> | null;
+}
+
+export interface AuditFilter {
+  repo?: string | undefined;
+  actor?: string | undefined;
 }
 
 export interface ServiceLockRecord {
@@ -101,7 +160,51 @@ const toApiToken = (r: Row): ApiToken => ({
   name: r.name as string,
   createdAt: r.created_at as string,
   lastUsedAt: (r.last_used_at as string | null) ?? null,
+  memberId: (r.member_id as string | null) ?? null,
+  maxRole: (r.max_role as Role | null) ?? null,
 });
+
+const toMember = (r: Row): Member => ({
+  id: r.id as string,
+  name: r.name as string,
+  email: r.email as string,
+  role: r.role as Role,
+  status: r.status as MemberStatus,
+  hasPassword: r.password_hash != null,
+  createdAt: r.created_at as string,
+  lastLoginAt: (r.last_login_at as string | null) ?? null,
+});
+
+const toGrant = (r: Row): MemberGrant => ({
+  id: r.id as string,
+  memberId: r.member_id as string,
+  repoPattern: r.repo_pattern as string,
+  servicePattern: r.service_pattern as string,
+  role: r.role as Role,
+  createdAt: r.created_at as string,
+});
+
+const toAudit = (r: Row): AuditEntry => {
+  let details: Record<string, unknown> | null = null;
+  try {
+    details = r.details ? (JSON.parse(r.details as string) as Record<string, unknown>) : null;
+  } catch {
+    details = { raw: r.details };
+  }
+  return {
+    id: r.id as string,
+    at: r.at as string,
+    actor: r.actor as string,
+    actorMemberId: (r.actor_member_id as string | null) ?? null,
+    action: r.action as string,
+    repo: (r.repo as string | null) ?? null,
+    service: (r.service as string | null) ?? null,
+    details,
+  };
+};
+
+/** Lowercased and trimmed: emails compare without case. */
+export const normalizeEmail = (email: string) => email.trim().toLowerCase();
 
 const toServiceLock = (r: Row): ServiceLockRecord => ({
   serviceId: r.service_id as string,
@@ -268,19 +371,39 @@ export class Store {
 
   // --- API tokens ---
 
-  async createApiToken(input: { name: string; tokenHash: string }, now: Date): Promise<ApiToken> {
-    const token: ApiToken = { id: randomUUID(), name: input.name, createdAt: now.toISOString(), lastUsedAt: null };
-    await this.db.run("INSERT INTO api_tokens (id, name, token_hash, created_at) VALUES (?, ?, ?, ?)", [
-      token.id,
-      token.name,
-      input.tokenHash,
-      token.createdAt,
-    ]);
+  async createApiToken(
+    input: { name: string; tokenHash: string; memberId: string; maxRole?: Role | null },
+    now: Date,
+  ): Promise<ApiToken> {
+    const token: ApiToken = {
+      id: randomUUID(),
+      name: input.name,
+      createdAt: now.toISOString(),
+      lastUsedAt: null,
+      memberId: input.memberId,
+      maxRole: input.maxRole ?? null,
+    };
+    await this.db.run(
+      "INSERT INTO api_tokens (id, name, token_hash, created_at, member_id, max_role) VALUES (?, ?, ?, ?, ?, ?)",
+      [token.id, token.name, input.tokenHash, token.createdAt, token.memberId, token.maxRole],
+    );
     return token;
   }
 
-  async listApiTokens(): Promise<ApiToken[]> {
-    return (await this.db.all("SELECT * FROM api_tokens ORDER BY created_at DESC, name")).map(toApiToken);
+  /** Every token, or only one member's, newest first, with the owner's name. */
+  async listApiTokens(filter: { memberId?: string } = {}): Promise<ApiTokenWithOwner[]> {
+    const where = filter.memberId ? "WHERE t.member_id = ?" : "";
+    const rows = await this.db.all(
+      `SELECT t.*, m.name AS owner_name FROM api_tokens t LEFT JOIN members m ON m.id = t.member_id ${where}
+       ORDER BY t.created_at DESC, t.name`,
+      filter.memberId ? [filter.memberId] : [],
+    );
+    return rows.map((r) => ({ ...toApiToken(r), ownerName: (r.owner_name as string | null) ?? null }));
+  }
+
+  async getApiToken(id: string): Promise<ApiToken | undefined> {
+    const row = await this.db.get("SELECT * FROM api_tokens WHERE id = ?", [id]);
+    return row ? toApiToken(row) : undefined;
   }
 
   async getApiTokenByName(name: string): Promise<ApiToken | undefined> {
@@ -299,6 +422,207 @@ export class Store {
 
   async deleteApiToken(id: string): Promise<void> {
     await this.db.run("DELETE FROM api_tokens WHERE id = ?", [id]);
+  }
+
+  // --- members ---
+
+  async createMember(
+    input: { name: string; email: string; role: Role; status: MemberStatus; passwordHash?: string | null },
+    now: Date,
+  ): Promise<Member> {
+    const id = randomUUID();
+    await this.db.run(
+      "INSERT INTO members (id, name, email, role, password_hash, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      [
+        id,
+        input.name,
+        normalizeEmail(input.email),
+        input.role,
+        input.passwordHash ?? null,
+        input.status,
+        now.toISOString(),
+      ],
+    );
+    return (await this.getMember(id)) as Member;
+  }
+
+  async getMember(id: string): Promise<Member | undefined> {
+    const row = await this.db.get("SELECT * FROM members WHERE id = ?", [id]);
+    return row ? toMember(row) : undefined;
+  }
+
+  async getMemberByEmail(email: string): Promise<Member | undefined> {
+    const row = await this.db.get("SELECT * FROM members WHERE email = ?", [normalizeEmail(email)]);
+    return row ? toMember(row) : undefined;
+  }
+
+  async getMemberPasswordHash(id: string): Promise<string | null> {
+    const row = await this.db.get("SELECT password_hash FROM members WHERE id = ?", [id]);
+    return (row?.password_hash as string | null | undefined) ?? null;
+  }
+
+  /** Every member by name, with how many grants each has. */
+  async listMembers(): Promise<(Member & { grants: number })[]> {
+    const rows = await this.db.all(
+      `SELECT m.*, (SELECT count(*) FROM member_grants g WHERE g.member_id = m.id) AS grant_count
+       FROM members m ORDER BY lower(m.name), m.email`,
+    );
+    return rows.map((r) => ({ ...toMember(r), grants: Number(r.grant_count) }));
+  }
+
+  async countActiveAdmins(): Promise<number> {
+    const row = await this.db.get("SELECT count(*) AS n FROM members WHERE role = 'admin' AND status = 'active'");
+    return Number(row?.n ?? 0);
+  }
+
+  async setMemberRole(id: string, role: Role): Promise<void> {
+    await this.db.run("UPDATE members SET role = ? WHERE id = ?", [role, id]);
+  }
+
+  async setMemberStatus(id: string, status: MemberStatus): Promise<void> {
+    await this.db.run("UPDATE members SET status = ? WHERE id = ?", [status, id]);
+  }
+
+  async setMemberPassword(id: string, passwordHash: string): Promise<void> {
+    await this.db.run("UPDATE members SET password_hash = ? WHERE id = ?", [passwordHash, id]);
+  }
+
+  async touchMemberLogin(id: string, now: Date): Promise<void> {
+    await this.db.run("UPDATE members SET last_login_at = ? WHERE id = ?", [now.toISOString(), id]);
+  }
+
+  /** The member `KEEL_ADMIN_PASSWORD` signs in as, recreated if it went missing. */
+  async ensureBootstrapAdmin(now: Date): Promise<Member> {
+    await this.db.run(
+      `INSERT INTO members (id, name, email, role, password_hash, status, created_at)
+       VALUES (?, ?, ?, 'admin', NULL, 'active', ?) ON CONFLICT DO NOTHING`,
+      [BOOTSTRAP_ADMIN.id, BOOTSTRAP_ADMIN.name, BOOTSTRAP_ADMIN.email, now.toISOString()],
+    );
+    return (await this.getMember(BOOTSTRAP_ADMIN.id)) as Member;
+  }
+
+  // --- member grants ---
+
+  async addGrant(
+    input: { memberId: string; repoPattern: string; servicePattern: string; role: Role },
+    now: Date,
+  ): Promise<MemberGrant> {
+    const grant: MemberGrant = { ...input, id: randomUUID(), createdAt: now.toISOString() };
+    await this.db.run(
+      "INSERT INTO member_grants (id, member_id, repo_pattern, service_pattern, role, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+      [grant.id, grant.memberId, grant.repoPattern, grant.servicePattern, grant.role, grant.createdAt],
+    );
+    return grant;
+  }
+
+  async listGrants(memberId: string): Promise<MemberGrant[]> {
+    const rows = await this.db.all(
+      "SELECT * FROM member_grants WHERE member_id = ? ORDER BY repo_pattern, service_pattern, created_at",
+      [memberId],
+    );
+    return rows.map(toGrant);
+  }
+
+  async getGrant(id: string): Promise<MemberGrant | undefined> {
+    const row = await this.db.get("SELECT * FROM member_grants WHERE id = ?", [id]);
+    return row ? toGrant(row) : undefined;
+  }
+
+  async deleteGrant(id: string): Promise<boolean> {
+    return (await this.db.run("DELETE FROM member_grants WHERE id = ?", [id])).changes > 0;
+  }
+
+  // --- invites ---
+
+  async createInvite(input: { tokenHash: string; memberId: string; expiresAt: Date }): Promise<void> {
+    await this.db.run("INSERT INTO invites (token_hash, member_id, expires_at) VALUES (?, ?, ?)", [
+      input.tokenHash,
+      input.memberId,
+      input.expiresAt.toISOString(),
+    ]);
+  }
+
+  async getInvite(tokenHash: string): Promise<Invite | undefined> {
+    const row = await this.db.get("SELECT * FROM invites WHERE token_hash = ?", [tokenHash]);
+    if (!row) return undefined;
+    return {
+      memberId: row.member_id as string,
+      expiresAt: row.expires_at as string,
+      usedAt: (row.used_at as string | null) ?? null,
+    };
+  }
+
+  /** Marks an invite used. Returns false if it was already used, so two tabs can't both redeem it. */
+  async useInvite(tokenHash: string, now: Date): Promise<boolean> {
+    const { changes } = await this.db.run("UPDATE invites SET used_at = ? WHERE token_hash = ? AND used_at IS NULL", [
+      now.toISOString(),
+      tokenHash,
+    ]);
+    return changes === 1;
+  }
+
+  /** Drops a member's unused invites, so only the newest link works. */
+  async deletePendingInvites(memberId: string): Promise<void> {
+    await this.db.run("DELETE FROM invites WHERE member_id = ? AND used_at IS NULL", [memberId]);
+  }
+
+  // --- audit log ---
+
+  async recordAudit(
+    entry: {
+      actor: string;
+      actorMemberId?: string | null;
+      action: string;
+      repo?: string | null;
+      service?: string | null;
+      details?: Record<string, unknown> | null;
+    },
+    now: Date,
+  ): Promise<void> {
+    await this.db.run(
+      "INSERT INTO audit_log (id, at, actor, actor_member_id, action, repo, service, details) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      [
+        randomUUID(),
+        now.toISOString(),
+        entry.actor,
+        entry.actorMemberId ?? null,
+        entry.action,
+        entry.repo ? normalizeRepo(entry.repo) : null,
+        entry.service ?? null,
+        entry.details ? JSON.stringify(entry.details) : null,
+      ],
+    );
+  }
+
+  /** Newest first. */
+  async listAudit(
+    filter: AuditFilter = {},
+    { limit = 50, offset = 0 }: { limit?: number; offset?: number } = {},
+  ): Promise<AuditEntry[]> {
+    const conditions: string[] = [];
+    const params: SqlValue[] = [];
+    if (filter.repo) {
+      conditions.push("repo = ?");
+      params.push(normalizeRepo(filter.repo));
+    }
+    if (filter.actor) {
+      conditions.push("actor = ?");
+      params.push(filter.actor);
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+    const order = this.db.dialect === "postgres" ? "seq" : "rowid";
+    const rows = await this.db.all(
+      `SELECT * FROM audit_log ${where} ORDER BY at DESC, ${order} DESC LIMIT ? OFFSET ?`,
+      [...params, limit, offset],
+    );
+    return rows.map(toAudit);
+  }
+
+  /** The repos and actors that appear in the audit log, for its filters. */
+  async auditFacets(): Promise<{ repos: string[]; actors: string[] }> {
+    const repos = await this.db.all("SELECT DISTINCT repo FROM audit_log WHERE repo IS NOT NULL ORDER BY repo");
+    const actors = await this.db.all("SELECT DISTINCT actor FROM audit_log ORDER BY actor");
+    return { repos: repos.map((r) => r.repo as string), actors: actors.map((r) => r.actor as string) };
   }
 
   // --- CI results ---

@@ -12,7 +12,13 @@ import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import pg from "pg";
-import { applyPostgresMigrations, TABLES } from "../src/lib/postgres-schema.mjs";
+import {
+  applyPostgresMigrations,
+  BOOTSTRAP_ADMIN,
+  bootstrapAdminSql,
+  POSTGRES_NOW_ISO,
+  TABLES,
+} from "../src/lib/postgres-schema.mjs";
 
 const BATCH = 200;
 
@@ -30,9 +36,11 @@ const BATCH = 200;
 export async function copySqliteToPostgres({ sqlite, query, force = false }) {
   await applyPostgresMigrations(query);
 
+  // The migrations create the bootstrap admin; on its own it doesn't count as data.
+  const ignoreBootstrap = (table) => (table === "members" ? ` WHERE id <> '${BOOTSTRAP_ADMIN.id}'` : "");
   const existing = [];
   for (const table of TABLES) {
-    const { rows } = await query(`SELECT count(*) AS n FROM ${table}`);
+    const { rows } = await query(`SELECT count(*) AS n FROM ${table}${ignoreBootstrap(table)}`);
     if (Number(rows[0]?.n) > 0) existing.push(`${table} (${rows[0]?.n})`);
   }
   if (existing.length > 0) {
@@ -43,6 +51,8 @@ export async function copySqliteToPostgres({ sqlite, query, force = false }) {
     }
     await query(`TRUNCATE ${TABLES.join(", ")} CASCADE`);
   }
+  // SQLite has its own bootstrap admin (with its tokens); without one it is recreated after the copy.
+  await query("DELETE FROM members WHERE id = $1", [BOOTSTRAP_ADMIN.id]);
 
   const counts = [];
   for (const table of TABLES) {
@@ -85,6 +95,11 @@ export async function copySqliteToPostgres({ sqlite, query, force = false }) {
     }
     counts.push({ table, rows: rows.length });
   }
+
+  // A SQLite database from before members (never opened by keel v0.7.0+) has no bootstrap admin and tokens without
+  // an owner: the same migration the server runs gives them to the bootstrap admin.
+  await query(bootstrapAdminSql(POSTGRES_NOW_ISO));
+  await query("UPDATE api_tokens SET member_id = $1 WHERE member_id IS NULL", [BOOTSTRAP_ADMIN.id]);
   return counts;
 }
 
@@ -112,7 +127,7 @@ async function main(argv) {
     const counts = await copySqliteToPostgres({ sqlite, query: (sql, params) => client.query(sql, params), force });
     await client.query("COMMIT");
     console.log(`Copiado de ${sqlitePath} a Postgres:`);
-    for (const { table, rows } of counts) console.log(`  ${table.padEnd(14)} ${rows}`);
+    for (const { table, rows } of counts) console.log(`  ${table.padEnd(15)} ${rows}`);
   } catch (error) {
     if (connected) await client.query("ROLLBACK").catch(() => {});
     console.error(`No se copió nada: ${error.message || error.code || error}`);

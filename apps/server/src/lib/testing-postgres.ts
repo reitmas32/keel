@@ -117,7 +117,8 @@ export async function openPostgresTestDb(): Promise<{ db: PostgresDb; replica: (
     });
   };
   cleanups.push(async () => {
-    await Promise.all(pools.map((p) => p.end()));
+    // closeTestDbs already closed the pools it opened through PostgresDb; end only the ones still open.
+    await Promise.all(pools.filter((p) => !p.ended).map((p) => p.end()));
     const drop = new pg.Client({ connectionString: dsn });
     await drop.connect();
     await drop.query(`DROP SCHEMA "${schema}" CASCADE`);

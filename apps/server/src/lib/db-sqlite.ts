@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Db, Row, SqlValue } from "./db";
+import { BOOTSTRAP_ADMIN, bootstrapAdminSql } from "./postgres-schema.mjs";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS scopes (
@@ -71,13 +72,49 @@ CREATE TABLE IF NOT EXISTS versions (
 CREATE INDEX IF NOT EXISTS versions_repo_created ON versions (repo, created_at);
 CREATE INDEX IF NOT EXISTS versions_status ON versions (ci_status, created_at);
 
+-- v0.7.0: people who use keel, with a role and per-repo/service grants. Only a scrypt hash of the password is stored.
+CREATE TABLE IF NOT EXISTS members (
+  id            TEXT PRIMARY KEY,
+  name          TEXT NOT NULL,
+  email         TEXT NOT NULL UNIQUE,
+  role          TEXT NOT NULL,
+  password_hash TEXT,
+  status        TEXT NOT NULL,
+  created_at    TEXT NOT NULL,
+  last_login_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS member_grants (
+  id              TEXT PRIMARY KEY,
+  member_id       TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+  repo_pattern    TEXT NOT NULL DEFAULT '*',
+  service_pattern TEXT NOT NULL DEFAULT '*',
+  role            TEXT NOT NULL,
+  created_at      TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS member_grants_member ON member_grants (member_id);
+
+-- v0.7.0: one-time links to set a password. Only the sha256 of the token is stored.
+CREATE TABLE IF NOT EXISTS invites (
+  token_hash TEXT PRIMARY KEY,
+  member_id  TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+  expires_at TEXT NOT NULL,
+  used_at    TEXT
+);
+
+CREATE INDEX IF NOT EXISTS invites_member ON invites (member_id);
+
 -- v0.6.0: personal API tokens for the CLI. Only the sha256 of the token is stored.
+-- v0.7.0: owned by a member (member_id) and optionally capped below the owner's role (max_role).
 CREATE TABLE IF NOT EXISTS api_tokens (
   id           TEXT PRIMARY KEY,
   name         TEXT NOT NULL,
   token_hash   TEXT NOT NULL UNIQUE,
   created_at   TEXT NOT NULL,
-  last_used_at TEXT
+  last_used_at TEXT,
+  member_id    TEXT REFERENCES members(id) ON DELETE CASCADE,
+  max_role     TEXT
 );
 
 -- v0.6.0: a locked service refuses new deploys until someone unlocks it.
@@ -87,6 +124,21 @@ CREATE TABLE IF NOT EXISTS service_locks (
   locked_by  TEXT,
   created_at TEXT NOT NULL
 );
+
+-- v0.7.0: every change made through the API or the admin, and who made it.
+CREATE TABLE IF NOT EXISTS audit_log (
+  id              TEXT PRIMARY KEY,
+  at              TEXT NOT NULL,
+  actor           TEXT NOT NULL,
+  actor_member_id TEXT REFERENCES members(id) ON DELETE SET NULL,
+  action          TEXT NOT NULL,
+  repo            TEXT,
+  service         TEXT,
+  details         TEXT
+);
+
+CREATE INDEX IF NOT EXISTS audit_log_at ON audit_log (at);
+CREATE INDEX IF NOT EXISTS audit_log_repo ON audit_log (repo, at);
 `;
 
 /** Brings databases created by older keel versions up to the current schema. Each step is idempotent. */
@@ -108,6 +160,19 @@ function migrate(db: DatabaseSync): void {
   }
   // v0.6.0: the API token name that asked for the deploy.
   if (!deployColumns.includes("requested_by")) db.exec("ALTER TABLE deploys ADD COLUMN requested_by TEXT");
+
+  const tokenColumns = db
+    .prepare("PRAGMA table_info(api_tokens)")
+    .all()
+    .map((c) => c.name);
+  // v0.7.0: tokens belong to a member and can be capped to a role. Tokens from before belong to the bootstrap admin.
+  if (!tokenColumns.includes("member_id")) {
+    db.exec("ALTER TABLE api_tokens ADD COLUMN member_id TEXT REFERENCES members(id) ON DELETE CASCADE");
+  }
+  if (!tokenColumns.includes("max_role")) db.exec("ALTER TABLE api_tokens ADD COLUMN max_role TEXT");
+  db.exec("CREATE INDEX IF NOT EXISTS api_tokens_member ON api_tokens (member_id)");
+  db.exec(bootstrapAdminSql("strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"));
+  db.prepare("UPDATE api_tokens SET member_id = ? WHERE member_id IS NULL").run(BOOTSTRAP_ADMIN.id);
 }
 
 /** Statements straight on the connection: what a transaction's `tx` handle uses. */

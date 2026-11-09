@@ -20,6 +20,13 @@ describe("loadEnv", () => {
     expect(() => loadEnv({ ...base, KEEL_API_AUTH: "yes" })).toThrow();
   });
 
+  it("defaults KEEL_ANONYMOUS_ROLE to deployer and accepts only roles anonymous calls can have", () => {
+    expect(loadEnv(base).KEEL_ANONYMOUS_ROLE).toBe("deployer");
+    expect(loadEnv({ ...base, KEEL_ANONYMOUS_ROLE: "" }).KEEL_ANONYMOUS_ROLE).toBe("deployer");
+    expect(loadEnv({ ...base, KEEL_ANONYMOUS_ROLE: "none" }).KEEL_ANONYMOUS_ROLE).toBe("none");
+    expect(() => loadEnv({ ...base, KEEL_ANONYMOUS_ROLE: "admin" })).toThrow(/KEEL_ANONYMOUS_ROLE/);
+  });
+
   it("rejects a missing Dokploy key", () => {
     expect(() => loadEnv({ ...base, DOKPLOY_API_KEY: undefined })).toThrow();
   });

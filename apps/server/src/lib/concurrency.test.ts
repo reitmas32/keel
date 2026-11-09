@@ -25,6 +25,25 @@ async function twoReplicas() {
 
 describe("several replicas on one database", () => {
   it("lets exactly one of two racing transitions win", async () => {
+    const { store, other, clock } = await twoReplicas();
+    // No CI result yet: the deploy is waiting_ci. Every transition below leaves from waiting_ci and none can follow
+    // another (ci_passed can't go to ci_failed or expired, which are final), so exactly one may win in any order.
+    // On real Postgres the calls run on separate connections: a loser either read waiting_ci and its conditional
+    // UPDATE matched no row once the winner committed, or read the new state and was refused by the state machine.
+    const { id } = await requestDeploy(store, deployReq, clock.now());
+
+    const results = await Promise.all([
+      store.transition(id, "ci_passed", clock.now()),
+      other.transition(id, "ci_passed", clock.now()),
+      other.transition(id, "ci_failed", clock.now(), { error: "x" }),
+      store.transition(id, "expired", clock.now(), { error: "x" }),
+    ]);
+    const winners = results.filter(Boolean);
+    expect(winners).toHaveLength(1);
+    expect((await store.getDeploy(id))?.status).toBe(winners[0]?.status);
+  });
+
+  it("lets only one of two replicas move a deploy out of the state both read", async () => {
     const { store, other, clock, ciToken } = await twoReplicas();
     await recordCiResult(store, ciReq, ciToken, clock.now());
     const { id } = await requestDeploy(store, deployReq, clock.now());
@@ -32,7 +51,7 @@ describe("several replicas on one database", () => {
     const results = await Promise.all([
       store.transition(id, "deploying", clock.now()),
       other.transition(id, "deploying", clock.now()),
-      store.transition(id, "deploy_failed", clock.now(), { error: "x" }),
+      other.transition(id, "deploying", clock.now()),
     ]);
     expect(results.filter(Boolean)).toHaveLength(1);
   });
