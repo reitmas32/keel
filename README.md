@@ -56,14 +56,14 @@ keel use                         # elige la organización activa entre las confi
 keel create-version v1.4.0       # valida y publica el tag (desde cualquier rama)
 keel create-version v1.4.0 -d stg  # además pide el deploy de esa misma versión a stg
 keel versions                    # versiones del repo: rama, quién la creó y cómo terminó su CI
-keel deploy                      # pregunta servicio y versión
+keel deploy                      # pregunta scope y versión
 keel deploy -l -s api-prod       # la versión más alta del repo, esté como esté su CI
 keel deploy -r -s api-prod       # la versión más alta cuyo CI pasó (--latest-ready)
 keel rollback -s api-prod        # vuelve a la versión que estaba desplegada antes en ese scope
 keel rollback -s api-prod --to v1.2.0  # a una versión anterior concreta que ya se desplegó ahí
 keel scopes                      # scopes del repo: su servicio en Dokploy y qué versión tiene cada uno
 keel deploys                     # deploys del repo: estado, cuándo terminaron y por qué fallaron
-keel deploys -s staging -n 50    # solo un servicio, hasta 50
+keel deploys -s staging -n 50    # solo un scope, hasta 50
 keel deploys d3f1                # detalle y línea de tiempo de un deploy (id o sus primeros caracteres)
 keel deploys d3f1 --log          # además, el log de build/deploy de Dokploy de ese deploy (redactado)
 keel deploy -r -s api-prod --wait  # espera a que termine; sale con 28 si falla
@@ -98,7 +98,7 @@ La referencia completa de comandos está en `keel --help` y `keel <comando> --he
 `keel deploys` muestra, del más reciente al más antiguo:
 
 ```text
-  VERSIÓN   SERVICIO     ESTADO              PEDIDO      TERMINÓ     DURACIÓN   ID
+  VERSIÓN   SCOPE        ESTADO              PEDIDO      TERMINÓ     DURACIÓN   ID
   v1.5.0    staging      ◌ esperando CI      hoy 15:28   —           14s…       511db4d8
   v1.4.0    staging      ✔ desplegado        hoy 15:27   hoy 15:27   9s         2cf61934
   v1.3.1    production   ✖ falló el deploy   hoy 15:27   hoy 15:27   6s         06e41709
@@ -122,7 +122,7 @@ La configuración vive en `~/.keel`:
 - la rama local y su remota no apuntan al mismo commit (local adelantada, atrasada o divergente, o la rama nunca se subió),
 - el tag ya existe en el remoto (o en local),
 - la versión no es semver con prefijo `v` (`v1.4.0`, `v2.0.0-rc.1`),
-- con `-d <servicio>`, el servicio no está vinculado al repo (se revisa antes de crear el tag).
+- con `-d <scope>`, el scope no existe en la app del repo (se revisa antes de crear el tag).
 
 Al publicar el tag, la registra en keel como pendiente, con su rama y quién la creó (`user.name` y `user.email` de git). Si keel no responde o es anterior a v0.4.0, la versión se publica igual y keel la conoce cuando llega el resultado de su CI.
 
@@ -146,7 +146,7 @@ Al publicar el tag, la registra en keel como pendiente, con su rama y quién la 
 
 Antes de pedir el deploy dice qué versión eligió, quién la creó y cómo va su CI. Si con `-l` la versión la creó otra persona (otro `user.email`), pregunta antes de desplegarla; sin terminal interactiva solo lo avisa. Para crear y desplegar sin carreras con otros devs, usa `create-version -d`: despliega exactamente la versión que acabas de crear.
 
-`keel scopes` (alias `keel services`) lista los scopes vinculados al repo, que son los servicios a los que se despliega:
+`keel scopes` lista los scopes de la app del repo, que son los destinos a los que se despliega:
 
 ```text
   SCOPE   DOKPLOY                   TIPO      VERSIÓN ACTUAL   ÚLTIMO DEPLOY
@@ -225,7 +225,7 @@ volumes:
 El archivo del repo trae además, comentado, un servicio `postgres` de ejemplo.
 
 - Usa una versión fija (`:v0.6.0`) en lugar de `:latest`, así un redeploy no cambia de versión sin que lo decidas. Para actualizar keel, cambia la tag y redespliega.
-- `keel-data` es un volumen con nombre: la base (scopes, servicios, tokens de CI e historial) sobrevive a redeploys y actualizaciones de la imagen.
+- `keel-data` es un volumen con nombre: la base (apps, scopes, tokens de CI e historial) sobrevive a redeploys y actualizaciones de la imagen.
 - `expose` solo abre el puerto 3000 dentro de la red de Docker; el acceso desde fuera lo da el dominio del paso 3. No publiques el puerto con `ports`.
 
 ### 2. Define las variables de entorno
@@ -299,13 +299,13 @@ Cada persona entra al admin con su email y contraseña, y su rol decide qué pue
 
 | Rol          | Puede                                                                                       |
 | ------------ | ------------------------------------------------------------------------------------------- |
-| `viewer`     | ver scopes, servicios, versiones, deploys y bloqueos                                        |
+| `viewer`     | ver apps, sus scopes, versiones, deploys y bloqueos                                         |
 | `publisher`  | registrar versiones (`keel create-version`)                                                  |
 | `deployer`   | desplegar (`keel deploy`, `rollback`, `promote`)                                             |
-| `maintainer` | bloquear y desbloquear servicios; en el admin, vincular y desvincular servicios y rotar el token de CI |
-| `admin`      | todo: miembros, tokens de todos, crear y eliminar scopes, auditoría                          |
+| `maintainer` | bloquear y desbloquear scopes; en el admin, agregar y desvincular scopes y rotar el token de CI de la app |
+| `admin`      | todo: miembros, tokens de todos, crear y eliminar apps, auditoría                            |
 
-En **Miembros**, un admin puede dar **permisos por repo y servicio** con patrones `*` (p.ej. `konectus-io/*` y `prod*` → `viewer`): suben o bajan el rol donde coinciden, gana el más específico y, empatados, el rol más bajo. A un `admin` nunca se le baja. Un token puede tener un **rol máximo** menor que el de su dueño. Si la API niega algo responde `403` con el rol y la acción. Todo cambio desde la API o el admin queda en **Auditoría**.
+En **Miembros**, un admin puede dar **permisos por repo y scope** con patrones `*` (p.ej. repo `konectus-io/*` y patrón de scope `prod*` → `viewer`): suben o bajan el rol donde coinciden, gana el más específico y, empatados, el rol más bajo. A un `admin` nunca se le baja. Un token puede tener un **rol máximo** menor que el de su dueño. Si la API niega algo responde `403` con el rol y la acción. Todo cambio desde la API o el admin queda en **Auditoría**.
 
 Para arrancar:
 
@@ -316,14 +316,16 @@ Para arrancar:
 
 ## Vincular un repo
 
+Vincular un repo es crear una **app** en keel y agregarle sus **scopes**: los destinos de deploy (`prod`, `stg`…), cada uno apuntando a un servicio de Dokploy (un Application o un Compose).
+
 1. Entra al admin (`https://<dominio>/`) como admin.
-2. **Nuevo scope**: pega la URL del repo de GitHub. Copia el token de CI que aparece (solo se muestra una vez).
-3. En el scope, **vincula servicios** de Dokploy: un alias (lo que eliges en `keel deploy`, p.ej. `api-prod`) y la URL del servicio copiada del dashboard de Dokploy (`…/services/application/<id>` o `…/services/compose/<id>`). Para un Compose puedes indicar la variable del tag; si la dejas vacía es `DOCKER_TAG`.
+2. En **Apps → Nueva app**: pega la URL del repo de GitHub. Copia el token de CI que aparece (solo se muestra una vez).
+3. En la app, **agrega sus scopes**: el nombre del scope (lo que eliges en `keel deploy -s`, p.ej. `prod`) y la URL del servicio copiada del dashboard de Dokploy (`…/services/application/<id>` o `…/services/compose/<id>`). Para un Compose puedes indicar la variable del tag; si la dejas vacía es `DOCKER_TAG`.
 4. En el repo de GitHub:
    - Copia [`templates/github/keel-release.yml`](templates/github/keel-release.yml) a `.github/workflows/` y reemplaza el paso `Test` por tus tests.
    - Variable `KEEL_API_URL` = `https://<dominio>/api`.
-   - Secret `DEPLOY_API_TOKEN` = el token de CI del scope.
-5. Prepara el servicio en Dokploy según su tipo:
+   - Secret `DEPLOY_API_TOKEN` = el token de CI de la app.
+5. Prepara el servicio de Dokploy de cada scope según su tipo:
 
    | Tipo        | Requisito                                                                                                       | Qué hace keel al desplegar `v1.4.0`                                              |
    | ----------- | --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
@@ -331,6 +333,28 @@ Para arrancar:
    | Compose     | La imagen usa la variable del tag (`image: ${DOCKER_IMAGE}:${DOCKER_TAG}`) y esa variable está en Environment | Pone `DOCKER_TAG=v1.4.0` en Environment, sin tocar el resto, y redespliega       |
 
    En un Compose, todos los servicios que usan esa variable se actualizan juntos. Si la variable no está definida en el Environment, keel no despliega y marca el deploy como fallido con el motivo.
+
+## Cambio de nombres en v0.7.0
+
+Hasta v0.6.0 el servidor llamaba **scope** al repo vinculado y **servicio** a cada destino de deploy, al revés que la CLI. Desde v0.7.0 el servidor usa los mismos nombres que la CLI:
+
+- una **app** es un repo de GitHub vinculado a keel, con su token de CI (antes "scope" en el admin);
+- un **scope** es un destino de deploy de la app, como `prod` o `stg`, que apunta a un servicio de Dokploy (antes "servicio").
+
+"Servicio" queda solo para lo que vive en Dokploy (el Application o Compose al que apunta un scope). En el admin, la sección **Scopes** ahora es **Apps** (`/scopes` redirige a `/apps`), y los permisos usan "patrón de scope".
+
+La API acepta los nombres anteriores, así que la CLI v0.6.0 y anteriores siguen funcionando:
+
+| Nuevo                                           | Se sigue aceptando                                 |
+| ----------------------------------------------- | -------------------------------------------------- |
+| `GET /api/repos/{owner}/{repo}/scopes`          | `GET …/services` (misma respuesta)                 |
+| `PUT`/`DELETE …/scopes/{alias}/lock`            | `PUT`/`DELETE …/services/{alias}/lock`             |
+| `POST /api/deploys` con `scope`                 | con `service` (si mandas los dos, deben coincidir) |
+| `GET …/deploys?scope=`                          | `?service=`                                        |
+
+Las respuestas traen los dos nombres: la lista de scopes va en `scopes` y en `services`; cada deploy trae `scope` y `service` (y el detalle `scopeKind` y `serviceKind`); los permisos de `whoami` traen `scope` y `service`. Las entradas de auditoría usan `scope`.
+
+La base se migra sola al arrancar: en SQLite se renombran las tablas y columnas (`scopes` → `apps`, `services` → `scopes`, `service_locks` → `scope_locks`, y las columnas `service_*` → `scope_*`); en Postgres lo hace la migración 3. No se pierde nada: deploys, bloqueos, permisos, auditoría y tokens quedan igual. `db:sqlite-to-postgres` acepta una base SQLite con los nombres de antes o con los nuevos.
 
 ## Desarrollo
 
