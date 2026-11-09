@@ -11,3 +11,4 @@ coverage/
 .DS_Store
 .vitest/
 next-env.d.ts
+target/

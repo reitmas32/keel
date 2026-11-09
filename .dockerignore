@@ -10,3 +10,4 @@
 .vitest
 coverage
 apps/cli
+target
