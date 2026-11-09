@@ -12,6 +12,7 @@ such as Cursor, Gemini CLI or OpenCode.
 | [`keel-docs`](keel-docs/skills/keel-docs/SKILL.md) | Writes, extends and audits a repository's `docs/` so it builds with `keel docs` and follows the Foundathyon documentation standard | 0.1.0 |
 | [`keel-release`](keel-release/skills/keel-release/SKILL.md) | Cuts a release: proposes the next semantic version from the commits, bumps the version files `.keel` lists, runs the checks and `keel docs --check --strict`, and tags with `keel create-version` — asking before anything is pushed | 0.1.0 |
 | [`keel-setup`](keel-setup/skills/keel-setup/SKILL.md) | Prepares a repository for keel releases, or audits one: `.keel` from `keel init`, the Release workflow and keel-api's canonical `report-version.sh` that confirm every version to keel-api, `docs/releases.md`, `dist/` ignored, and the `KEEL_CI_TOKEN` credential — asking before CI or secrets change, and never tagging | 0.1.0 |
+| [`keel-cli`](keel-cli/skills/keel-cli/SKILL.md) | Uses the `keel` CLI safely: creates versions and deploys them through keel once CI passes, rolls back, reads deploys, status and redacted logs, and changes Dokploy (env, Compose, mounts, databases, backups) only through plans a person approves — keel scopes deploy through keel, never through Dokploy, and secrets never go on the command line | 0.1.0 |
 
 ## Install
 

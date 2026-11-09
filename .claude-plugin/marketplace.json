@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "Foundathyon's skills for coding agents — one source for Claude Code, Codex and GitHub Copilot.",
-    "version": "0.3.0"
+    "version": "0.4.0"
   },
   "plugins": [
     {
@@ -32,6 +32,14 @@
       "version": "0.1.0",
       "category": "release",
       "keywords": ["keel", "release", "ci", "github-actions", "setup", "audit"]
+    },
+    {
+      "name": "keel-cli",
+      "source": "./plugins/keel-cli",
+      "description": "Use the keel CLI safely: create versions and deploy them through keel once CI passes, roll back, read deploys, status and redacted logs, and change Dokploy only through reviewed plans a person approves — never secrets on the command line.",
+      "version": "0.1.0",
+      "category": "deployment",
+      "keywords": ["keel", "deploy", "rollback", "dokploy", "ci", "logs", "env", "compose"]
     }
   ]
 }

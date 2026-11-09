@@ -1,0 +1,12 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "keel-cli",
+  "version": "0.1.0",
+  "description": "Use the keel CLI safely: create versions and deploy them through keel once CI passes, roll back, read deploys, status and redacted logs, and change Dokploy only through reviewed plans a person approves — never secrets on the command line.",
+  "author": {
+    "name": "Foundathyon",
+    "url": "https://github.com/fundathyon"
+  },
+  "repository": "https://github.com/reitmas32/keel",
+  "keywords": ["keel", "deploy", "rollback", "dokploy", "ci", "logs", "env", "compose"]
+}
