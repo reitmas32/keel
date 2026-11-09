@@ -162,7 +162,7 @@ La versión actual es la del último deploy exitoso. El nombre en Dokploy (`proy
 
 ### Tokens, locks, promote y más
 
-- `keel login --token keel_pat_…` guarda un token personal (créalo en el admin, en «Tokens de API»). `KEEL_TOKEN` lo reemplaza. Con `KEEL_API_AUTH=required` en el servidor, la API solo acepta peticiones con token, y cada deploy guarda quién lo pidió.
+- `keel login --token keel_pat_…` guarda un token personal (créalo en el admin, en «Tokens de API»). `KEEL_TOKEN` lo reemplaza. El token actúa con el rol de su dueño (ver [Miembros y roles](#miembros-y-roles)). Con `KEEL_API_AUTH=required` en el servidor, la API solo acepta peticiones con token, y cada deploy guarda quién lo pidió.
 - `keel lock -s prod -m "incidente"` congela un scope: keel rechaza sus deploys (exit 31) hasta `keel unlock -s prod`.
 - `keel promote --from stg --to prod` despliega en `prod` la versión que corre en `stg`.
 - `keel deploy … --rollback-on-failure` (también en `promote`) espera el deploy y, si falla, vuelve a la versión anterior.
@@ -206,6 +206,9 @@ services:
       KEEL_ADMIN_PASSWORD: ${KEEL_ADMIN_PASSWORD:?Contraseña del admin, mínimo 12 caracteres}
       KEEL_CI_EXPIRY_MINUTES: ${KEEL_CI_EXPIRY_MINUTES:-60}
       KEEL_DEPLOY_TIMEOUT_MINUTES: ${KEEL_DEPLOY_TIMEOUT_MINUTES:-15}
+      # optional: la API acepta llamadas sin token, con el rol KEEL_ANONYMOUS_ROLE. required: siempre pide token.
+      KEEL_API_AUTH: ${KEEL_API_AUTH:-optional}
+      KEEL_ANONYMOUS_ROLE: ${KEEL_ANONYMOUS_ROLE:-deployer}
       # Base de datos: SQLite en el volumen /data por defecto. Para Postgres (p.ej. varias réplicas de keel),
       # descomenta estas dos líneas y define POSTGRES_DSN en el Environment.
       # DB_ENGINE: postgres
@@ -245,6 +248,8 @@ KEEL_ADMIN_PASSWORD=<contraseña larga y aleatoria>
 | `KEEL_DB_PATH`                | no (`/data/keel.db`) | Ruta de la base SQLite dentro del contenedor                 |
 | `DB_ENGINE`                   | no (`sqlite`)        | `sqlite` o `postgres`                                        |
 | `POSTGRES_DSN`                | con `postgres`       | `postgres://usuario:contraseña@host:5432/base`               |
+| `KEEL_API_AUTH`               | no (`optional`)      | `required`: toda la API (salvo `/health` y `/ci-result`) pide token |
+| `KEEL_ANONYMOUS_ROLE`         | no (`deployer`)      | Rol de las llamadas sin token: `none`, `viewer`, `publisher` o `deployer` |
 
 Si falta una variable requerida, el deploy del compose falla mostrando su descripción. Para generar la contraseña: `openssl rand -base64 24`.
 
@@ -268,7 +273,7 @@ Vuelve a pulsar **Deploy** para que Dokploy aplique el dominio. Comprueba que re
 curl https://keel.konectus.com/api/health
 ```
 
-Debe devolver `{"ok":true}`. El admin queda en `https://keel.konectus.com/` (entra con `KEEL_ADMIN_PASSWORD`) y la API en `https://keel.konectus.com/api`, que es la URL que usas en `keel login` y en la variable `KEEL_API_URL` de cada repo.
+Debe devolver `{"ok":true}`. El admin queda en `https://keel.konectus.com/` (la primera vez entra con `KEEL_ADMIN_PASSWORD`, ver [Miembros y roles](#miembros-y-roles)) y la API en `https://keel.konectus.com/api`, que es la URL que usas en `keel login` y en la variable `KEEL_API_URL` de cada repo.
 
 > La GitHub Action tiene que poder llegar a `https://<dominio>/api/ci-result`. Con runners hospedados por GitHub, el dominio debe ser público (el resto de la API y el admin pueden protegerse aparte); si keel solo es accesible en una red interna, usa runners self-hosted dentro de esa red.
 
@@ -288,9 +293,30 @@ Para pasar una instancia existente de SQLite a Postgres, una sola vez:
    Crea las tablas, copia todas en una transacción (si algo falla no escribe nada) e imprime las filas copiadas por tabla. Si Postgres ya tiene datos de keel se niega; `--force` los borra y copia de nuevo.
 3. Define `DB_ENGINE=postgres` y `POSTGRES_DSN` en el Environment y redespliega.
 
+### Miembros y roles
+
+Cada persona entra al admin con su email y contraseña, y su rol decide qué puede hacer en el admin y con sus tokens de API. Los roles van de menos a más; cada uno puede todo lo del anterior:
+
+| Rol          | Puede                                                                                       |
+| ------------ | ------------------------------------------------------------------------------------------- |
+| `viewer`     | ver scopes, servicios, versiones, deploys y bloqueos                                        |
+| `publisher`  | registrar versiones (`keel create-version`)                                                  |
+| `deployer`   | desplegar (`keel deploy`, `rollback`, `promote`)                                             |
+| `maintainer` | bloquear y desbloquear servicios; en el admin, vincular y desvincular servicios y rotar el token de CI |
+| `admin`      | todo: miembros, tokens de todos, crear y eliminar scopes, auditoría                          |
+
+En **Miembros**, un admin puede dar **permisos por repo y servicio** con patrones `*` (p.ej. `konectus-io/*` y `prod*` → `viewer`): suben o bajan el rol donde coinciden, gana el más específico y, empatados, el rol más bajo. A un `admin` nunca se le baja. Un token puede tener un **rol máximo** menor que el de su dueño. Si la API niega algo responde `403` con el rol y la acción. Todo cambio desde la API o el admin queda en **Auditoría**.
+
+Para arrancar:
+
+1. Entra al admin dejando el email vacío y con `KEEL_ADMIN_PASSWORD`: entras como el admin de arranque (`admin@localhost`), que también es dueño de los tokens creados antes de los roles. Esta entrada queda como acceso de emergencia.
+2. En **Miembros**, invita a cada persona con su rol y mándale el enlace de invitación (un solo uso, vence en 7 días). Con él pone su contraseña.
+3. Cada quien crea su token en **Tokens de API** y ejecuta `keel login --token …`.
+4. Cuando todos tengan token, define `KEEL_API_AUTH=required`. Mientras sea `optional`, las llamadas sin token actúan con `KEEL_ANONYMOUS_ROLE` (por defecto `deployer`, como antes de los roles): los roles solo protegen de verdad con `required`.
+
 ## Vincular un repo
 
-1. Entra al admin (`https://<dominio>/`) con `KEEL_ADMIN_PASSWORD`.
+1. Entra al admin (`https://<dominio>/`) como admin.
 2. **Nuevo scope**: pega la URL del repo de GitHub. Copia el token de CI que aparece (solo se muestra una vez).
 3. En el scope, **vincula servicios** de Dokploy: un alias (lo que eliges en `keel deploy`, p.ej. `api-prod`) y la URL del servicio copiada del dashboard de Dokploy (`…/services/application/<id>` o `…/services/compose/<id>`). Para un Compose puedes indicar la variable del tag; si la dejas vacía es `DOCKER_TAG`.
 4. En el repo de GitHub:
@@ -350,6 +376,6 @@ El token se crea en Docker Hub → Account settings → Personal access tokens.
 ## Limitaciones actuales
 
 - Application solo con proveedor Docker; Compose solo si la imagen toma el tag de una variable de su Environment.
-- `POST /api/deploys` no tiene autenticación: cualquiera que alcance la API puede pedir un deploy (solo se ejecuta si el CI de ese commit pasó).
+- Con `KEEL_API_AUTH=optional` (por defecto), cualquiera que alcance la API puede pedir un deploy con el rol `KEEL_ANONYMOUS_ROLE` (solo se ejecuta si el CI de ese commit pasó). Usa `required` para que los roles apliquen a todos.
 - El worker corre dentro del proceso de Next.js. Con SQLite, una sola réplica por instancia; con Postgres pueden ser varias.
 - En Windows, las carpetas de `~/.keel` se llaman `github.com_<org>` (`:` no es válido en un nombre de archivo).
