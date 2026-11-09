@@ -3,19 +3,21 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { type ReactNode, useState } from "react";
-import { IconCheck, IconCopy, IconKey, IconScopes } from "./icons";
+import { IconAudit, IconCheck, IconCopy, IconKey, IconScopes, IconUsers } from "./icons";
 
 const NAV = [
   { href: "/scopes", label: "Scopes", icon: <IconScopes /> },
   { href: "/tokens", label: "Tokens de API", icon: <IconKey /> },
+  { href: "/members", label: "Miembros", icon: <IconUsers />, admin: true },
+  { href: "/audit", label: "Auditoría", icon: <IconAudit />, admin: true },
 ];
 
-/** The sidebar links; the one for the current section is highlighted. */
-export function NavLinks() {
+/** The sidebar links; the one for the current section is highlighted. Members and audit only show to admins. */
+export function NavLinks({ admin }: { admin: boolean }) {
   const pathname = usePathname();
   return (
     <ul className="sidebar-nav">
-      {NAV.map((item) => {
+      {NAV.filter((item) => admin || !item.admin).map((item) => {
         const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
         return (
           <li key={item.href}>
@@ -45,10 +47,20 @@ export function CopyButton({ value }: { value: string }) {
 }
 
 /** A freshly generated secret, shown once with a copy button. */
-export function TokenNotice({ token, hint, children }: { token: string; hint: ReactNode; children?: ReactNode }) {
+export function TokenNotice({
+  token,
+  hint,
+  title = "Guarda este token ahora: no se vuelve a mostrar.",
+  children,
+}: {
+  token: string;
+  hint: ReactNode;
+  title?: string;
+  children?: ReactNode;
+}) {
   return (
     <div className="alert" role="status">
-      <strong className="alert-title">Guarda este token ahora: no se vuelve a mostrar.</strong>
+      <strong className="alert-title">{title}</strong>
       <div>{hint}</div>
       <div className="token-row">
         <code>{token}</code>

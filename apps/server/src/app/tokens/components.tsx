@@ -1,11 +1,12 @@
 "use client";
 
+import type { Role } from "@keel/shared";
 import { useActionState } from "react";
 import { IconPlus } from "../icons";
 import { TokenNotice } from "../ui-client";
 import { createApiTokenAction, type TokenFormState } from "./actions";
 
-export function CreateApiTokenForm({ maxLength }: { maxLength: number }) {
+export function CreateApiTokenForm({ maxLength, roles }: { maxLength: number; roles: readonly Role[] }) {
   const [state, action, pending] = useActionState<TokenFormState, FormData>(createApiTokenAction, {});
   return (
     <>
@@ -23,6 +24,19 @@ export function CreateApiTokenForm({ maxLength }: { maxLength: number }) {
             placeholder="rafa-laptop"
             autoComplete="off"
           />
+        </div>
+        <div className="field narrow">
+          <label className="label" htmlFor="token-max-role">
+            Rol máximo
+          </label>
+          <select id="token-max-role" className="input" name="maxRole" defaultValue="">
+            <option value="">Mi rol (sin límite)</option>
+            {roles.map((role) => (
+              <option key={role} value={role}>
+                {role}
+              </option>
+            ))}
+          </select>
         </div>
         <button type="submit" className="btn" disabled={pending}>
           <IconPlus />

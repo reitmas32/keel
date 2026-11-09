@@ -1,10 +1,11 @@
 "use server";
 
+import { isRole } from "@keel/shared";
 import { revalidatePath } from "next/cache";
-import { createApiToken } from "@/lib/api-auth";
+import { createTokenAs, revokeTokenAs } from "@/lib/admin";
 import { getContext } from "@/lib/context";
 import { ApiError } from "@/lib/errors";
-import { requireAdmin } from "../session";
+import { requireMember } from "../session";
 
 export interface TokenFormState {
   error?: string;
@@ -13,11 +14,18 @@ export interface TokenFormState {
   name?: string;
 }
 
+/** Creates a token for the member signed in, optionally capped at a "rol máximo". */
 export async function createApiTokenAction(_state: TokenFormState, form: FormData): Promise<TokenFormState> {
-  await requireAdmin();
+  const viewer = await requireMember();
   try {
     const { store, now } = await getContext();
-    const { record, token } = await createApiToken(store, String(form.get("name") ?? ""), now());
+    const maxRole = String(form.get("maxRole") ?? "");
+    const { record, token } = await createTokenAs(
+      store,
+      viewer,
+      { name: String(form.get("name") ?? ""), maxRole: isRole(maxRole) ? maxRole : null },
+      now(),
+    );
     revalidatePath("/tokens");
     return { token, name: record.name };
   } catch (error) {
@@ -26,8 +34,10 @@ export async function createApiTokenAction(_state: TokenFormState, form: FormDat
   }
 }
 
+/** Members revoke their own tokens; admins anyone's (enforced in revokeTokenAs). */
 export async function revokeApiTokenAction(form: FormData): Promise<void> {
-  await requireAdmin();
-  await (await getContext()).store.deleteApiToken(String(form.get("tokenId") ?? ""));
+  const viewer = await requireMember();
+  const { store, now } = await getContext();
+  await revokeTokenAs(store, viewer, String(form.get("tokenId") ?? ""), now());
   revalidatePath("/tokens");
 }

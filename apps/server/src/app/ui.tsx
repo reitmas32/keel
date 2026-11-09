@@ -1,8 +1,10 @@
-import type { DeployStatus, VersionCiStatus } from "@keel/shared";
+import type { DeployStatus, Role, VersionCiStatus } from "@keel/shared";
 import Link from "next/link";
 import { Fragment, type ReactNode } from "react";
+import type { MemberStatus } from "@/lib/store";
 import { IconChevronRight, IconLogOut, KeelMark } from "./icons";
 import { logout } from "./login/actions";
+import { currentViewer, viewerIsAdmin } from "./session";
 import { NavLinks } from "./ui-client";
 
 export function Brand({ sub }: { sub?: string }) {
@@ -19,8 +21,12 @@ export function Brand({ sub }: { sub?: string }) {
   );
 }
 
-/** Sidebar with the sections and "Salir"; on narrow screens it folds into a top bar (see globals.css). */
-export function AdminShell({ children }: { children: ReactNode }) {
+/**
+ * Sidebar with the sections, who is signed in and "Salir"; on narrow screens it folds into a top bar (see
+ * globals.css). Pages still check the session themselves: the shell only reads it.
+ */
+export async function AdminShell({ children }: { children: ReactNode }) {
+  const viewer = await currentViewer();
   return (
     <div className="shell">
       <aside className="sidebar">
@@ -29,9 +35,15 @@ export function AdminShell({ children }: { children: ReactNode }) {
         </div>
         <nav className="sidebar-group" aria-label="Secciones">
           <div className="sidebar-label">Administración</div>
-          <NavLinks />
+          <NavLinks admin={viewer ? viewerIsAdmin(viewer) : false} />
         </nav>
         <form action={logout} className="sidebar-footer">
+          {viewer && (
+            <div className="sidebar-user">
+              <span className="sidebar-user-name">{viewer.member.name}</span>
+              <RoleBadge role={viewer.member.role} />
+            </div>
+          )}
           <button type="submit" className="nav-item">
             <IconLogOut />
             Salir
@@ -163,3 +175,14 @@ export function StatusBadge({ tone, href, children }: { tone: Tone; href?: strin
     <span className={className}>{children}</span>
   );
 }
+
+/** A member's role as a quiet outline pill. */
+export function RoleBadge({ role }: { role: Role | null }) {
+  return <span className="badge badge-outline role-badge">{role ?? "sin rol"}</span>;
+}
+
+export const MEMBER_STATUS: Record<MemberStatus, { label: string; tone: Tone }> = {
+  invited: { label: "Invitado", tone: "running" },
+  active: { label: "Activo", tone: "done" },
+  disabled: { label: "Deshabilitado", tone: "error" },
+};

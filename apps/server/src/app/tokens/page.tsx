@@ -1,24 +1,28 @@
+import { ROLES } from "@keel/shared";
+import { tokenRoleChoices } from "@/lib/admin";
 import { API_TOKEN_NAME_MAX } from "@/lib/api-auth";
 import { getContext } from "@/lib/context";
 import { formatDate } from "@/lib/format";
 import { IconTrash } from "../icons";
-import { requireAdmin } from "../session";
-import { Card, Page, PageHeader, StatusBadge } from "../ui";
+import { requireMember, viewerIsAdmin } from "../session";
+import { Card, Page, PageHeader, RoleBadge, StatusBadge } from "../ui";
 import { ConfirmButton } from "../ui-client";
 import { revokeApiTokenAction } from "./actions";
 import { CreateApiTokenForm } from "./components";
 
 export default async function TokensPage() {
-  await requireAdmin();
+  const viewer = await requireMember();
+  const admin = viewerIsAdmin(viewer);
   const { store, env } = await getContext();
-  const tokens = await store.listApiTokens();
+  // Admins see and revoke everyone's tokens; everyone else only their own.
+  const tokens = await store.listApiTokens(admin ? {} : { memberId: viewer.member.id });
   const required = env.KEEL_API_AUTH === "required";
 
   return (
     <Page crumbs={[{ label: "Tokens de API" }]}>
       <PageHeader
         title="Tokens de API"
-        description="Tokens personales para el CLI. keel guarda solo su hash y anota su nombre en cada deploy que piden."
+        description="Tokens personales para el CLI. Actúan con tu rol (o con su rol máximo, si es menor). keel guarda solo su hash."
         actions={
           <StatusBadge tone={required ? "done" : "idle"}>
             {required ? "Token obligatorio" : "Token opcional"}
@@ -36,16 +40,20 @@ export default async function TokensPage() {
               </>
             ) : (
               <>
-                Esta instancia tiene <code>KEEL_API_AUTH=optional</code>: el CLI funciona sin token, pero con uno los
-                deploys registran quién los pidió.
+                Esta instancia tiene <code>KEEL_API_AUTH=optional</code>: sin token, el CLI actúa con el rol{" "}
+                <code>{env.KEEL_ANONYMOUS_ROLE}</code> (<code>KEEL_ANONYMOUS_ROLE</code>). Con un token, con tu rol, y
+                los deploys registran quién los pidió.
               </>
             )
           }
         >
-          <CreateApiTokenForm maxLength={API_TOKEN_NAME_MAX} />
+          <CreateApiTokenForm maxLength={API_TOKEN_NAME_MAX} roles={tokenRoleChoices(viewer, ROLES)} />
         </Card>
 
-        <Card title="Tokens" description="Revocar un token lo invalida al instante.">
+        <Card
+          title={admin ? "Todos los tokens" : "Tus tokens"}
+          description="Revocar un token lo invalida al instante. Si se deshabilita a su dueño, deja de funcionar."
+        >
           {tokens.length === 0 ? (
             <p className="empty">Todavía no hay tokens.</p>
           ) : (
@@ -54,6 +62,8 @@ export default async function TokensPage() {
                 <thead>
                   <tr>
                     <th>Nombre</th>
+                    {admin && <th>Dueño</th>}
+                    <th>Rol máximo</th>
                     <th>Creado</th>
                     <th>Último uso</th>
                     <th className="actions">
@@ -67,6 +77,8 @@ export default async function TokensPage() {
                       <td>
                         <strong>{token.name}</strong>
                       </td>
+                      {admin && <td>{token.ownerName ?? <span className="muted">—</span>}</td>}
+                      <td>{token.maxRole ? <RoleBadge role={token.maxRole} /> : <span className="muted">—</span>}</td>
                       <td className="muted nowrap">{formatDate(token.createdAt)}</td>
                       <td className="muted nowrap">{token.lastUsedAt ? formatDate(token.lastUsedAt) : "Nunca"}</td>
                       <td className="actions">

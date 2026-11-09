@@ -17,11 +17,27 @@ export default function LoginPage() {
               </span>
             </span>
             <h1 className="card-title">keel admin</h1>
-            <p className="card-description">Ingresa la contraseña de esta instancia.</p>
+            <p className="card-description">Entra con tu email y contraseña de keel.</p>
           </div>
         </div>
         <div className="card-content">
           <form action={action} className="form-stack">
+            <div className="field">
+              <label className="label" htmlFor="email">
+                Email
+              </label>
+              <input
+                id="email"
+                className="input"
+                type="email"
+                name="email"
+                autoComplete="username"
+                defaultValue={state.email}
+                placeholder="tu@empresa.com"
+                // biome-ignore lint/a11y/noAutofocus: the first field of the only form on the page
+                autoFocus
+              />
+            </div>
             <div className="field">
               <label className="label" htmlFor="password">
                 Contraseña
@@ -33,8 +49,6 @@ export default function LoginPage() {
                 name="password"
                 required
                 autoComplete="current-password"
-                // biome-ignore lint/a11y/noAutofocus: the only field on the page
-                autoFocus
               />
             </div>
             <button type="submit" className="btn btn-block" disabled={pending}>
@@ -46,6 +60,9 @@ export default function LoginPage() {
               {state.error}
             </p>
           )}
+          <p className="hint login-hint">
+            Acceso de emergencia: deja el email vacío y usa <code>KEEL_ADMIN_PASSWORD</code>.
+          </p>
         </div>
       </div>
     </main>

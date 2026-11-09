@@ -1,12 +1,13 @@
 import Link from "next/link";
 import { getContext } from "@/lib/context";
 import { IconLock, IconRepo, IconServer } from "../icons";
-import { requireAdmin } from "../session";
+import { requireMember, viewerIsAdmin } from "../session";
 import { deployTone, Page, PageHeader, StatusBadge } from "../ui";
 import { CreateScopeForm } from "./components";
 
 export default async function ScopesPage() {
-  await requireAdmin();
+  const viewer = await requireMember();
+  const admin = viewerIsAdmin(viewer);
   const { store } = await getContext();
   const scopes = await Promise.all(
     (await store.listScopes()).map(async (scope) => {
@@ -65,18 +66,23 @@ export default async function ScopesPage() {
           </Link>
         ))}
 
-        <section className="card new-card">
-          <div className="card-header">
-            <div>
-              <h2 className="card-title">Nuevo scope</h2>
-              <p className="card-description">Pega la URL del repo. Te damos el token para su GitHub Action.</p>
+        {admin && (
+          <section className="card new-card">
+            <div className="card-header">
+              <div>
+                <h2 className="card-title">Nuevo scope</h2>
+                <p className="card-description">Pega la URL del repo. Te damos el token para su GitHub Action.</p>
+              </div>
             </div>
-          </div>
-          <div className="card-content">
-            <CreateScopeForm />
-          </div>
-        </section>
+            <div className="card-content">
+              <CreateScopeForm />
+            </div>
+          </section>
+        )}
       </div>
+      {scopes.length === 0 && !admin && (
+        <p className="empty">Todavía no hay scopes. Un admin de keel puede crearlos.</p>
+      )}
     </Page>
   );
 }

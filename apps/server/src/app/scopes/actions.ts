@@ -1,12 +1,19 @@
 "use server";
 
-import { LOCK_REASON_MAX, lockServiceRequestSchema } from "@keel/shared";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import {
+  createScopeAs,
+  deleteScopeAs,
+  linkServiceAs,
+  lockServiceAs,
+  rotateCiTokenAs,
+  unlinkServiceAs,
+  unlockServiceAs,
+} from "@/lib/admin";
 import { getContext } from "@/lib/context";
 import { ApiError } from "@/lib/errors";
-import { addService, createScope, rotateCiToken } from "@/lib/scopes";
-import { requireAdmin } from "../session";
+import { requireMember, type Viewer } from "../session";
 
 export interface FormState {
   error?: string;
@@ -18,16 +25,16 @@ export interface FormState {
   ok?: boolean;
 }
 
-/** Who appears as `lockedBy` when a service is locked from the admin. */
-const ADMIN_NAME = "admin";
-
 const field = (form: FormData, name: string) => String(form.get(name) ?? "").trim();
 
-/** Runs a mutation and turns expected errors into form state instead of an error page. */
-async function attempt(fn: () => FormState | Promise<FormState>): Promise<FormState> {
-  await requireAdmin();
+/**
+ * Runs a mutation as the member signed in and turns expected errors (including a 403 for a role that can't) into
+ * form state instead of an error page. The role checks live in lib/admin.ts.
+ */
+async function attempt(fn: (viewer: Viewer) => FormState | Promise<FormState>): Promise<FormState> {
+  const viewer = await requireMember();
   try {
-    return await fn();
+    return await fn(viewer);
   } catch (error) {
     if (error instanceof ApiError) return { error: error.message };
     throw error;
@@ -35,10 +42,11 @@ async function attempt(fn: () => FormState | Promise<FormState>): Promise<FormSt
 }
 
 export async function createScopeAction(_state: FormState, form: FormData): Promise<FormState> {
-  return attempt(async () => {
+  return attempt(async (viewer) => {
     const { store, now } = await getContext();
-    const { scope, ciToken } = await createScope(
+    const { scope, ciToken } = await createScopeAs(
       store,
+      viewer,
       { name: field(form, "name"), repoUrl: field(form, "repoUrl") },
       now(),
     );
@@ -48,13 +56,12 @@ export async function createScopeAction(_state: FormState, form: FormData): Prom
 }
 
 export async function addServiceAction(scopeId: string, _state: FormState, form: FormData): Promise<FormState> {
-  return attempt(async () => {
+  return attempt(async (viewer) => {
     const { store, now } = await getContext();
-    const scope = await store.getScope(scopeId);
-    if (!scope) throw new ApiError(404, "Scope no encontrado.");
-    await addService(
+    await linkServiceAs(
       store,
-      scope,
+      viewer,
+      scopeId,
       { alias: field(form, "alias"), dokployUrl: field(form, "dokployUrl"), tagVariable: field(form, "tagVariable") },
       now(),
     );
@@ -64,7 +71,10 @@ export async function addServiceAction(scopeId: string, _state: FormState, form:
 }
 
 export async function rotateTokenAction(scopeId: string, _state: FormState): Promise<FormState> {
-  return attempt(async () => ({ token: await rotateCiToken((await getContext()).store, scopeId) }));
+  return attempt(async (viewer) => {
+    const { store, now } = await getContext();
+    return { token: await rotateCiTokenAs(store, viewer, scopeId, now()) };
+  });
 }
 
 export async function lockServiceAction(
@@ -73,39 +83,37 @@ export async function lockServiceAction(
   _state: FormState,
   form: FormData,
 ): Promise<FormState> {
-  return attempt(async () => {
+  return attempt(async (viewer) => {
     const { store, now } = await getContext();
-    const service = await store.getService(serviceId);
-    if (service?.scopeId !== scopeId) throw new ApiError(404, "Servicio no encontrado.");
-    const parsed = lockServiceRequestSchema.safeParse({ reason: field(form, "reason") });
-    if (!parsed.success) throw new ApiError(400, `Escribe el motivo del bloqueo (1 a ${LOCK_REASON_MAX} caracteres).`);
-    await store.lockService({ serviceId, reason: parsed.data.reason, lockedBy: ADMIN_NAME }, now());
+    await lockServiceAs(store, viewer, scopeId, serviceId, field(form, "reason"), now());
     revalidatePath(`/scopes/${scopeId}`);
     return { ok: true };
   });
 }
 
+// The form actions below have no form state to show an error in: their buttons only render for roles that can use
+// them, so a 403 here means a crafted request and the error page is fine.
+
 export async function unlockServiceAction(form: FormData): Promise<void> {
-  await requireAdmin();
+  const viewer = await requireMember();
   const scopeId = field(form, "scopeId");
-  const { store } = await getContext();
-  const service = await store.getService(field(form, "serviceId"));
-  if (service?.scopeId === scopeId) await store.unlockService(service.id);
+  const { store, now } = await getContext();
+  await unlockServiceAs(store, viewer, scopeId, field(form, "serviceId"), now());
   revalidatePath(`/scopes/${scopeId}`);
 }
 
 export async function deleteServiceAction(form: FormData): Promise<void> {
-  await requireAdmin();
+  const viewer = await requireMember();
   const scopeId = field(form, "scopeId");
-  const { store } = await getContext();
-  const service = await store.getService(field(form, "serviceId"));
-  if (service?.scopeId === scopeId) await store.deleteService(service.id);
+  const { store, now } = await getContext();
+  await unlinkServiceAs(store, viewer, scopeId, field(form, "serviceId"), now());
   revalidatePath(`/scopes/${scopeId}`);
 }
 
 export async function deleteScopeAction(form: FormData): Promise<void> {
-  await requireAdmin();
-  await (await getContext()).store.deleteScope(field(form, "scopeId"));
+  const viewer = await requireMember();
+  const { store, now } = await getContext();
+  await deleteScopeAs(store, viewer, field(form, "scopeId"), now());
   revalidatePath("/scopes");
   redirect("/scopes");
 }
