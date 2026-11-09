@@ -2,7 +2,7 @@
 //! deploy it behind keel's back (no CI gate, stale `scopes` and `rollback`).
 
 use crate::dokploy::paths::keel_home;
-use crate::keel::api::{KeelApi, ServiceSummary};
+use crate::keel::api::{KeelApi, ScopeSummary};
 use crate::keel::{config, git};
 use anyhow::Result;
 use std::path::Path;
@@ -13,7 +13,7 @@ pub enum Managed {
     /// The service is this scope of `repo`.
     Scope {
         repo: String,
-        scope: Box<ServiceSummary>,
+        scope: Box<ScopeSummary>,
     },
     /// The working directory is a keel repo and none of its scopes is this service.
     NotManaged { repo: String },
@@ -59,7 +59,7 @@ pub async fn lookup(cwd: &Path, dokploy_id: &str) -> Result<Managed> {
         Err(reason) => return Ok(Managed::Unknown(reason)),
     };
     let api = KeelApi::for_org(&org)?;
-    let scopes = api.list_service_summaries(&repo).await?;
+    let scopes = api.list_scope_summaries(&repo).await?;
     if scopes.iter().all(|s| s.dokploy_id.is_none()) && !scopes.is_empty() {
         return Ok(Managed::Unknown(
             "el servidor de keel es anterior a v0.5.0 y no dice qué servicio de Dokploy es cada scope".into(),

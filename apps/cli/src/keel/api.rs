@@ -48,6 +48,10 @@ pub struct Deploy {
     pub repo: String,
     pub tag: String,
     pub sha: String,
+    /// The scope (`prod`, `stg`…) it deploys to.
+    pub scope: String,
+    /// Same as `scope`: the name servers before v0.7.0 use, kept in `--json`.
+    #[serde(default)]
     pub service: String,
     pub status: DeployStatus,
     pub error: Option<String>,
@@ -79,6 +83,10 @@ impl Deploy {
 pub struct DeployDetail {
     #[serde(flatten)]
     pub deploy: Deploy,
+    /// `application` or `compose`: what the scope points to in Dokploy.
+    #[serde(default)]
+    pub scope_kind: Option<String>,
+    /// Same as `scope_kind`, under its pre-v0.7.0 name.
     #[serde(default)]
     pub service_kind: Option<String>,
     #[serde(default)]
@@ -108,11 +116,11 @@ impl Version {
     }
 }
 
-/// A scope of a repo: a Dokploy service keel deploys to. Servers before
-/// v0.5.0 only send `alias`.
+/// A scope of an app: an alias (`prod`, `stg`…) for the Dokploy application
+/// or compose keel deploys to. Servers before v0.5.0 only send `alias`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ServiceSummary {
+pub struct ScopeSummary {
     pub alias: String,
     #[serde(default)]
     pub kind: Option<String>,
@@ -166,10 +174,13 @@ pub struct WhoAmI {
     pub anonymous_role: Option<String>,
 }
 
-/// A role on the repos and scopes that match the patterns (`*` globs).
+/// A role on the apps and scopes that match the patterns (`*` globs).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Grant {
     pub repo: String,
+    pub scope: String,
+    /// Same as `scope`, under its pre-v0.7.0 name.
+    #[serde(default)]
     pub service: String,
     pub role: String,
 }
@@ -185,7 +196,7 @@ impl WhoAmI {
     }
 }
 
-impl ServiceSummary {
+impl ScopeSummary {
     /// The env variable a Compose takes its image tag from.
     pub fn tag_variable(&self) -> &str {
         self.tag_variable
@@ -195,13 +206,22 @@ impl ServiceSummary {
     }
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug)]
 pub struct CreateDeploy<'a> {
     pub repo: &'a str,
     pub tag: &'a str,
     pub sha: &'a str,
-    pub service: &'a str,
+    pub scope: &'a str,
+}
+
+impl CreateDeploy<'_> {
+    /// The body: the scope goes as `scope` and, for servers before v0.7.0, as `service`.
+    fn body(&self) -> Value {
+        serde_json::json!({
+            "repo": self.repo, "tag": self.tag, "sha": self.sha,
+            "scope": self.scope, "service": self.scope,
+        })
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -227,6 +247,43 @@ pub fn is_unsupported(error: &anyhow::Error) -> bool {
         .is_some_and(|d| {
             (d["http_status"] == 404 || d["http_status"] == 405) && d["from_keel"] == false
         })
+}
+
+/// Fills in both names of the fields v0.7.0 renamed (`scope`/`service`,
+/// `scopes`/`services`, `scopeKind`/`serviceKind`), so the CLI reads `scope`
+/// from any server and `--json` keeps the old keys for scripts.
+pub fn normalize(value: &mut Value) {
+    const PAIRS: [(&str, &str); 3] = [
+        ("scope", "service"),
+        ("scopes", "services"),
+        ("scopeKind", "serviceKind"),
+    ];
+    match value {
+        Value::Object(map) => {
+            for (new, old) in PAIRS {
+                match (map.get(new).cloned(), map.get(old).cloned()) {
+                    (None, Some(v)) => {
+                        map.insert(new.to_owned(), v);
+                    }
+                    (Some(v), None) => {
+                        map.insert(old.to_owned(), v);
+                    }
+                    _ => {}
+                }
+            }
+            map.values_mut().for_each(normalize);
+        }
+        Value::Array(items) => items.iter_mut().for_each(normalize),
+        _ => {}
+    }
+}
+
+/// API URLs whose server only has the pre-v0.7.0 `/services` routes, so the
+/// rest of the process goes straight to them.
+fn legacy_routes() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static LEGACY: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    LEGACY.get_or_init(Default::default)
 }
 
 pub struct KeelApi {
@@ -289,26 +346,61 @@ impl KeelApi {
 
     /// Freezes deploys to a scope.
     pub async fn lock(&self, repo: &str, alias: &str, reason: &str) -> Result<Lock> {
-        self.request(
-            reqwest::Method::PUT,
-            &format!("/repos/{repo}/services/{}/lock", encode(alias)),
-            Some(serde_json::json!({ "reason": reason })),
-        )
-        .await
-        .map_err(locks_unsupported)
+        let path = format!("/{}/lock", encode(alias));
+        let body = self
+            .scopes_route(
+                reqwest::Method::PUT,
+                repo,
+                &path,
+                Some(serde_json::json!({ "reason": reason })),
+            )
+            .await
+            .map_err(locks_unsupported)?;
+        parse(body, &format!("/repos/{repo}/scopes{path}"))
     }
 
     /// Lets deploys to a scope through again; returns whether it was locked.
     pub async fn unlock(&self, repo: &str, alias: &str) -> Result<bool> {
+        let path = format!("/{}/lock", encode(alias));
         let body = self
-            .request_value(
-                reqwest::Method::DELETE,
-                &format!("/repos/{repo}/services/{}/lock", encode(alias)),
-                None,
-            )
+            .scopes_route(reqwest::Method::DELETE, repo, &path, None)
             .await
             .map_err(locks_unsupported)?;
         Ok(body["wasLocked"].as_bool().unwrap_or(true))
+    }
+
+    /// `/repos/<repo>/scopes<rest>`, or the same under `/services` when the
+    /// server predates v0.7.0 (a 404/405 that is not a keel error). Once a
+    /// server needs the old route, the rest of the process goes straight to it.
+    async fn scopes_route(
+        &self,
+        method: reqwest::Method,
+        repo: &str,
+        rest: &str,
+        body: Option<Value>,
+    ) -> Result<Value> {
+        let legacy = legacy_routes()
+            .lock()
+            .is_ok_and(|l| l.contains(&self.base_url));
+        if !legacy {
+            match self
+                .request_value(
+                    method.clone(),
+                    &format!("/repos/{repo}/scopes{rest}"),
+                    body.clone(),
+                )
+                .await
+            {
+                Err(error) if is_unsupported(&error) => {
+                    if let Ok(mut l) = legacy_routes().lock() {
+                        l.insert(self.base_url.clone());
+                    }
+                }
+                other => return other,
+            }
+        }
+        self.request_value(method, &format!("/repos/{repo}/services{rest}"), body)
+            .await
     }
 
     pub fn base_url(&self) -> &str {
@@ -320,39 +412,31 @@ impl KeelApi {
             .await
     }
 
-    pub async fn list_service_summaries(&self, repo: &str) -> Result<Vec<ServiceSummary>> {
+    /// The scopes of an app (`GET /repos/<repo>/scopes`, or `/services` before v0.7.0).
+    pub async fn list_scope_summaries(&self, repo: &str) -> Result<Vec<ScopeSummary>> {
         #[derive(Deserialize)]
         struct Body {
-            services: Vec<ServiceSummary>,
+            #[serde(default)]
+            scopes: Vec<ScopeSummary>,
         }
-        Ok(self
-            .request::<Body>(
-                reqwest::Method::GET,
-                &format!("/repos/{repo}/services"),
-                None,
-            )
-            .await?
-            .services)
-    }
-
-    /// The raw answer of `/repos/<repo>/services`, for `--json`.
-    pub async fn list_services_raw(&self, repo: &str) -> Result<Value> {
         let body = self
-            .request_value(
-                reqwest::Method::GET,
-                &format!("/repos/{repo}/services"),
-                None,
-            )
+            .scopes_route(reqwest::Method::GET, repo, "", None)
             .await?;
-        Ok(body
-            .get("services")
-            .cloned()
-            .unwrap_or(Value::Array(vec![])))
+        Ok(parse::<Body>(body, &format!("/repos/{repo}/scopes"))?.scopes)
     }
 
-    pub async fn list_services(&self, repo: &str) -> Result<Vec<String>> {
+    /// The raw list of scopes, for `--json` (each deploy with `scope` and `service`).
+    pub async fn list_scopes_raw(&self, repo: &str) -> Result<Value> {
+        let body = self
+            .scopes_route(reqwest::Method::GET, repo, "", None)
+            .await?;
+        Ok(body.get("scopes").cloned().unwrap_or(Value::Array(vec![])))
+    }
+
+    /// The aliases of an app's scopes.
+    pub async fn list_scopes(&self, repo: &str) -> Result<Vec<String>> {
         Ok(self
-            .list_service_summaries(repo)
+            .list_scope_summaries(repo)
             .await?
             .into_iter()
             .map(|s| s.alias)
@@ -360,12 +444,8 @@ impl KeelApi {
     }
 
     pub async fn create_deploy(&self, request: &CreateDeploy<'_>) -> Result<Deploy> {
-        self.request(
-            reqwest::Method::POST,
-            "/deploys",
-            Some(serde_json::to_value(request)?),
-        )
-        .await
+        self.request(reqwest::Method::POST, "/deploys", Some(request.body()))
+            .await
     }
 
     pub async fn get_deploy(&self, id: &str) -> Result<Deploy> {
@@ -380,7 +460,7 @@ impl KeelApi {
     pub async fn list_deploys(
         &self,
         repo: &str,
-        service: Option<&str>,
+        scope: Option<&str>,
         limit: Option<u32>,
     ) -> Result<Vec<Deploy>> {
         #[derive(Deserialize)]
@@ -388,8 +468,10 @@ impl KeelApi {
             deploys: Vec<Deploy>,
         }
         let mut query = Vec::new();
-        if let Some(service) = service {
-            query.push(format!("service={}", encode(service)));
+        // `service` too: servers before v0.7.0 ignore `scope` and would list them all.
+        if let Some(scope) = scope {
+            query.push(format!("scope={}", encode(scope)));
+            query.push(format!("service={}", encode(scope)));
         }
         if let Some(limit) = limit {
             query.push(format!("limit={limit}"));
@@ -461,12 +543,7 @@ impl KeelApi {
         body: Option<Value>,
     ) -> Result<T> {
         let value = self.request_value(method, path, body).await?;
-        serde_json::from_value(value).map_err(|error| {
-            fail(
-                Kind::KeelUnreachable,
-                format!("La API de keel respondió algo inesperado en {path}: {error}"),
-            )
-        })
+        parse(value, path)
     }
 
     pub async fn request_value(
@@ -536,8 +613,20 @@ impl KeelApi {
                 serde_json::json!({"http_status": status.as_u16(), "from_keel": from_keel}),
             ));
         }
-        Ok(json.unwrap_or(Value::Null))
+        let mut json = json.unwrap_or(Value::Null);
+        normalize(&mut json);
+        Ok(json)
     }
+}
+
+/// A keel answer as `T`.
+fn parse<T: DeserializeOwned>(value: Value, path: &str) -> Result<T> {
+    serde_json::from_value(value).map_err(|error| {
+        fail(
+            Kind::KeelUnreachable,
+            format!("La API de keel respondió algo inesperado en {path}: {error}"),
+        )
+    })
 }
 
 /// A lock route the server does not have becomes a clear message.
@@ -615,7 +704,7 @@ mod tests {
             .and(path("/deploys"))
             .respond_with(
                 ResponseTemplate::new(423)
-                    .set_body_json(serde_json::json!({"error": "El servicio prod está bloqueado"})),
+                    .set_body_json(serde_json::json!({"error": "El scope prod está bloqueado"})),
             )
             .mount(&server)
             .await;
@@ -633,7 +722,7 @@ mod tests {
                 repo: "a/b",
                 tag: "v1.0.0",
                 sha: "abcdef0",
-                service: "prod",
+                scope: "prod",
             })
             .await
             .unwrap_err();
@@ -663,13 +752,13 @@ mod tests {
         let api = KeelApi::with_token(&server.uri(), Some("keel_pat_ok".into())).unwrap();
         let who = api.whoami().await.unwrap().unwrap();
         assert_eq!(who.label().as_deref(), Some("ana (deployer)"));
-        assert_eq!(who.grants[0].service, "prod*");
+        assert_eq!(who.grants[0].scope, "prod*");
         let error = api
             .create_deploy(&CreateDeploy {
                 repo: "a/b",
                 tag: "v1.0.0",
                 sha: "abcdef0",
-                service: "prod",
+                scope: "prod",
             })
             .await
             .unwrap_err();
@@ -688,6 +777,85 @@ mod tests {
         assert!(error.to_string().contains("no soporta locks"));
     }
 
+    #[test]
+    fn normalize_fills_both_names() {
+        let mut old = serde_json::json!({"repo": "a/b", "services": [
+            {"alias": "prod", "current": {"service": "prod"}}
+        ]});
+        normalize(&mut old);
+        assert_eq!(old["scopes"][0]["current"]["scope"], "prod");
+        assert_eq!(old["services"][0]["current"]["service"], "prod");
+        let mut new = serde_json::json!({"scope": "stg", "scopeKind": "compose"});
+        normalize(&mut new);
+        assert_eq!(new["service"], "stg");
+        assert_eq!(new["serviceKind"], "compose");
+    }
+
+    #[tokio::test]
+    async fn falls_back_to_the_services_routes_of_v0_6_servers() {
+        use wiremock::matchers::query_param;
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/repos/a/b/services/prod/lock"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "alias": "prod", "reason": "x", "createdAt": "2026-11-09T10:00:00Z"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/repos/a/b/services"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "repo": "a/b", "services": [{"alias": "prod"}]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/repos/a/b/deploys"))
+            .and(query_param("scope", "prod"))
+            .and(query_param("service", "prod"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "deploys": [{"id": "d1", "repo": "a/b", "tag": "v1.0.0", "sha": "abc",
+                    "service": "prod", "status": "deployed", "error": null,
+                    "createdAt": "2026-11-09T10:00:00Z", "updatedAt": "2026-11-09T10:00:00Z"}]
+            })))
+            .mount(&server)
+            .await;
+        let api = KeelApi::new(&server.uri()).unwrap();
+        assert_eq!(api.lock("a/b", "prod", "x").await.unwrap().reason, "x");
+        assert_eq!(api.list_scopes("a/b").await.unwrap(), ["prod"]);
+        let deploys = api.list_deploys("a/b", Some("prod"), None).await.unwrap();
+        assert_eq!(
+            (deploys[0].scope.as_str(), deploys[0].service.as_str()),
+            ("prod", "prod")
+        );
+        // /scopes was tried once; after that the process goes straight to /services.
+        let tried = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|r| r.url.path().contains("/scopes"))
+            .count();
+        assert_eq!(tried, 1);
+    }
+
+    #[tokio::test]
+    async fn a_keel_404_on_the_new_route_does_not_fall_back() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/a/b/scopes"))
+            .respond_with(
+                ResponseTemplate::new(404)
+                    .set_body_json(serde_json::json!({"error": "La app a/b no existe"})),
+            )
+            .mount(&server)
+            .await;
+        let api = KeelApi::new(&server.uri()).unwrap();
+        let error = api.list_scopes("a/b").await.unwrap_err();
+        assert_eq!(error.to_string(), "La app a/b no existe");
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
     #[tokio::test]
     async fn keel_errors_keep_their_message() {
         let server = MockServer::start().await;
@@ -695,7 +863,7 @@ mod tests {
             .and(path("/deploys"))
             .respond_with(
                 ResponseTemplate::new(404)
-                    .set_body_json(serde_json::json!({"error": "El servicio x no existe"})),
+                    .set_body_json(serde_json::json!({"error": "El scope x no existe"})),
             )
             .mount(&server)
             .await;
@@ -705,11 +873,11 @@ mod tests {
                 repo: "acme/app",
                 tag: "v1.0.0",
                 sha: "abcdef0",
-                service: "x",
+                scope: "x",
             })
             .await
             .unwrap_err();
         assert!(!is_unsupported(&error));
-        assert_eq!(error.to_string(), "El servicio x no existe");
+        assert_eq!(error.to_string(), "El scope x no existe");
     }
 }

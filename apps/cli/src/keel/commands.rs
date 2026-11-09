@@ -8,7 +8,7 @@ use crate::dokploy::paths::{Target, keel_home, load_config};
 use crate::dokploy::{config::Config, print_json};
 use crate::failure::{Kind, fail, fail_with};
 use crate::keel::api::{
-    CreateDeploy, Deploy, DeployStatus, KeelApi, RegisterVersion, ServiceSummary, Version, WhoAmI,
+    CreateDeploy, Deploy, DeployStatus, KeelApi, RegisterVersion, ScopeSummary, Version, WhoAmI,
     is_unsupported,
 };
 use crate::keel::config::{self, OrgConfig};
@@ -266,17 +266,17 @@ pub async fn create_version(
 
     // Checked before creating the tag: a typo in the scope must not burn a version number.
     if let Some(scope) = deploy {
-        let services = repo.api.list_services(&repo.repo).await?;
-        if !services.iter().any(|s| s == scope) {
+        let scopes = repo.api.list_scopes(&repo.repo).await?;
+        if !scopes.iter().any(|s| s == scope) {
             return Err(fail(
                 Kind::Error,
                 format!(
-                    "El servicio {scope} no existe en {}. Disponibles: {}. No se creó la versión.",
+                    "El scope {scope} no existe en {}. Disponibles: {}. No se creó la versión.",
                     repo.repo,
-                    if services.is_empty() {
+                    if scopes.is_empty() {
                         "ninguno".into()
                     } else {
-                        services.join(", ")
+                        scopes.join(", ")
                     }
                 ),
             ));
@@ -361,7 +361,7 @@ pub async fn create_version(
                 repo: &repo.repo,
                 tag: version,
                 sha: &sha,
-                service: scope,
+                scope,
             })
             .await
         {
@@ -395,12 +395,12 @@ pub async fn create_version(
                 "Deploy {} encolado: {} → {} ({})",
                 d.id,
                 d.tag,
-                d.service,
+                d.scope,
                 status_name(d.status)
             )),
             (None, Some(_)) => {}
             (None, None) => ui::info(&format!(
-                "Para desplegarla: keel deploy -s <servicio> -v {version}"
+                "Para desplegarla: keel deploy -s <scope> -v {version}"
             )),
         }
     }
@@ -428,7 +428,7 @@ pub(crate) fn status_name(status: DeployStatus) -> &'static str {
 // --------------------------------------------------------------------- deploy
 
 pub struct DeployArgs {
-    pub service: Option<String>,
+    pub scope: Option<String>,
     pub version: Option<String>,
     pub latest: bool,
     pub latest_ready: bool,
@@ -483,32 +483,32 @@ pub async fn deploy(ctx: &Ctx, args: DeployArgs) -> Result<()> {
         ));
     }
     let repo = resolve_repo(ctx, "desplegar")?;
-    let services = repo.api.list_services(&repo.repo).await?;
-    if services.is_empty() {
+    let scopes = repo.api.list_scopes(&repo.repo).await?;
+    if scopes.is_empty() {
         return Err(fail(
             Kind::Error,
             format!(
-                "{} no tiene servicios de Dokploy vinculados. Agrégalos en el admin de keel.",
+                "La app {} no tiene scopes. Agrégalos en el admin de keel.",
                 repo.repo
             ),
         ));
     }
-    let target = match args.service {
+    let target = match args.scope {
         Some(s) => s,
         None if ui::interactive() => {
             let options: Vec<(String, Option<String>)> =
-                services.iter().map(|s| (s.clone(), None)).collect();
-            services[ui::select("Servicio de Dokploy", &options, 0)?].clone()
+                scopes.iter().map(|s| (s.clone(), None)).collect();
+            scopes[ui::select("Scope", &options, 0)?].clone()
         }
-        None => return Err(need_terminal("el servicio con -s")),
+        None => return Err(need_terminal("el scope con -s")),
     };
-    if !services.contains(&target) {
+    if !scopes.contains(&target) {
         return Err(fail(
             Kind::Error,
             format!(
-                "El servicio {target} no existe en {}. Disponibles: {}.",
+                "El scope {target} no existe en {}. Disponibles: {}.",
                 repo.repo,
-                services.join(", ")
+                scopes.join(", ")
             ),
         ));
     }
@@ -613,7 +613,7 @@ pub async fn deploy(ctx: &Ctx, args: DeployArgs) -> Result<()> {
             repo: &repo.repo,
             tag: &tag,
             sha,
-            service: &target,
+            scope: &target,
         })
         .await?;
     let waits = args.wait || args.rollback_on_failure;
@@ -635,7 +635,7 @@ pub async fn deploy(ctx: &Ctx, args: DeployArgs) -> Result<()> {
             "Deploy {} encolado: {} → {} ({})",
             created.id,
             created.tag,
-            created.service,
+            created.scope,
             status_name(created.status)
         ));
         if created.status == DeployStatus::CiFailed {
@@ -729,7 +729,7 @@ fn finish(ctx: &Ctx, deploy: Deploy) -> Result<()> {
         ));
     }
     if !ctx.json {
-        ui::success(&format!("{} desplegado en {}", deploy.tag, deploy.service));
+        ui::success(&format!("{} desplegado en {}", deploy.tag, deploy.scope));
     }
     Ok(())
 }
@@ -771,7 +771,7 @@ pub(crate) async fn watch(
     if !ctx.json {
         ui::warn(&format!(
             "{} falló en {}; volviendo a {}…",
-            done.tag, done.service, previous.tag
+            done.tag, done.scope, previous.tag
         ));
     }
     let rollback = repo
@@ -780,7 +780,7 @@ pub(crate) async fn watch(
             repo: &repo.repo,
             tag: &previous.tag,
             sha: &previous.sha,
-            service: &done.service,
+            scope: &done.scope,
         })
         .await?;
     let rollback = wait_until_done(ctx, repo, rollback).await?;
@@ -791,7 +791,7 @@ pub(crate) async fn watch(
             "el rollback a {} también falló ({}): revisa {} a mano",
             previous.tag,
             status_name(rollback.status),
-            done.service
+            done.scope
         )
     };
     Err(fail_with(
@@ -872,38 +872,38 @@ pub fn rollback_target<'a>(
 
 pub async fn rollback(
     ctx: &Ctx,
-    service: Option<String>,
+    scope: Option<String>,
     to: Option<String>,
     yes: bool,
     wait: bool,
 ) -> Result<()> {
     let repo = resolve_repo(ctx, "hacer rollback")?;
-    let services = repo.api.list_services(&repo.repo).await?;
-    if services.is_empty() {
+    let scopes = repo.api.list_scopes(&repo.repo).await?;
+    if scopes.is_empty() {
         return Err(fail(
             Kind::Error,
             format!(
-                "{} no tiene scopes vinculados. Agrégalos en el admin de keel.",
+                "La app {} no tiene scopes. Agrégalos en el admin de keel.",
                 repo.repo
             ),
         ));
     }
-    let target = match service {
+    let target = match scope {
         Some(s) => s,
         None if ui::interactive() => {
             let options: Vec<(String, Option<String>)> =
-                services.iter().map(|s| (s.clone(), None)).collect();
-            services[ui::select("Scope", &options, 0)?].clone()
+                scopes.iter().map(|s| (s.clone(), None)).collect();
+            scopes[ui::select("Scope", &options, 0)?].clone()
         }
         None => return Err(need_terminal("el scope con -s")),
     };
-    if !services.contains(&target) {
+    if !scopes.contains(&target) {
         return Err(fail(
             Kind::Error,
             format!(
                 "El scope {target} no existe en {}. Disponibles: {}.",
                 repo.repo,
-                services.join(", ")
+                scopes.join(", ")
             ),
         ));
     }
@@ -938,13 +938,13 @@ pub async fn rollback(
             repo: &repo.repo,
             tag: &previous.tag,
             sha: &previous.sha,
-            service: &target,
+            scope: &target,
         })
         .await?;
     if ctx.json {
         if !wait {
             print_json(
-                &json!({"service": target, "from": current, "to": previous, "deploy": created}),
+                &json!({"scope": target, "service": target, "from": current, "to": previous, "deploy": created}),
             )?;
         }
     } else {
@@ -967,12 +967,12 @@ pub async fn rollback(
 pub async fn scopes(ctx: &Ctx) -> Result<()> {
     let repo = resolve_repo(ctx, "consultar scopes")?;
     if ctx.json {
-        return print_json(&repo.api.list_services_raw(&repo.repo).await?);
+        return print_json(&repo.api.list_scopes_raw(&repo.repo).await?);
     }
-    let services = repo.api.list_service_summaries(&repo.repo).await?;
+    let scopes = repo.api.list_scope_summaries(&repo.repo).await?;
     println!(
         "{}",
-        views::render_scopes(&repo.header(), &services, &ctx.view())
+        views::render_scopes(&repo.header(), &scopes, &ctx.view())
     );
     Ok(())
 }
@@ -1002,7 +1002,7 @@ pub async fn versions(ctx: &Ctx, limit: Option<u32>) -> Result<()> {
 pub async fn deploys(
     ctx: &Ctx,
     id: Option<String>,
-    service: Option<String>,
+    scope: Option<String>,
     limit: Option<u32>,
     log: bool,
     config_path: Option<PathBuf>,
@@ -1039,21 +1039,21 @@ pub async fn deploys(
     }
     let list = repo
         .api
-        .list_deploys(&repo.repo, service.as_deref(), limit)
+        .list_deploys(&repo.repo, scope.as_deref(), limit)
         .await?;
     if ctx.json {
         return print_json(&list);
     }
     println!(
         "{}",
-        views::render_deploy_list(&repo.header(), &list, service.as_deref(), &ctx.view())
+        views::render_deploy_list(&repo.header(), &list, scope.as_deref(), &ctx.view())
     );
     Ok(())
 }
 
 /// The scope's Dokploy service, by the id keel stores for it.
-pub(crate) async fn scope_service(repo: &Repo, alias: &str) -> Result<ServiceSummary> {
-    let scopes = repo.api.list_service_summaries(&repo.repo).await?;
+pub(crate) async fn scope_service(repo: &Repo, alias: &str) -> Result<ScopeSummary> {
+    let scopes = repo.api.list_scope_summaries(&repo.repo).await?;
     let scope = scopes
         .into_iter()
         .find(|s| s.alias == alias)
@@ -1086,7 +1086,7 @@ async fn deploy_log_for(
 ) -> Result<Value> {
     let config = load_config(config_path)?;
     let client = dokploy_client(&config, target)?;
-    let scope = scope_service(repo, &deploy.service).await?;
+    let scope = scope_service(repo, &deploy.scope).await?;
     let id = scope.dokploy_id.clone().unwrap_or_default();
     let after = deploy
         .deploy_started_at
@@ -1126,7 +1126,7 @@ fn print_log_lines(ctx: &Ctx, data: &Value) {
 // ----------------------------------------------------------------- logs -s
 
 pub struct LogsArgs {
-    pub service: Option<String>,
+    pub scope: Option<String>,
     pub container: Option<String>,
     pub follow: bool,
     pub tail: u32,
@@ -1141,8 +1141,8 @@ pub async fn logs(
     target: &Target,
 ) -> Result<()> {
     let repo = resolve_repo(ctx, "leer logs")?;
-    let scopes = repo.api.list_services(&repo.repo).await?;
-    let alias = match args.service {
+    let scopes = repo.api.list_scopes(&repo.repo).await?;
+    let alias = match args.scope {
         Some(s) => s,
         None if ui::interactive() && !scopes.is_empty() => {
             let options: Vec<(String, Option<String>)> =
@@ -1192,7 +1192,7 @@ pub async fn logs(
 pub async fn status(ctx: &Ctx, config_path: Option<PathBuf>, target: &Target) -> Result<()> {
     let repo = resolve_repo(ctx, "consultar el estado")?;
     let (scopes, versions, recent, who) = tokio::try_join!(
-        repo.api.list_service_summaries(&repo.repo),
+        repo.api.list_scope_summaries(&repo.repo),
         repo.api.list_versions(&repo.repo, Some(20)),
         repo.api.list_deploys(&repo.repo, None, Some(50)),
         repo.api.whoami(),
@@ -1248,7 +1248,7 @@ pub async fn status(ctx: &Ctx, config_path: Option<PathBuf>, target: &Target) ->
     let rows: Vec<StatusRow> = scopes
         .iter()
         .map(|s| StatusRow {
-            service: s,
+            scope: s,
             dokploy_status: dokploy.get(&s.alias).cloned(),
         })
         .collect();
@@ -1314,6 +1314,7 @@ mod tests {
             repo: "acme/app".into(),
             tag: tag.into(),
             sha: format!("sha{tag}"),
+            scope: "prod".into(),
             service: "prod".into(),
             status,
             error: None,

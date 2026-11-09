@@ -162,24 +162,29 @@ fn json_of(output: &Output) -> Value {
 
 fn deploy_json(id: &str, tag: &str, sha: &str, status: &str) -> Value {
     json!({
-        "id": id, "repo": "acme/app", "tag": tag, "sha": sha, "service": "stg",
+        "id": id, "repo": "acme/app", "tag": tag, "sha": sha, "scope": "stg", "service": "stg",
         "status": status, "error": null,
         "createdAt": "2026-11-01T10:00:00Z", "updatedAt": "2026-11-01T10:01:00Z",
         "finishedAt": if status == "deployed" { json!("2026-11-01T10:01:00Z") } else { Value::Null },
     })
 }
 
-fn scope_json() -> Value {
-    json!({"services": [{
+fn scope_list() -> Value {
+    json!([{
         "alias": "stg", "kind": "compose", "tagVariable": null, "dokployId": "cmp1",
         "dokployName": "Shop/production/web", "current": null, "last": null
-    }]})
+    }])
+}
+
+/// What `GET /repos/acme/app/scopes` answers from v0.7.0 on.
+fn scope_json() -> Value {
+    json!({"repo": "acme/app", "scopes": scope_list(), "services": scope_list()})
 }
 
 async fn fake_keel() -> MockServer {
     let keel = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/repos/acme/app/services"))
+        .and(path("/repos/acme/app/scopes"))
         .respond_with(ResponseTemplate::new(200).set_body_json(scope_json()))
         .mount(&keel)
         .await;
@@ -292,7 +297,7 @@ async fn versions_deploys_and_rollbacks_go_through_keel() {
     // rollback goes back to the previous deployed version, with its commit.
     Mock::given(method("GET"))
         .and(path("/repos/acme/app/deploys"))
-        .and(query_param("service", "stg"))
+        .and(query_param("scope", "stg"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"deploys": [
             deploy_json("d3", "v1.1.0", "bbbbbbb", "deployed"),
             deploy_json("d2", "v1.0.5", "ccccccc", "deploy_failed"),
@@ -306,7 +311,7 @@ async fn versions_deploys_and_rollbacks_go_through_keel() {
         Some(32),
         "rollback without -y and without a terminal"
     );
-    let out = w.keel(&w.repo, &["rollback", "-s", "stg", "-y", "--json"]);
+    let out = w.keel(&w.repo, &["rollback", "--scope", "stg", "-y", "--json"]);
     assert!(
         out.status.success(),
         "{}",
@@ -314,6 +319,11 @@ async fn versions_deploys_and_rollbacks_go_through_keel() {
     );
     let rolled = json_of(&out);
     assert_eq!(rolled["to"]["tag"], "v1.0.0");
+    assert_eq!(
+        (&rolled["scope"], &rolled["service"]),
+        (&json!("stg"), &json!("stg"))
+    );
+    assert_eq!(rolled["deploy"]["scope"], "stg");
     assert_eq!(rolled["deploy"]["sha"], sha.as_str());
 
     // scopes renders a table for people; errors from another org are explicit.
@@ -558,6 +568,7 @@ fn commit_and_tag(w: &World, file: &str, message: &str, tag: &str) -> String {
 
 fn deploy_on(id: &str, service: &str, tag: &str, sha: &str, status: &str) -> Value {
     let mut deploy = deploy_json(id, tag, sha, status);
+    deploy["scope"] = json!(service);
     deploy["service"] = json!(service);
     deploy
 }
@@ -579,12 +590,12 @@ async fn tokens_and_locks() {
         .mount(&keel)
         .await;
     Mock::given(method("GET"))
-        .and(path("/repos/acme/app/services"))
+        .and(path("/repos/acme/app/scopes"))
         .respond_with(ResponseTemplate::new(200).set_body_json(scope_json()))
         .mount(&keel)
         .await;
     Mock::given(method("PUT"))
-        .and(path("/repos/acme/app/services/stg/lock"))
+        .and(path("/repos/acme/app/scopes/stg/lock"))
         .and(body_partial_json(json!({"reason": "incidente"})))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "alias": "stg", "reason": "incidente", "lockedBy": "ana", "createdAt": "2026-11-09T10:00:00Z"
@@ -592,7 +603,7 @@ async fn tokens_and_locks() {
         .mount(&keel)
         .await;
     Mock::given(method("DELETE"))
-        .and(path("/repos/acme/app/services/stg/lock"))
+        .and(path("/repos/acme/app/scopes/stg/lock"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(json!({"ok": true, "wasLocked": true})),
         )
@@ -601,7 +612,7 @@ async fn tokens_and_locks() {
     Mock::given(method("POST"))
         .and(path("/deploys"))
         .respond_with(ResponseTemplate::new(423).set_body_json(json!({
-            "error": "El servicio stg está bloqueado: incidente (por ana, 09/11/26). Desbloquéalo con `keel unlock -s stg`."
+            "error": "El scope stg está bloqueado: incidente (por ana, 09/11/26). Desbloquéalo con `keel unlock -s stg`."
         })))
         .mount(&keel)
         .await;
@@ -666,7 +677,7 @@ async fn tokens_and_locks() {
     let requests = keel.received_requests().await.unwrap();
     let auth: Vec<&str> = requests
         .iter()
-        .filter(|r| r.url.path() == "/repos/acme/app/services")
+        .filter(|r| r.url.path() == "/repos/acme/app/scopes")
         .map(|r| r.headers.get("authorization").unwrap().to_str().unwrap())
         .collect();
     assert_eq!(auth, ["Bearer keel_pat_ok", "Bearer keel_pat_env"]);
@@ -702,20 +713,20 @@ async fn promote_changes_and_rollback_on_failure() {
     let old = commit_and_tag(&w, "a.txt", "feat: base", "v1.0.0");
     let new = commit_and_tag(&w, "b.txt", "feat: login (#7)", "v1.1.0");
     Mock::given(method("GET"))
-        .and(path("/repos/acme/app/services"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(json!({"services": [
+        .and(path("/repos/acme/app/scopes"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            json!({"repo": "acme/app", "scopes": [
                 {"alias": "stg", "kind": "compose", "dokployId": "c1",
                  "current": deploy_on("s1", "stg", "v1.1.0", &new, "deployed"), "last": null},
                 {"alias": "prod", "kind": "compose", "dokployId": "c2",
                  "current": deploy_on("p1", "prod", "v1.0.0", &old, "deployed"), "last": null},
-            ]})),
-        )
+            ]}),
+        ))
         .mount(&keel)
         .await;
     Mock::given(method("GET"))
         .and(path("/repos/acme/app/deploys"))
-        .and(query_param("service", "prod"))
+        .and(query_param("scope", "prod"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"deploys": [
             deploy_on("p1", "prod", "v1.0.0", &old, "deployed"),
         ]})))
@@ -823,6 +834,7 @@ async fn promote_changes_and_rollback_on_failure() {
         .map(|r| serde_json::from_slice(&r.body).unwrap())
         .collect();
     assert_eq!(posts[0]["tag"], "v1.1.0");
+    assert_eq!(posts[0]["scope"], "prod");
     assert_eq!(posts[0]["service"], "prod");
     assert_eq!(posts[1]["tag"], "v1.0.0");
     assert_eq!(posts[1]["sha"], old.as_str());
@@ -861,6 +873,149 @@ async fn promote_changes_and_rollback_on_failure() {
         out.status.success(),
         "{}",
         String::from_utf8_lossy(&out.stdout)
+    );
+}
+
+/// A deploy as a v0.6.0 server writes it: `service`, no `scope`.
+fn old_deploy(id: &str, tag: &str, sha: &str, status: &str) -> Value {
+    let mut deploy = deploy_json(id, tag, sha, status);
+    deploy.as_object_mut().unwrap().remove("scope");
+    deploy
+}
+
+#[tokio::test]
+async fn v0_6_servers_only_have_the_old_routes() {
+    let keel = MockServer::start().await;
+    let w = world(&keel.uri());
+    let sha = commit_and_tag(&w, "a.txt", "feat: a", "v1.0.0");
+    // Only the pre-v0.7.0 routes and names; /scopes is an unknown route (404, no keel error).
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/app/services"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "repo": "acme/app",
+            "services": [{
+                "alias": "stg", "kind": "compose", "tagVariable": null, "dokployId": "cmp1",
+                "dokployName": "Shop/production/web",
+                "current": old_deploy("d1", "v1.0.0", &sha, "deployed"), "last": null
+            }]
+        })))
+        .mount(&keel)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/deploys"))
+        .and(body_partial_json(json!({"service": "stg"})))
+        .respond_with(|req: &Request| {
+            let body: Value = serde_json::from_slice(&req.body).unwrap();
+            ResponseTemplate::new(201).set_body_json(old_deploy(
+                "d00000000002",
+                body["tag"].as_str().unwrap(),
+                body["sha"].as_str().unwrap(),
+                "waiting_ci",
+            ))
+        })
+        .mount(&keel)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/app/deploys"))
+        .and(query_param("service", "stg"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"deploys": [
+            old_deploy("d1", "v1.0.0", &sha, "deployed"),
+        ]})))
+        .mount(&keel)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/repos/acme/app/services/stg/lock"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "alias": "stg", "reason": "freeze", "lockedBy": "ana", "createdAt": "2026-11-09T10:00:00Z"
+        })))
+        .mount(&keel)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/repos/acme/app/services/stg/lock"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"ok": true, "wasLocked": true})),
+        )
+        .mount(&keel)
+        .await;
+
+    // scopes: the list, with `scope` added to each deploy for scripts.
+    let out = w.keel(&w.repo, &["scopes", "--json"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let scopes = json_of(&out);
+    assert_eq!(scopes[0]["alias"], "stg");
+    assert_eq!(scopes[0]["current"]["scope"], "stg");
+    assert_eq!(scopes[0]["current"]["service"], "stg");
+    let table = w.keel(&w.repo, &["scopes"]);
+    let table = String::from_utf8_lossy(&table.stdout);
+    assert!(table.contains("stg") && table.contains("v1.0.0"), "{table}");
+
+    // deploy, with the old --service flag too.
+    let out = w.keel(&w.repo, &["deploy", "-s", "stg", "-v", "v1.0.0", "--json"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let deploy = json_of(&out);
+    assert_eq!(deploy["deploy"]["scope"], "stg");
+    assert_eq!(deploy["deploy"]["service"], "stg");
+    let out = w.keel(
+        &w.repo,
+        &["deploy", "--service", "stg", "-v", "v1.0.0", "--json"],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+
+    // deploys -s filters with ?service= on old servers.
+    let out = w.keel(&w.repo, &["deploys", "-s", "stg", "--json"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert_eq!(json_of(&out)[0]["scope"], "stg");
+
+    // lock and unlock.
+    let out = w.keel(&w.repo, &["lock", "-s", "stg", "-m", "freeze", "--json"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert_eq!(json_of(&out)["lock"]["reason"], "freeze");
+    let out = w.keel(&w.repo, &["unlock", "--scope", "stg", "--json"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert_eq!(json_of(&out)["wasLocked"], true);
+
+    // Each run tries /scopes once, then sticks to /services (lock and unlock
+    // listed the scopes first, so they went straight to the old lock route).
+    let requests = keel.received_requests().await.unwrap();
+    let tried = |p: &str| requests.iter().filter(|r| r.url.path() == p).count();
+    assert_eq!(tried("/repos/acme/app/scopes"), 6);
+    assert_eq!(tried("/repos/acme/app/services"), 6);
+    assert_eq!(tried("/repos/acme/app/scopes/stg/lock"), 0);
+    assert_eq!(tried("/repos/acme/app/services/stg/lock"), 2);
+    let posts: Vec<Value> = requests
+        .iter()
+        .filter(|r| r.url.path() == "/deploys")
+        .map(|r| serde_json::from_slice(&r.body).unwrap())
+        .collect();
+    assert_eq!(posts.len(), 2);
+    assert!(
+        posts
+            .iter()
+            .all(|p| p["scope"] == "stg" && p["service"] == "stg")
     );
 }
 

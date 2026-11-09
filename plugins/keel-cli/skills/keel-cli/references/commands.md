@@ -32,10 +32,10 @@ A Dokploy service is named `name`, `environment/name` or
 | --- | --- |
 | `keel login --org github.com:<org> --api-url <url> [--token <keel_pat_…>]` | Saves a keel organization, its API URL and personal token in `~/.keel/<org>/config.json` (chmod 600) and makes it active. The token is checked before saving (`unauthorized` if rejected); at a terminal it is asked without echo; `--token ""` forgets it; `KEEL_TOKEN` overrides it per command |
 | `keel use [org]` | Selects the active organization (asks when omitted, at a terminal) |
-| `keel context` (alias `remote`) `[--target …]` | Where this folder points: keel org, repo and scopes; Dokploy instance and why it was chosen |
-| `keel whoami` | Who keel says you are: name, email, role, per-scope grants, the token's role cap and whether the instance requires a token |
-| `keel status [--target org/instance]` | Repo state in one view: each scope with its current version and last deploy, the newest version and its CI, and Dokploy status |
-| `keel init [--check] [--force]` | **changes** (repo) Writes `.github/workflows/keel-release.yml` from keel's template (a customized one needs `--force`; the diff is shown), checks the repo is linked in keel and, with `gh`, has the `DEPLOY_API_TOKEN` secret and `KEEL_API_URL` variable. `--check` only audits and exits 2 if something is missing. Never writes secrets |
+| `keel context` (alias `remote`) `[--target …]` | Where this folder points: keel org and app (the repo); Dokploy instance and why it was chosen |
+| `keel whoami` | Who keel says you are: name, email, role, grants per app and scope (`app / scope` patterns), the token's role cap and whether the instance requires a token |
+| `keel status [--target org/instance]` | App state in one view: each scope with its current version and last deploy, the newest version and its CI, and Dokploy status |
+| `keel init [--check] [--force]` | **changes** (repo) Writes `.github/workflows/keel-release.yml` from keel's template (a customized one needs `--force`; the diff is shown), checks the repo is an app in keel with scopes (if not: create the app at `<origin>/apps`) and, with `gh`, has the `DEPLOY_API_TOKEN` secret (the app's CI token) and `KEEL_API_URL` variable. `--check` only audits and exits 2 if something is missing. Never writes secrets |
 | `keel skills [list]` · `keel skills add <skill>… [-g] [--agent claude,codex,copilot] [--from <path>] [--ref <ref>]` · `keel skills remove <skill>…` · `keel skills update` | **changes** (local) Agent skills from `plugins/*/skills` of reitmas32/keel into `.claude/skills` and `.agents/skills` (or `~` with `-g`). Each copy has `.keel-skill.json`; folders without it are never touched |
 | `keel doctor [--target …]` | Checks the keel API (and who the token is) and Dokploy (DNS, panel, key, version, inventory). Exits 0, 10 (network) or 2 (config/key) |
 | `keel targets` | Configured Dokploy instances, their folders, approval mode and default |
@@ -46,6 +46,13 @@ A Dokploy service is named `name`, `environment/name` or
 
 ## Versions and deploys (keel server)
 
+An **app** is a GitHub repo linked to keel; a **scope** is one of its deploy
+targets (`prod`, `stg`…), an alias for a Dokploy application or compose.
+Every command that picks a scope takes `-s/--scope <SCOPE>`; `--service` is
+still accepted as a hidden alias for scripts written before keel-cli 0.3.0.
+keel servers before v0.7.0 work too: the CLI falls back to their old
+`/services` routes, and `--json` output carries both `scope` and `service`.
+
 | Command | What it does |
 | --- | --- |
 | `keel create-version <vX.Y.Z> [-d <scope> [--wait]]` | **changes** Validates the repo, creates and pushes the tag, registers it in keel. With `-d` also requests the deploy of that same version to the scope; `--wait` follows it |
@@ -55,23 +62,23 @@ A Dokploy service is named `name`, `environment/name` or
 | `keel changes -s <scope> [-v <tag>]` | Commits between what the scope runs and a version (newest semver tag by default), with PR numbers; `removed` lists commits a rollback would take out. Fetches tags first |
 | `keel lock -s <scope> -m <reason>` · `keel unlock -s <scope>` | **changes** Freezes or unfreezes deploys of a scope; while locked keel answers deploys with `locked` (31) |
 | `keel rollback -s <scope> [--to <tag>] -y [--wait]` | **changes** Redeploys the previous version that reached `deployed` in that scope (or `--to`, one deployed there before). `-y` is required without a terminal. Refuses while a deploy of that scope is in progress |
-| `keel scopes` (alias `services`) | Scopes of the repo: Dokploy service, type, current version, last deploy, and 🔒 with the reason when locked |
-| `keel deploys [id] [-s <scope>] [-n <limit>] [--log]` | Deploys of the repo, newest first. With an id (or its prefix): detail and timeline; `--log` adds Dokploy's deploy log, redacted (needs the Dokploy key) |
+| `keel scopes` | Scopes of the app: the Dokploy application or compose each points to, type, current version, last deploy, and 🔒 with the reason when locked. `--json` prints the list as the server sends it (each deploy with `scope` and `service`) |
+| `keel deploys [id] [-s <scope>] [-n <limit>] [--log]` | Deploys of the app, newest first (column `SCOPE`). With an id (or its prefix): detail and timeline; `--log` adds Dokploy's deploy log, redacted (needs the Dokploy key) |
 | `keel logs -s <scope> [--container <c>] [-f] [--tail 200] [--since all\|30s\|10m\|1h\|2d] [--search <text>] [--target org/instance]` | Redacted container logs of a scope by its keel name. `-f` follows until Ctrl-C |
 
 Deploy states: `waiting_ci → ci_passed → deploying → deployed`, ending
 otherwise in `ci_failed`, `deploy_failed` or `expired` (CI did not report in
 time).
 
-What keel does on `deployed` depends on the service type: an Application
+What keel does on `deployed` depends on what the scope points to: an Application
 gets its Docker image set to `…:<tag>`; a Compose gets its tag variable
 (`DOCKER_TAG` unless the scope names another) set in its Environment and is
 redeployed.
 
 `create-version` refuses (`git_state`) when the origin is not the active
 org's, the local branch and its remote point to different commits, the tag
-already exists, the version is not `v`-prefixed semver, or the `-d` scope is
-not linked to the repo.
+already exists or the version is not `v`-prefixed semver; a `-d` scope the
+app does not have is refused (`error`) before the tag is created.
 
 ## Read Dokploy (no plan, no approval)
 
