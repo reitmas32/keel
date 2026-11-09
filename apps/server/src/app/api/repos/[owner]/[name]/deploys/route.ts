@@ -5,5 +5,5 @@ export const dynamic = "force-dynamic";
 
 export async function GET(request: Request, { params }: { params: Promise<{ owner: string; name: string }> }) {
   const { owner, name } = await params;
-  return handlers.listRepoDeploys(getContext(), owner, name, new URL(request.url).searchParams);
+  return handlers.listRepoDeploys(await getContext(), request, owner, name);
 }

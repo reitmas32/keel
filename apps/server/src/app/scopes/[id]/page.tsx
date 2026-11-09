@@ -1,84 +1,102 @@
-import type { DeployStatus, VersionCiStatus } from "@keel/shared";
+import { roleAtLeast } from "@keel/shared";
 import { headers } from "next/headers";
-import Link from "next/link";
 import { notFound } from "next/navigation";
+import { roleOn } from "@/lib/access";
 import { getContext } from "@/lib/context";
-import { requireAdmin } from "../../session";
-import { deleteScopeAction, deleteServiceAction } from "../actions";
-import { AddServiceForm, ConfirmButton, RotateTokenForm } from "../components";
+import { formatDate } from "@/lib/format";
+import { IconExternal, IconLock, IconShield, IconTrash, IconUnlock } from "../../icons";
+import { requireMember } from "../../session";
+import { Card, deployTone, Page, PageHeader, RoleBadge, StatusBadge, versionTone } from "../../ui";
+import { ConfirmButton } from "../../ui-client";
+import { deleteScopeAction, deleteServiceAction, unlockServiceAction } from "../actions";
+import { AddServiceForm, LockServiceButton, RotateTokenForm } from "../components";
 
-const BADGE: Record<DeployStatus, string> = {
-  waiting_ci: "",
-  ci_passed: "warn",
-  deploying: "warn",
-  deployed: "ok",
-  ci_failed: "err",
-  deploy_failed: "err",
-  expired: "err",
-};
-
-const VERSION_BADGE: Record<VersionCiStatus, string> = {
-  pending: "",
-  success: "ok",
-  failure: "err",
-  cancelled: "err",
-  expired: "err",
-};
-
-const formatDate = (iso: string) =>
-  `${new Date(iso).toLocaleString("es-MX", { dateStyle: "short", timeStyle: "short", timeZone: "UTC" })} UTC`;
+const none = <span className="muted">—</span>;
 
 export default async function ScopePage({ params }: { params: Promise<{ id: string }> }) {
-  await requireAdmin();
-  const { store } = getContext();
-  const scope = store.getScope((await params).id);
+  const viewer = await requireMember();
+  const { store } = await getContext();
+  const scope = await store.getScope((await params).id);
   if (!scope) notFound();
 
-  const services = store.listServices(scope.id);
-  const deploys = store.listDeploys({ repo: scope.repo }, { limit: 20, newestFirst: true });
-  const versions = store.listVersions(scope.repo, { limit: 20 });
+  // What the member can do here: the scope's role decides linking, the CI token and deleting; each service's role
+  // decides locking and unlinking it (a grant like `prod*` can differ from the rest of the repo).
+  const scopeRole = roleOn(viewer, { repo: scope.repo });
+  const canMaintain = roleAtLeast(scopeRole, "maintainer");
+  const canDelete = roleAtLeast(scopeRole, "admin");
+  const services = await Promise.all(
+    (await store.listServices(scope.id)).map(async (service) => ({
+      ...service,
+      lock: await store.getServiceLock(service.id),
+      canMaintain: roleAtLeast(roleOn(viewer, { repo: scope.repo, service: service.alias }), "maintainer"),
+    })),
+  );
+  const deploys = await store.listDeploys({ repo: scope.repo }, { limit: 20, newestFirst: true });
+  const versions = await store.listVersions(scope.repo, { limit: 20 });
   const h = await headers();
   const apiUrl = `${h.get("x-forwarded-proto") ?? "http"}://${h.get("host")}/api`;
 
   return (
-    <>
-      <p>
-        <Link href="/scopes">← Scopes</Link>
-      </p>
-      <h1>{scope.name}</h1>
-      <p className="muted">
-        <a href={`https://github.com/${scope.repo}`} target="_blank" rel="noreferrer">
-          github.com/{scope.repo}
-        </a>
-      </p>
+    <Page crumbs={[{ label: "Scopes", href: "/scopes" }, { label: scope.name }]}>
+      <PageHeader
+        title={scope.name}
+        description={
+          <a className="link" href={`https://github.com/${scope.repo}`} target="_blank" rel="noreferrer">
+            github.com/{scope.repo}
+          </a>
+        }
+        actions={
+          <span className="role-hint" title="Tu rol efectivo en este scope, con tus permisos por repo">
+            <IconShield />
+            Tu rol aquí <RoleBadge role={scopeRole} />
+          </span>
+        }
+      />
 
-      <section className="card">
-        <h2>Servicios de Dokploy</h2>
-        {services.length > 0 && (
-          <div className="table-wrap" style={{ marginBottom: 16 }}>
-            <table>
-              <thead>
-                <tr>
-                  <th>Alias</th>
-                  <th>Tipo</th>
-                  <th>ID en Dokploy</th>
-                  <th>Cómo despliega</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {services.map((service) => (
-                  <tr key={service.id}>
-                    <td>
+      <div className="stack">
+        <Card
+          title="Servicios de Dokploy"
+          description={
+            <>
+              El alias es lo que eliges en <code>keel deploy -s</code>. Un servicio bloqueado rechaza los deploys
+              nuevos.
+            </>
+          }
+          footer={
+            canMaintain && (
+              <div className="stack" style={{ gap: "0.75rem" }}>
+                <AddServiceForm scopeId={scope.id} />
+                <p className="hint">
+                  Copia la URL del servicio desde el dashboard de Dokploy. En un <strong>Application</strong> keel
+                  cambia el tag de su imagen Docker. En un <strong>Compose</strong> cambia la variable del tag (por
+                  defecto <code>DOCKER_TAG</code>) en su Environment y lo redespliega: la imagen debe usarla, p.ej.{" "}
+                  <code>
+                    image: ${"{DOCKER_IMAGE}"}:${"{DOCKER_TAG}"}
+                  </code>
+                  .
+                </p>
+              </div>
+            )
+          }
+        >
+          {services.length === 0 ? (
+            <p className="empty">Todavía no hay servicios vinculados.</p>
+          ) : (
+            <ul className="service-list">
+              {services.map((service) => (
+                <li key={service.id} className="service-row">
+                  <div className="service-main">
+                    <div className="service-title">
                       <a href={service.dokployUrl} target="_blank" rel="noreferrer">
                         {service.alias}
+                        <IconExternal />
                       </a>
-                    </td>
-                    <td>{service.kind === "compose" ? "Compose" : "Application"}</td>
-                    <td>
-                      <code>{service.dokployId}</code>
-                    </td>
-                    <td className="muted" style={{ fontSize: 13 }}>
+                      <span className="badge badge-outline">
+                        {service.kind === "compose" ? "Compose" : "Application"}
+                      </span>
+                    </div>
+                    <span className="muted small">
+                      <code>{service.dokployId}</code> ·{" "}
                       {service.kind === "compose" ? (
                         <code>{service.tagVariable}=&lt;versión&gt;</code>
                       ) : (
@@ -86,139 +104,167 @@ export default async function ScopePage({ params }: { params: Promise<{ id: stri
                           imagen <code>:&lt;versión&gt;</code>
                         </>
                       )}
-                    </td>
-                    <td style={{ textAlign: "right" }}>
+                    </span>
+                  </div>
+
+                  <div className="service-lock">
+                    {service.lock ? (
+                      <>
+                        <span>
+                          <StatusBadge tone="running">
+                            <IconLock />
+                            Bloqueado
+                          </StatusBadge>
+                        </span>
+                        <span className="small">{service.lock.reason}</span>
+                        <span className="muted small">
+                          por {service.lock.lockedBy ?? "alguien"}, {formatDate(service.lock.createdAt)}
+                        </span>
+                      </>
+                    ) : (
+                      <span>
+                        <StatusBadge tone="idle">Desbloqueado</StatusBadge>
+                      </span>
+                    )}
+                  </div>
+
+                  {service.canMaintain && (
+                    <div className="service-actions">
+                      {service.lock ? (
+                        <form action={unlockServiceAction}>
+                          <input type="hidden" name="scopeId" value={scope.id} />
+                          <input type="hidden" name="serviceId" value={service.id} />
+                          <button type="submit" className="btn btn-outline btn-sm">
+                            <IconUnlock />
+                            Desbloquear
+                          </button>
+                        </form>
+                      ) : (
+                        <LockServiceButton scopeId={scope.id} serviceId={service.id} alias={service.alias} />
+                      )}
                       <form action={deleteServiceAction}>
                         <input type="hidden" name="scopeId" value={scope.id} />
                         <input type="hidden" name="serviceId" value={service.id} />
-                        <ConfirmButton message={`¿Desvincular ${service.alias}?`}>Desvincular</ConfirmButton>
+                        <ConfirmButton variant="outline" message={`¿Desvincular ${service.alias}?`}>
+                          Desvincular
+                        </ConfirmButton>
                       </form>
-                    </td>
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+
+        <Card
+          title="GitHub Action"
+          description={
+            <>
+              El último paso del workflow debe llamar a <code>{apiUrl}/ci-result</code> con el header{" "}
+              <code>Authorization: Bearer $DEPLOY_API_TOKEN</code>.
+            </>
+          }
+        >
+          {canMaintain ? (
+            <RotateTokenForm scopeId={scope.id} />
+          ) : (
+            <p className="hint">Solo un maintainer de este scope puede generar un nuevo token de CI.</p>
+          )}
+        </Card>
+
+        <Card title="Versiones" description="Las 20 más recientes, de keel create-version o de su CI.">
+          {versions.length === 0 ? (
+            <p className="empty">
+              Sin versiones todavía. Aparecen al crearlas con <code>keel create-version</code> o cuando su CI avisa.
+            </p>
+          ) : (
+            <div className="table-wrap">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Versión</th>
+                    <th>Rama</th>
+                    <th>Creada por</th>
+                    <th>CI</th>
+                    <th>Creada</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        <AddServiceForm scopeId={scope.id} />
-        <p className="muted" style={{ fontSize: 13 }}>
-          El alias es lo que eliges en <code>keel deploy</code>. Copia la URL del servicio desde el dashboard de
-          Dokploy. En un <strong>Application</strong> keel cambia el tag de su imagen Docker. En un{" "}
-          <strong>Compose</strong> cambia la variable del tag (por defecto <code>DOCKER_TAG</code>) en su Environment y
-          lo redespliega: la imagen debe usarla, p.ej.{" "}
-          <code>
-            image: ${"{DOCKER_IMAGE}"}:${"{DOCKER_TAG}"}
-          </code>
-          .
-        </p>
-      </section>
-
-      <section className="card">
-        <h2>GitHub Action</h2>
-        <p>
-          El último paso del workflow debe llamar a <code>{apiUrl}/ci-result</code> con el header{" "}
-          <code>Authorization: Bearer $DEPLOY_API_TOKEN</code>.
-        </p>
-        <RotateTokenForm scopeId={scope.id} />
-      </section>
-
-      <section className="card">
-        <h2>Versiones</h2>
-        {versions.length === 0 ? (
-          <p className="muted">
-            Sin versiones todavía. Aparecen al crearlas con <code>keel create-version</code> o cuando su CI avisa.
-          </p>
-        ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Versión</th>
-                  <th>Rama</th>
-                  <th>Creada por</th>
-                  <th>CI</th>
-                  <th>Creada</th>
-                </tr>
-              </thead>
-              <tbody>
-                {versions.map((v) => (
-                  <tr key={v.tag}>
-                    <td>
-                      <code>{v.tag}</code>
-                    </td>
-                    <td>{v.branch ? <code>{v.branch}</code> : <span className="muted">—</span>}</td>
-                    <td>{v.createdByName ?? v.createdByEmail ?? <span className="muted">—</span>}</td>
-                    <td>
-                      {v.runUrl ? (
-                        <a
-                          href={v.runUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className={`badge ${VERSION_BADGE[v.ciStatus]}`}
-                        >
+                </thead>
+                <tbody>
+                  {versions.map((v) => (
+                    <tr key={v.tag}>
+                      <td>
+                        <code>{v.tag}</code>
+                      </td>
+                      <td>{v.branch ? <code>{v.branch}</code> : none}</td>
+                      <td>{v.createdByName ?? v.createdByEmail ?? none}</td>
+                      <td>
+                        <StatusBadge tone={versionTone(v.ciStatus)} href={v.runUrl}>
                           {v.ciStatus}
-                        </a>
-                      ) : (
-                        <span className={`badge ${VERSION_BADGE[v.ciStatus]}`}>{v.ciStatus}</span>
-                      )}
-                    </td>
-                    <td className="muted">{formatDate(v.createdAt)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+                        </StatusBadge>
+                      </td>
+                      <td className="muted nowrap">{formatDate(v.createdAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
 
-      <section className="card">
-        <h2>Deploys recientes</h2>
-        {deploys.length === 0 ? (
-          <p className="muted">Sin deploys todavía.</p>
-        ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Versión</th>
-                  <th>Servicio</th>
-                  <th>Estado</th>
-                  <th>Creado</th>
-                </tr>
-              </thead>
-              <tbody>
-                {deploys.map((d) => (
-                  <tr key={d.id}>
-                    <td>
-                      <code>{d.tag}</code>
-                    </td>
-                    <td>{d.service}</td>
-                    <td>
-                      <span className={`badge ${BADGE[d.status]}`}>{d.status}</span>
-                      {d.error && (
-                        <div className="muted" style={{ fontSize: 13 }}>
-                          {d.error}
-                        </div>
-                      )}
-                    </td>
-                    <td className="muted">{formatDate(d.createdAt)}</td>
+        <Card title="Deploys recientes" description="Los 20 más recientes de todos los servicios del scope.">
+          {deploys.length === 0 ? (
+            <p className="empty">Sin deploys todavía.</p>
+          ) : (
+            <div className="table-wrap">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Versión</th>
+                    <th>Servicio</th>
+                    <th>Estado</th>
+                    <th>Pedido por</th>
+                    <th>Creado</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+                </thead>
+                <tbody>
+                  {deploys.map((d) => (
+                    <tr key={d.id}>
+                      <td>
+                        <code>{d.tag}</code>
+                      </td>
+                      <td>{d.service}</td>
+                      <td>
+                        <StatusBadge tone={deployTone(d.status)}>{d.status}</StatusBadge>
+                        {d.error && <div className="sub">{d.error}</div>}
+                      </td>
+                      <td>{d.requestedBy ?? none}</td>
+                      <td className="muted nowrap">{formatDate(d.createdAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
 
-      <section className="card">
-        <h2>Zona peligrosa</h2>
-        <form action={deleteScopeAction}>
-          <input type="hidden" name="scopeId" value={scope.id} />
-          <ConfirmButton message={`¿Eliminar el scope ${scope.repo}, sus servicios y su historial de deploys?`}>
-            Eliminar scope
-          </ConfirmButton>
-        </form>
-      </section>
-    </>
+        {canDelete && (
+          <Card
+            className="card-danger"
+            title="Zona peligrosa"
+            description="Elimina el scope, sus servicios vinculados y su historial de deploys. No se puede deshacer."
+            action={
+              <form action={deleteScopeAction}>
+                <input type="hidden" name="scopeId" value={scope.id} />
+                <ConfirmButton message={`¿Eliminar el scope ${scope.repo}, sus servicios y su historial de deploys?`}>
+                  <IconTrash />
+                  Eliminar scope
+                </ConfirmButton>
+              </form>
+            }
+          />
+        )}
+      </div>
+    </Page>
   );
 }

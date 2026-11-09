@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { recordCiResult, requestDeploy } from "./deploys";
 import { handlers } from "./handlers";
 import { parseGithubRepoUrl } from "./scopes";
-import { createTestContext, SHA } from "./testing";
+import { apiRequest, createTestContext, SHA } from "./testing";
 
 const post = (body: unknown, headers: Record<string, string> = {}) =>
   new Request("http://keel.test/api", {
@@ -13,9 +13,9 @@ const post = (body: unknown, headers: Record<string, string> = {}) =>
 
 describe("API handlers", () => {
   it("runs the CLI + Action flow over HTTP", async () => {
-    const { ctx, ciToken } = createTestContext();
+    const { ctx, ciToken } = await createTestContext();
 
-    const services = await handlers.listServices(ctx, "konectus-io", "app");
+    const services = await handlers.listServices(ctx, apiRequest(), "konectus-io", "app");
     expect(await services.json()).toMatchObject({
       repo: "konectus-io/app",
       services: [
@@ -41,12 +41,12 @@ describe("API handlers", () => {
     );
     expect(ci.status).toBe(200);
 
-    const fetched = await handlers.getDeploy(ctx, deploy.id);
+    const fetched = await handlers.getDeploy(ctx, apiRequest(), deploy.id);
     expect((await fetched.json()).status).toBe("ci_passed");
   });
 
   it("returns 400 with the failing fields for an invalid body", async () => {
-    const { ctx } = createTestContext();
+    const { ctx } = await createTestContext();
     const response = await handlers.createDeploy(ctx, post({ repo: "konectus-io/app" }));
     expect(response.status).toBe(400);
     expect((await response.json()).error).toMatch(/tag/);
@@ -56,7 +56,7 @@ describe("API handlers", () => {
   });
 
   it("returns 401 for /ci-result without a valid token", async () => {
-    const { ctx } = createTestContext();
+    const { ctx } = await createTestContext();
     const response = await handlers.ciResult(
       ctx,
       post({ repo: "konectus-io/app", tag: "v1.0.0", sha: SHA, status: "success" }),
@@ -65,8 +65,8 @@ describe("API handlers", () => {
   });
 
   it("returns 404 for an unknown deploy", async () => {
-    const { ctx } = createTestContext();
-    expect((await handlers.getDeploy(ctx, "missing")).status).toBe(404);
+    const { ctx } = await createTestContext();
+    expect((await handlers.getDeploy(ctx, apiRequest(), "missing")).status).toBe(404);
   });
 });
 
@@ -76,30 +76,30 @@ describe("parseGithubRepoUrl", () => {
     "https://github.com/konectus-io/app.git",
     "git@github.com:konectus-io/app.git",
     "konectus-io/app",
-  ])("parses %s", (url) => {
+  ])("parses %s", async (url) => {
     expect(parseGithubRepoUrl(url)).toBe("konectus-io/app");
   });
 
-  it("rejects non-GitHub URLs", () => {
+  it("rejects non-GitHub URLs", async () => {
     expect(parseGithubRepoUrl("https://gitlab.com/konectus-io/app")).toBeUndefined();
   });
 });
 
 describe("GET /repos/:owner/:name/services", () => {
   it("adds each service's Dokploy name, current version and last deploy", async () => {
-    const { ctx, store, worker, dokploy, clock, ciToken } = createTestContext();
+    const { ctx, store, worker, dokploy, clock, ciToken } = await createTestContext();
     const deployReq = { repo: "konectus-io/app", tag: "v1.0.0", sha: SHA, service: "api-prod" };
-    recordCiResult(store, { ...deployReq, status: "success" }, ciToken, clock.now());
-    requestDeploy(store, deployReq, clock.now());
+    await recordCiResult(store, { ...deployReq, status: "success" }, ciToken, clock.now());
+    await requestDeploy(store, deployReq, clock.now());
     await worker.tick();
     dokploy.status = "done";
     await worker.tick();
     clock.advanceMinutes(1);
     const failing = { ...deployReq, tag: "v1.1.0", sha: "b".repeat(40) };
-    recordCiResult(store, { ...failing, status: "failure" }, ciToken, clock.now());
-    requestDeploy(store, failing, clock.now());
+    await recordCiResult(store, { ...failing, status: "failure" }, ciToken, clock.now());
+    await requestDeploy(store, failing, clock.now());
 
-    const body = await (await handlers.listServices(ctx, "konectus-io", "app")).json();
+    const body = await (await handlers.listServices(ctx, apiRequest(), "konectus-io", "app")).json();
     expect(body.services[0]).toMatchObject({
       alias: "api-prod",
       dokployName: "DEV/production/app",
@@ -109,9 +109,9 @@ describe("GET /repos/:owner/:name/services", () => {
   });
 
   it("still lists a service when Dokploy can't describe it", async () => {
-    const { ctx, dokploy } = createTestContext();
+    const { ctx, dokploy } = await createTestContext();
     dokploy.names.clear();
-    const body = await (await handlers.listServices(ctx, "konectus-io", "app")).json();
+    const body = await (await handlers.listServices(ctx, apiRequest(), "konectus-io", "app")).json();
     expect(body.services[0]).toMatchObject({ alias: "api-prod", dokployName: null, dokployId: "app123" });
   });
 });

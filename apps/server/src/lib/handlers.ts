@@ -3,20 +3,34 @@ import {
   createDeployRequestSchema,
   type Deploy,
   type DeployDetail,
+  lockServiceRequestSchema,
   registerVersionRequestSchema,
+  type ServiceLock,
+  type ServiceLockInfo,
   type ServiceSummary,
+  type UnlockServiceResponse,
   VERSION_CI_STATUSES,
   type VersionCiStatus,
+  type WhoamiResponse,
 } from "@keel/shared";
 import type { z } from "zod";
+import { actorOf, baseRole, CI_ACTOR, type Principal, requireRoleOn } from "./access";
+import { authenticate, type Caller } from "./api-auth";
 import type { AppContext } from "./context";
 import { recordCiResult, registerVersion, requestDeploy } from "./deploys";
 import { DokployError } from "./dokploy";
 import { ApiError } from "./errors";
-import type { DeployRecord } from "./store";
+import type { Target } from "./roles";
+import { type DeployRecord, normalizeRepo, type Scope, type Service, type ServiceLockRecord } from "./store";
 import { bearerToken } from "./tokens";
 
 const toPublic = ({ serviceId: _s, ...deploy }: DeployRecord): Deploy => deploy;
+
+const toLockInfo = ({ reason, lockedBy, createdAt }: ServiceLockRecord): ServiceLockInfo => ({
+  reason,
+  lockedBy,
+  createdAt,
+});
 
 const DEFAULT_LIST_LIMIT = 20;
 const MAX_LIST_LIMIT = 200;
@@ -37,6 +51,33 @@ async function parseBody<T extends z.ZodType>(request: Request, schema: T): Prom
   return parsed.data;
 }
 
+async function findScope(ctx: AppContext, owner: string, name: string): Promise<Scope> {
+  const scope = await ctx.store.getScopeByRepo(`${owner}/${name}`);
+  if (!scope) throw new ApiError(404, `El repo ${owner}/${name} no está vinculado a ningún scope.`);
+  return scope;
+}
+
+async function findService(ctx: AppContext, scope: Scope, alias: string): Promise<Service> {
+  const service = await ctx.store.getServiceByAlias(scope.id, alias);
+  if (!service) {
+    const available = (await ctx.store.listServices(scope.id)).map((s) => s.alias);
+    throw new ApiError(
+      404,
+      `El servicio ${alias} no existe en ${scope.repo}. Disponibles: ${available.join(", ") || "ninguno"}.`,
+    );
+  }
+  return service;
+}
+
+function parseLimit(params: URLSearchParams): number {
+  const limitParam = params.get("limit");
+  const limit = limitParam === null ? DEFAULT_LIST_LIMIT : Number(limitParam);
+  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIST_LIMIT) {
+    throw new ApiError(400, `limit debe ser un entero entre 1 y ${MAX_LIST_LIMIT}.`);
+  }
+  return limit;
+}
+
 /** Wraps a handler so ApiErrors become JSON responses and anything else is a logged 500. */
 export async function handle(fn: () => Promise<Response> | Response): Promise<Response> {
   try {
@@ -49,40 +90,103 @@ export async function handle(fn: () => Promise<Response> | Response): Promise<Re
   }
 }
 
+/** Records an API mutation in the audit log, as the caller (or `anónimo`). */
+const audit = (
+  ctx: AppContext,
+  caller: Principal & { tokenName?: string | null },
+  action: string,
+  target: Target,
+  details: Record<string, unknown>,
+) => {
+  const actor = actorOf(caller);
+  return ctx.store.recordAudit(
+    {
+      actor: actor.name,
+      actorMemberId: actor.memberId,
+      action,
+      repo: target.repo,
+      service: target.service ?? null,
+      details: { ...details, via: "api", ...(caller.tokenName && { token: caller.tokenName }) },
+    },
+    ctx.now(),
+  );
+};
+
+const repoOf = (owner: string, name: string) => normalizeRepo(`${owner}/${name}`);
+
+/** Like `handle`, for the routes that need the caller's API token (all but /health and /ci-result). */
+function authed(ctx: AppContext, request: Request, fn: (caller: Caller) => Promise<Response> | Response) {
+  return handle(async () => fn(await authenticate(ctx, request)));
+}
+
 export const handlers = {
   createDeploy: (ctx: AppContext, request: Request) =>
-    handle(async () => {
+    authed(ctx, request, async (caller) => {
       const body = await parseBody(request, createDeployRequestSchema);
-      const deploy = requestDeploy(ctx.store, body, ctx.now());
+      const target = { repo: normalizeRepo(body.repo), service: body.service };
+      requireRoleOn(caller, "deployer", "desplegar", target);
+      const deploy = await requestDeploy(ctx.store, body, ctx.now(), caller.name);
+      await audit(ctx, caller, "deploy.create", target, {
+        deployId: deploy.id,
+        tag: deploy.tag,
+        sha: deploy.sha,
+        status: deploy.status,
+      });
       return Response.json(toPublic(deploy), { status: 202 });
     }),
 
-  getDeploy: (ctx: AppContext, id: string) =>
-    handle(() => {
-      const deploy = ctx.store.getDeploy(id);
+  getDeploy: (ctx: AppContext, request: Request, id: string) =>
+    authed(ctx, request, async (caller) => {
+      const deploy = await ctx.store.getDeploy(id);
       if (!deploy) throw new ApiError(404, `Deploy ${id} no encontrado.`);
+      requireRoleOn(caller, "viewer", "ver deploys", { repo: deploy.repo, service: deploy.service });
       return Response.json(toPublic(deploy));
     }),
 
+  /** Authenticated with the repo's CI token, not with an API token. */
   ciResult: (ctx: AppContext, request: Request) =>
     handle(async () => {
       const token = bearerToken(request.headers.get("authorization"));
       const body = await parseBody(request, ciResultRequestSchema);
-      const { updated } = recordCiResult(ctx.store, body, token, ctx.now());
+      const { updated } = await recordCiResult(ctx.store, body, token, ctx.now());
+      await ctx.store.recordAudit(
+        {
+          actor: CI_ACTOR.name,
+          action: "ci.result",
+          repo: body.repo,
+          details: { tag: body.tag, sha: body.sha, status: body.status, deploys: updated.map((d) => d.id) },
+        },
+        ctx.now(),
+      );
       return Response.json({ ok: true, updated: updated.map(toPublic) });
     }),
 
-  listServices: (ctx: AppContext, owner: string, name: string) =>
-    handle(async () => {
-      const scope = ctx.store.getScopeByRepo(`${owner}/${name}`);
-      if (!scope) throw new ApiError(404, `El repo ${owner}/${name} no está vinculado a ningún scope.`);
+  whoami: (ctx: AppContext, request: Request) =>
+    authed(ctx, request, (caller) => {
+      const body: WhoamiResponse = {
+        name: caller.name,
+        email: caller.member?.email ?? null,
+        role: baseRole(caller),
+        grants: caller.grants.map((g) => ({ repo: g.repoPattern, service: g.servicePattern, role: g.role })),
+        tokenMaxRole: caller.maxRole,
+        auth: ctx.env.KEEL_API_AUTH,
+        anonymousRole: ctx.env.KEEL_ANONYMOUS_ROLE ?? "deployer",
+      };
+      return Response.json(body);
+    }),
+
+  listServices: (ctx: AppContext, request: Request, owner: string, name: string) =>
+    authed(ctx, request, async (caller) => {
+      requireRoleOn(caller, "viewer", "ver servicios", { repo: repoOf(owner, name) });
+      const scope = await findScope(ctx, owner, name);
       const services: ServiceSummary[] = await Promise.all(
-        ctx.store.listServices(scope.id).map(async (s) => {
-          const [current] = ctx.store.listDeploys(
+        (await ctx.store.listServices(scope.id)).map(async (s) => {
+          const [current] = await ctx.store.listDeploys(
             { serviceId: s.id, status: "deployed" },
             { limit: 1, newestFirst: true },
           );
-          const [last] = ctx.store.listDeploys({ serviceId: s.id }, { limit: 1, newestFirst: true });
+          const [last] = await ctx.store.listDeploys({ serviceId: s.id }, { limit: 1, newestFirst: true });
+          const lock = await ctx.store.getServiceLock(s.id);
           return {
             alias: s.alias,
             kind: s.kind,
@@ -93,81 +197,88 @@ export const handlers = {
               (await ctx.dokploy.describe({ kind: s.kind, id: s.dokployId, tagVariable: s.tagVariable })) ?? null,
             current: current ? toPublic(current) : null,
             last: last ? toPublic(last) : null,
+            lock: lock ? toLockInfo(lock) : null,
           };
         }),
       );
       return Response.json({ repo: scope.repo, services });
     }),
 
-  registerVersion: (ctx: AppContext, request: Request) =>
-    handle(async () => {
-      const body = await parseBody(request, registerVersionRequestSchema);
-      return Response.json(registerVersion(ctx.store, body, ctx.now()), { status: 201 });
+  lockService: (ctx: AppContext, request: Request, owner: string, name: string, alias: string) =>
+    authed(ctx, request, async (caller) => {
+      const target = { repo: repoOf(owner, name), service: alias };
+      requireRoleOn(caller, "maintainer", "bloquear servicios", target);
+      const service = await findService(ctx, await findScope(ctx, owner, name), alias);
+      const { reason } = await parseBody(request, lockServiceRequestSchema);
+      const lock = await ctx.store.lockService({ serviceId: service.id, reason, lockedBy: caller.name }, ctx.now());
+      await audit(ctx, caller, "lock.set", target, { reason });
+      const body: ServiceLock = { alias: service.alias, ...toLockInfo(lock) };
+      return Response.json(body);
     }),
 
-  listRepoVersions: (ctx: AppContext, owner: string, name: string, params: URLSearchParams) =>
-    handle(() => {
-      const scope = ctx.store.getScopeByRepo(`${owner}/${name}`);
-      if (!scope) throw new ApiError(404, `El repo ${owner}/${name} no está vinculado a ningún scope.`);
+  unlockService: (ctx: AppContext, request: Request, owner: string, name: string, alias: string) =>
+    authed(ctx, request, async (caller) => {
+      const target = { repo: repoOf(owner, name), service: alias };
+      requireRoleOn(caller, "maintainer", "desbloquear servicios", target);
+      const service = await findService(ctx, await findScope(ctx, owner, name), alias);
+      const body: UnlockServiceResponse = { ok: true, wasLocked: await ctx.store.unlockService(service.id) };
+      if (body.wasLocked) await audit(ctx, caller, "lock.clear", target, {});
+      return Response.json(body);
+    }),
 
-      const limitParam = params.get("limit");
-      const limit = limitParam === null ? DEFAULT_LIST_LIMIT : Number(limitParam);
-      if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIST_LIMIT) {
-        throw new ApiError(400, `limit debe ser un entero entre 1 y ${MAX_LIST_LIMIT}.`);
-      }
+  registerVersion: (ctx: AppContext, request: Request) =>
+    authed(ctx, request, async (caller) => {
+      const body = await parseBody(request, registerVersionRequestSchema);
+      const target = { repo: normalizeRepo(body.repo) };
+      requireRoleOn(caller, "publisher", "registrar versiones", target);
+      const version = await registerVersion(ctx.store, body, ctx.now());
+      await audit(ctx, caller, "version.register", target, { tag: body.tag, sha: body.sha });
+      return Response.json(version, { status: 201 });
+    }),
+
+  listRepoVersions: (ctx: AppContext, request: Request, owner: string, name: string) =>
+    authed(ctx, request, async (caller) => {
+      requireRoleOn(caller, "viewer", "ver versiones", { repo: repoOf(owner, name) });
+      const scope = await findScope(ctx, owner, name);
+      const params = new URL(request.url).searchParams;
+      const limit = parseLimit(params);
       const status = params.get("status");
       if (status !== null && !VERSION_CI_STATUSES.includes(status as VersionCiStatus)) {
         throw new ApiError(400, `status debe ser uno de: ${VERSION_CI_STATUSES.join(", ")}.`);
       }
 
-      const versions = ctx.store.listVersions(scope.repo, {
+      const versions = await ctx.store.listVersions(scope.repo, {
         limit,
         ...(status !== null && { status: status as VersionCiStatus }),
       });
       return Response.json({ repo: scope.repo, versions });
     }),
 
-  listRepoDeploys: (ctx: AppContext, owner: string, name: string, params: URLSearchParams) =>
-    handle(() => {
-      const scope = ctx.store.getScopeByRepo(`${owner}/${name}`);
-      if (!scope) throw new ApiError(404, `El repo ${owner}/${name} no está vinculado a ningún scope.`);
-
-      const limitParam = params.get("limit");
-      const limit = limitParam === null ? DEFAULT_LIST_LIMIT : Number(limitParam);
-      if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIST_LIMIT) {
-        throw new ApiError(400, `limit debe ser un entero entre 1 y ${MAX_LIST_LIMIT}.`);
-      }
-
+  listRepoDeploys: (ctx: AppContext, request: Request, owner: string, name: string) =>
+    authed(ctx, request, async (caller) => {
+      const params = new URL(request.url).searchParams;
       const alias = params.get("service");
-      let serviceId: string | undefined;
-      if (alias) {
-        const service = ctx.store.getServiceByAlias(scope.id, alias);
-        if (!service) {
-          const available = ctx.store.listServices(scope.id).map((s) => s.alias);
-          throw new ApiError(
-            404,
-            `El servicio ${alias} no existe en ${scope.repo}. Disponibles: ${available.join(", ") || "ninguno"}.`,
-          );
-        }
-        serviceId = service.id;
-      }
+      requireRoleOn(caller, "viewer", "ver deploys", { repo: repoOf(owner, name), service: alias ?? undefined });
+      const scope = await findScope(ctx, owner, name);
+      const limit = parseLimit(params);
+      const serviceId = alias ? (await findService(ctx, scope, alias)).id : undefined;
 
-      const deploys = ctx.store.listDeploys(
+      const deploys = await ctx.store.listDeploys(
         { repo: scope.repo, ...(serviceId && { serviceId }) },
         { limit, newestFirst: true },
       );
       return Response.json({ repo: scope.repo, deploys: deploys.map(toPublic) });
     }),
 
-  getRepoDeploy: (ctx: AppContext, owner: string, name: string, idPrefix: string) =>
-    handle(() => {
-      const scope = ctx.store.getScopeByRepo(`${owner}/${name}`);
-      if (!scope) throw new ApiError(404, `El repo ${owner}/${name} no está vinculado a ningún scope.`);
+  getRepoDeploy: (ctx: AppContext, request: Request, owner: string, name: string, idPrefix: string) =>
+    authed(ctx, request, async (caller) => {
+      requireRoleOn(caller, "viewer", "ver deploys", { repo: repoOf(owner, name) });
+      const scope = await findScope(ctx, owner, name);
       if (idPrefix.length < MIN_ID_PREFIX) {
         throw new ApiError(400, `Usa al menos ${MIN_ID_PREFIX} caracteres del id del deploy.`);
       }
 
-      const matches = ctx.store.findDeploysByPrefix(scope.repo, idPrefix.toLowerCase());
+      const matches = await ctx.store.findDeploysByPrefix(scope.repo, idPrefix.toLowerCase());
       if (matches.length === 0) throw new ApiError(404, `No hay ningún deploy ${idPrefix} en ${scope.repo}.`);
       if (matches.length > 1) {
         const ids = matches.map((d) => `${d.id.slice(0, 8)} (${d.tag} → ${d.service})`).join(", ");
@@ -175,7 +286,7 @@ export const handlers = {
       }
 
       const deploy = matches[0] as DeployRecord;
-      const service = ctx.store.getService(deploy.serviceId);
+      const service = await ctx.store.getService(deploy.serviceId);
       const detail: DeployDetail = {
         ...toPublic(deploy),
         serviceKind: service?.kind ?? null,

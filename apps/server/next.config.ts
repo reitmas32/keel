@@ -6,6 +6,9 @@ const config: NextConfig = {
   // Trace from the monorepo root so the standalone bundle includes workspace packages.
   outputFileTracingRoot: fileURLToPath(new URL("../..", import.meta.url)),
   transpilePackages: ["@keel/shared"],
+  // node-postgres stays a runtime require (not bundled), so output tracing copies it and its dependencies into the
+  // standalone bundle. Next lists `pg` by default; it's spelled out because keel needs it with DB_ENGINE=postgres.
+  serverExternalPackages: ["pg"],
   // Type checking runs via `pnpm typecheck` (tsc); Next's builtin checker doesn't support TypeScript 7.
   typescript: { ignoreBuildErrors: true },
 };

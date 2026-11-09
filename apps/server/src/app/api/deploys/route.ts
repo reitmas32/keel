@@ -3,6 +3,6 @@ import { handlers } from "@/lib/handlers";
 
 export const dynamic = "force-dynamic";
 
-export function POST(request: Request) {
-  return handlers.createDeploy(getContext(), request);
+export async function POST(request: Request) {
+  return handlers.createDeploy(await getContext(), request);
 }

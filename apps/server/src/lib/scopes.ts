@@ -14,31 +14,31 @@ export function parseGithubRepoUrl(input: string): string | undefined {
 }
 
 /** Creates a scope for a repo and returns the plaintext CI token, which is shown only once. */
-export function createScope(store: Store, input: { name: string; repoUrl: string }, now: Date) {
+export async function createScope(store: Store, input: { name: string; repoUrl: string }, now: Date) {
   const repo = parseGithubRepoUrl(input.repoUrl);
   if (!repo) throw new ApiError(400, `URL de repo de GitHub inválida: ${input.repoUrl}`);
-  if (store.getScopeByRepo(repo)) throw new ApiError(409, `El repo ${repo} ya está vinculado a un scope.`);
+  if (await store.getScopeByRepo(repo)) throw new ApiError(409, `El repo ${repo} ya está vinculado a un scope.`);
   const { token, hash } = generateCiToken();
-  const scope = store.createScope({ name: input.name.trim() || repo, repo, ciTokenHash: hash }, now);
+  const scope = await store.createScope({ name: input.name.trim() || repo, repo, ciTokenHash: hash }, now);
   return { scope, ciToken: token };
 }
 
-export function rotateCiToken(store: Store, scopeId: string): string {
-  if (!store.getScope(scopeId)) throw new ApiError(404, "Scope no encontrado.");
+export async function rotateCiToken(store: Store, scopeId: string): Promise<string> {
+  if (!(await store.getScope(scopeId))) throw new ApiError(404, "Scope no encontrado.");
   const { token, hash } = generateCiToken();
-  store.setCiTokenHash(scopeId, hash);
+  await store.setCiTokenHash(scopeId, hash);
   return token;
 }
 
 const ALIAS_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-export function addService(
+export async function addService(
   store: Store,
   scope: Scope,
   input: { alias: string; dokployUrl: string; tagVariable?: string },
   now: Date,
-): Service {
+): Promise<Service> {
   const alias = input.alias.trim().toLowerCase();
   if (!ALIAS_PATTERN.test(alias)) {
     throw new ApiError(400, "El alias solo puede tener minúsculas, números y guiones (p.ej. api-prod).");
@@ -58,7 +58,7 @@ export function addService(
       throw new ApiError(400, `Variable de tag inválida: ${tagVariable}. Usa un nombre de variable como DOCKER_TAG.`);
     }
   }
-  if (store.getServiceByAlias(scope.id, alias)) {
+  if (await store.getServiceByAlias(scope.id, alias)) {
     throw new ApiError(409, `Ya existe un servicio con alias ${alias} en ${scope.repo}.`);
   }
   return store.addService(

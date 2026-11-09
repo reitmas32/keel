@@ -1,14 +1,16 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import {
   type CiResultRequest,
   canTransition,
   type Deploy,
   type DeployStatus,
   isTerminal,
+  type Role,
   type Version,
   type VersionCiStatus,
 } from "@keel/shared";
+import type { Db, Row, SqlValue } from "./db";
+import { BOOTSTRAP_ADMIN } from "./postgres-schema.mjs";
 
 export interface Scope {
   id: string;
@@ -46,7 +48,77 @@ export interface DeployRecord extends Deploy {
   finishedAt: string | null;
 }
 
-type Row = Record<string, unknown>;
+export interface ApiToken {
+  id: string;
+  name: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+  /** The member the token acts as. Null only in a database the members migration hasn't reached. */
+  memberId: string | null;
+  /** The token can't act above this role, whatever its owner's role is. Null: its owner's role. */
+  maxRole: Role | null;
+}
+
+/** A token with its owner's name, for the admin's list. */
+export interface ApiTokenWithOwner extends ApiToken {
+  ownerName: string | null;
+}
+
+export const MEMBER_STATUSES = ["invited", "active", "disabled"] as const;
+export type MemberStatus = (typeof MEMBER_STATUSES)[number];
+
+export interface Member {
+  id: string;
+  name: string;
+  /** Lowercased. */
+  email: string;
+  role: Role;
+  status: MemberStatus;
+  hasPassword: boolean;
+  createdAt: string;
+  lastLoginAt: string | null;
+}
+
+export interface MemberGrant {
+  id: string;
+  memberId: string;
+  repoPattern: string;
+  servicePattern: string;
+  role: Role;
+  createdAt: string;
+}
+
+export interface Invite {
+  memberId: string;
+  expiresAt: string;
+  usedAt: string | null;
+}
+
+export interface AuditEntry {
+  id: string;
+  at: string;
+  /** Member name, `anónimo` for an API call without a token, or `ci` for the GitHub Action. */
+  actor: string;
+  actorMemberId: string | null;
+  action: string;
+  repo: string | null;
+  service: string | null;
+  /** Parsed from the JSON column. Never holds secrets. */
+  details: Record<string, unknown> | null;
+}
+
+export interface AuditFilter {
+  repo?: string | undefined;
+  actor?: string | undefined;
+}
+
+export interface ServiceLockRecord {
+  serviceId: string;
+  reason: string;
+  /** API token name, `admin` from the admin UI, or null without a token. */
+  lockedBy: string | null;
+  createdAt: string;
+}
 
 const toScope = (r: Row): Scope => ({
   id: r.id as string,
@@ -78,8 +150,67 @@ const toDeploy = (r: Row): DeployRecord => ({
   deployStartedAt: (r.deploy_started_at as string | null) ?? null,
   ciPassedAt: (r.ci_passed_at as string | null) ?? null,
   finishedAt: (r.finished_at as string | null) ?? null,
+  requestedBy: (r.requested_by as string | null) ?? null,
   createdAt: r.created_at as string,
   updatedAt: r.updated_at as string,
+});
+
+const toApiToken = (r: Row): ApiToken => ({
+  id: r.id as string,
+  name: r.name as string,
+  createdAt: r.created_at as string,
+  lastUsedAt: (r.last_used_at as string | null) ?? null,
+  memberId: (r.member_id as string | null) ?? null,
+  maxRole: (r.max_role as Role | null) ?? null,
+});
+
+const toMember = (r: Row): Member => ({
+  id: r.id as string,
+  name: r.name as string,
+  email: r.email as string,
+  role: r.role as Role,
+  status: r.status as MemberStatus,
+  hasPassword: r.password_hash != null,
+  createdAt: r.created_at as string,
+  lastLoginAt: (r.last_login_at as string | null) ?? null,
+});
+
+const toGrant = (r: Row): MemberGrant => ({
+  id: r.id as string,
+  memberId: r.member_id as string,
+  repoPattern: r.repo_pattern as string,
+  servicePattern: r.service_pattern as string,
+  role: r.role as Role,
+  createdAt: r.created_at as string,
+});
+
+const toAudit = (r: Row): AuditEntry => {
+  let details: Record<string, unknown> | null = null;
+  try {
+    details = r.details ? (JSON.parse(r.details as string) as Record<string, unknown>) : null;
+  } catch {
+    details = { raw: r.details };
+  }
+  return {
+    id: r.id as string,
+    at: r.at as string,
+    actor: r.actor as string,
+    actorMemberId: (r.actor_member_id as string | null) ?? null,
+    action: r.action as string,
+    repo: (r.repo as string | null) ?? null,
+    service: (r.service as string | null) ?? null,
+    details,
+  };
+};
+
+/** Lowercased and trimmed: emails compare without case. */
+export const normalizeEmail = (email: string) => email.trim().toLowerCase();
+
+const toServiceLock = (r: Row): ServiceLockRecord => ({
+  serviceId: r.service_id as string,
+  reason: r.reason as string,
+  lockedBy: (r.locked_by as string | null) ?? null,
+  createdAt: r.created_at as string,
 });
 
 const toVersion = (r: Row): Version => ({
@@ -98,55 +229,90 @@ const toVersion = (r: Row): Version => ({
 /** `owner/name`, lowercased, so lookups ignore GitHub's case-insensitivity. */
 export const normalizeRepo = (repo: string) => repo.trim().toLowerCase();
 
+/**
+ * All of keel's persistence. Every method is async so the same Store runs on SQLite or Postgres (see db.ts).
+ * State changes that several replicas could race on (deploy transitions, claiming a deploy, queuing one)
+ * are conditional updates or row-locked transactions, so they stay correct with more than one server on Postgres.
+ */
 export class Store {
-  constructor(private readonly db: DatabaseSync) {}
+  constructor(private readonly db: Db) {}
+
+  /** Runs `fn` in one transaction, with a Store bound to it. */
+  transaction<T>(fn: (tx: Store) => Promise<T>): Promise<T> {
+    return this.db.transaction((tx) => fn(new Store(tx)));
+  }
+
+  /**
+   * Inside a transaction, makes everyone else who locks the same row wait until this one commits. On Postgres it is a
+   * row lock (`FOR NO KEY UPDATE`, which doesn't block inserts that reference the row); SQLite needs nothing, since
+   * its transactions already run one at a time.
+   */
+  private async lockRow(table: "scopes" | "services", id: string): Promise<void> {
+    if (this.db.dialect === "postgres")
+      await this.db.get(`SELECT id FROM ${table} WHERE id = ? FOR NO KEY UPDATE`, [id]);
+  }
+
+  /**
+   * Inside a transaction, serializes the work on one repo's deploys: queuing a deploy and applying a CI result take
+   * this lock, so a deploy can't be queued as `waiting_ci` right after its CI result was applied and stay stuck.
+   */
+  lockScope(scopeId: string): Promise<void> {
+    return this.lockRow("scopes", scopeId);
+  }
+
+  /** Insertion order among deploys created in the same millisecond: SQLite's rowid, Postgres's `seq` column. */
+  private get deployInsertOrder() {
+    return this.db.dialect === "postgres" ? "seq" : "rowid";
+  }
 
   // --- scopes ---
 
-  createScope(input: { name: string; repo: string; ciTokenHash: string }, now: Date): Scope {
+  async createScope(input: { name: string; repo: string; ciTokenHash: string }, now: Date): Promise<Scope> {
     const scope = { id: randomUUID(), name: input.name, repo: normalizeRepo(input.repo), createdAt: now.toISOString() };
-    this.db
-      .prepare("INSERT INTO scopes (id, name, repo, ci_token_hash, created_at) VALUES (?, ?, ?, ?, ?)")
-      .run(scope.id, scope.name, scope.repo, input.ciTokenHash, scope.createdAt);
+    await this.db.run("INSERT INTO scopes (id, name, repo, ci_token_hash, created_at) VALUES (?, ?, ?, ?, ?)", [
+      scope.id,
+      scope.name,
+      scope.repo,
+      input.ciTokenHash,
+      scope.createdAt,
+    ]);
     return scope;
   }
 
-  listScopes(): Scope[] {
-    return this.db.prepare("SELECT * FROM scopes ORDER BY name").all().map(toScope);
+  async listScopes(): Promise<Scope[]> {
+    return (await this.db.all("SELECT * FROM scopes ORDER BY name")).map(toScope);
   }
 
-  getScope(id: string): Scope | undefined {
-    const row = this.db.prepare("SELECT * FROM scopes WHERE id = ?").get(id);
+  async getScope(id: string): Promise<Scope | undefined> {
+    const row = await this.db.get("SELECT * FROM scopes WHERE id = ?", [id]);
     return row ? toScope(row) : undefined;
   }
 
-  getScopeByRepo(repo: string): Scope | undefined {
-    const row = this.db.prepare("SELECT * FROM scopes WHERE repo = ?").get(normalizeRepo(repo));
+  async getScopeByRepo(repo: string): Promise<Scope | undefined> {
+    const row = await this.db.get("SELECT * FROM scopes WHERE repo = ?", [normalizeRepo(repo)]);
     return row ? toScope(row) : undefined;
   }
 
-  getCiTokenHash(scopeId: string): string | undefined {
-    const row = this.db.prepare("SELECT ci_token_hash FROM scopes WHERE id = ?").get(scopeId);
+  async getCiTokenHash(scopeId: string): Promise<string | undefined> {
+    const row = await this.db.get("SELECT ci_token_hash FROM scopes WHERE id = ?", [scopeId]);
     return row?.ci_token_hash as string | undefined;
   }
 
-  setCiTokenHash(scopeId: string, hash: string): void {
-    this.db.prepare("UPDATE scopes SET ci_token_hash = ? WHERE id = ?").run(hash, scopeId);
+  async setCiTokenHash(scopeId: string, hash: string): Promise<void> {
+    await this.db.run("UPDATE scopes SET ci_token_hash = ? WHERE id = ?", [hash, scopeId]);
   }
 
-  deleteScope(id: string): void {
-    this.db.prepare("DELETE FROM scopes WHERE id = ?").run(id);
+  async deleteScope(id: string): Promise<void> {
+    await this.db.run("DELETE FROM scopes WHERE id = ?", [id]);
   }
 
   // --- services ---
 
-  addService(input: Omit<Service, "id" | "createdAt">, now: Date): Service {
+  async addService(input: Omit<Service, "id" | "createdAt">, now: Date): Promise<Service> {
     const service: Service = { ...input, id: randomUUID(), createdAt: now.toISOString() };
-    this.db
-      .prepare(
-        "INSERT INTO services (id, scope_id, alias, dokploy_url, kind, dokploy_id, tag_variable, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-      )
-      .run(
+    await this.db.run(
+      "INSERT INTO services (id, scope_id, alias, dokploy_url, kind, dokploy_id, tag_variable, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      [
         service.id,
         service.scopeId,
         service.alias,
@@ -155,41 +321,322 @@ export class Store {
         service.dokployId,
         service.tagVariable,
         service.createdAt,
-      );
+      ],
+    );
     return service;
   }
 
-  listServices(scopeId: string): Service[] {
-    return this.db.prepare("SELECT * FROM services WHERE scope_id = ? ORDER BY alias").all(scopeId).map(toService);
+  async listServices(scopeId: string): Promise<Service[]> {
+    return (await this.db.all("SELECT * FROM services WHERE scope_id = ? ORDER BY alias", [scopeId])).map(toService);
   }
 
-  getService(id: string): Service | undefined {
-    const row = this.db.prepare("SELECT * FROM services WHERE id = ?").get(id);
+  async getService(id: string): Promise<Service | undefined> {
+    const row = await this.db.get("SELECT * FROM services WHERE id = ?", [id]);
     return row ? toService(row) : undefined;
   }
 
-  getServiceByAlias(scopeId: string, alias: string): Service | undefined {
-    const row = this.db.prepare("SELECT * FROM services WHERE scope_id = ? AND alias = ?").get(scopeId, alias);
+  async getServiceByAlias(scopeId: string, alias: string): Promise<Service | undefined> {
+    const row = await this.db.get("SELECT * FROM services WHERE scope_id = ? AND alias = ?", [scopeId, alias]);
     return row ? toService(row) : undefined;
   }
 
-  deleteService(id: string): void {
-    this.db.prepare("DELETE FROM services WHERE id = ?").run(id);
+  async deleteService(id: string): Promise<void> {
+    await this.db.run("DELETE FROM services WHERE id = ?", [id]);
+  }
+
+  // --- service locks ---
+
+  async getServiceLock(serviceId: string): Promise<ServiceLockRecord | undefined> {
+    const row = await this.db.get("SELECT * FROM service_locks WHERE service_id = ?", [serviceId]);
+    return row ? toServiceLock(row) : undefined;
+  }
+
+  /** Locks a service. Locking it again replaces the reason and who locked it, keeping the original date. */
+  async lockService(
+    input: { serviceId: string; reason: string; lockedBy: string | null },
+    now: Date,
+  ): Promise<ServiceLockRecord> {
+    await this.db.run(
+      `INSERT INTO service_locks (service_id, reason, locked_by, created_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT (service_id) DO UPDATE SET reason = excluded.reason, locked_by = excluded.locked_by`,
+      [input.serviceId, input.reason, input.lockedBy, now.toISOString()],
+    );
+    return (await this.getServiceLock(input.serviceId)) as ServiceLockRecord;
+  }
+
+  /** Returns whether the service was locked. */
+  async unlockService(serviceId: string): Promise<boolean> {
+    return (await this.db.run("DELETE FROM service_locks WHERE service_id = ?", [serviceId])).changes > 0;
+  }
+
+  // --- API tokens ---
+
+  async createApiToken(
+    input: { name: string; tokenHash: string; memberId: string; maxRole?: Role | null },
+    now: Date,
+  ): Promise<ApiToken> {
+    const token: ApiToken = {
+      id: randomUUID(),
+      name: input.name,
+      createdAt: now.toISOString(),
+      lastUsedAt: null,
+      memberId: input.memberId,
+      maxRole: input.maxRole ?? null,
+    };
+    await this.db.run(
+      "INSERT INTO api_tokens (id, name, token_hash, created_at, member_id, max_role) VALUES (?, ?, ?, ?, ?, ?)",
+      [token.id, token.name, input.tokenHash, token.createdAt, token.memberId, token.maxRole],
+    );
+    return token;
+  }
+
+  /** Every token, or only one member's, newest first, with the owner's name. */
+  async listApiTokens(filter: { memberId?: string } = {}): Promise<ApiTokenWithOwner[]> {
+    const where = filter.memberId ? "WHERE t.member_id = ?" : "";
+    const rows = await this.db.all(
+      `SELECT t.*, m.name AS owner_name FROM api_tokens t LEFT JOIN members m ON m.id = t.member_id ${where}
+       ORDER BY t.created_at DESC, t.name`,
+      filter.memberId ? [filter.memberId] : [],
+    );
+    return rows.map((r) => ({ ...toApiToken(r), ownerName: (r.owner_name as string | null) ?? null }));
+  }
+
+  async getApiToken(id: string): Promise<ApiToken | undefined> {
+    const row = await this.db.get("SELECT * FROM api_tokens WHERE id = ?", [id]);
+    return row ? toApiToken(row) : undefined;
+  }
+
+  async getApiTokenByName(name: string): Promise<ApiToken | undefined> {
+    const row = await this.db.get("SELECT * FROM api_tokens WHERE name = ?", [name]);
+    return row ? toApiToken(row) : undefined;
+  }
+
+  async getApiTokenByHash(hash: string): Promise<ApiToken | undefined> {
+    const row = await this.db.get("SELECT * FROM api_tokens WHERE token_hash = ?", [hash]);
+    return row ? toApiToken(row) : undefined;
+  }
+
+  async touchApiToken(id: string, now: Date): Promise<void> {
+    await this.db.run("UPDATE api_tokens SET last_used_at = ? WHERE id = ?", [now.toISOString(), id]);
+  }
+
+  async deleteApiToken(id: string): Promise<void> {
+    await this.db.run("DELETE FROM api_tokens WHERE id = ?", [id]);
+  }
+
+  // --- members ---
+
+  async createMember(
+    input: { name: string; email: string; role: Role; status: MemberStatus; passwordHash?: string | null },
+    now: Date,
+  ): Promise<Member> {
+    const id = randomUUID();
+    await this.db.run(
+      "INSERT INTO members (id, name, email, role, password_hash, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      [
+        id,
+        input.name,
+        normalizeEmail(input.email),
+        input.role,
+        input.passwordHash ?? null,
+        input.status,
+        now.toISOString(),
+      ],
+    );
+    return (await this.getMember(id)) as Member;
+  }
+
+  async getMember(id: string): Promise<Member | undefined> {
+    const row = await this.db.get("SELECT * FROM members WHERE id = ?", [id]);
+    return row ? toMember(row) : undefined;
+  }
+
+  async getMemberByEmail(email: string): Promise<Member | undefined> {
+    const row = await this.db.get("SELECT * FROM members WHERE email = ?", [normalizeEmail(email)]);
+    return row ? toMember(row) : undefined;
+  }
+
+  async getMemberPasswordHash(id: string): Promise<string | null> {
+    const row = await this.db.get("SELECT password_hash FROM members WHERE id = ?", [id]);
+    return (row?.password_hash as string | null | undefined) ?? null;
+  }
+
+  /** Every member by name, with how many grants each has. */
+  async listMembers(): Promise<(Member & { grants: number })[]> {
+    const rows = await this.db.all(
+      `SELECT m.*, (SELECT count(*) FROM member_grants g WHERE g.member_id = m.id) AS grant_count
+       FROM members m ORDER BY lower(m.name), m.email`,
+    );
+    return rows.map((r) => ({ ...toMember(r), grants: Number(r.grant_count) }));
+  }
+
+  async countActiveAdmins(): Promise<number> {
+    const row = await this.db.get("SELECT count(*) AS n FROM members WHERE role = 'admin' AND status = 'active'");
+    return Number(row?.n ?? 0);
+  }
+
+  async setMemberRole(id: string, role: Role): Promise<void> {
+    await this.db.run("UPDATE members SET role = ? WHERE id = ?", [role, id]);
+  }
+
+  async setMemberStatus(id: string, status: MemberStatus): Promise<void> {
+    await this.db.run("UPDATE members SET status = ? WHERE id = ?", [status, id]);
+  }
+
+  async setMemberPassword(id: string, passwordHash: string): Promise<void> {
+    await this.db.run("UPDATE members SET password_hash = ? WHERE id = ?", [passwordHash, id]);
+  }
+
+  async touchMemberLogin(id: string, now: Date): Promise<void> {
+    await this.db.run("UPDATE members SET last_login_at = ? WHERE id = ?", [now.toISOString(), id]);
+  }
+
+  /** The member `KEEL_ADMIN_PASSWORD` signs in as, recreated if it went missing. */
+  async ensureBootstrapAdmin(now: Date): Promise<Member> {
+    await this.db.run(
+      `INSERT INTO members (id, name, email, role, password_hash, status, created_at)
+       VALUES (?, ?, ?, 'admin', NULL, 'active', ?) ON CONFLICT DO NOTHING`,
+      [BOOTSTRAP_ADMIN.id, BOOTSTRAP_ADMIN.name, BOOTSTRAP_ADMIN.email, now.toISOString()],
+    );
+    return (await this.getMember(BOOTSTRAP_ADMIN.id)) as Member;
+  }
+
+  // --- member grants ---
+
+  async addGrant(
+    input: { memberId: string; repoPattern: string; servicePattern: string; role: Role },
+    now: Date,
+  ): Promise<MemberGrant> {
+    const grant: MemberGrant = { ...input, id: randomUUID(), createdAt: now.toISOString() };
+    await this.db.run(
+      "INSERT INTO member_grants (id, member_id, repo_pattern, service_pattern, role, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+      [grant.id, grant.memberId, grant.repoPattern, grant.servicePattern, grant.role, grant.createdAt],
+    );
+    return grant;
+  }
+
+  async listGrants(memberId: string): Promise<MemberGrant[]> {
+    const rows = await this.db.all(
+      "SELECT * FROM member_grants WHERE member_id = ? ORDER BY repo_pattern, service_pattern, created_at",
+      [memberId],
+    );
+    return rows.map(toGrant);
+  }
+
+  async getGrant(id: string): Promise<MemberGrant | undefined> {
+    const row = await this.db.get("SELECT * FROM member_grants WHERE id = ?", [id]);
+    return row ? toGrant(row) : undefined;
+  }
+
+  async deleteGrant(id: string): Promise<boolean> {
+    return (await this.db.run("DELETE FROM member_grants WHERE id = ?", [id])).changes > 0;
+  }
+
+  // --- invites ---
+
+  async createInvite(input: { tokenHash: string; memberId: string; expiresAt: Date }): Promise<void> {
+    await this.db.run("INSERT INTO invites (token_hash, member_id, expires_at) VALUES (?, ?, ?)", [
+      input.tokenHash,
+      input.memberId,
+      input.expiresAt.toISOString(),
+    ]);
+  }
+
+  async getInvite(tokenHash: string): Promise<Invite | undefined> {
+    const row = await this.db.get("SELECT * FROM invites WHERE token_hash = ?", [tokenHash]);
+    if (!row) return undefined;
+    return {
+      memberId: row.member_id as string,
+      expiresAt: row.expires_at as string,
+      usedAt: (row.used_at as string | null) ?? null,
+    };
+  }
+
+  /** Marks an invite used. Returns false if it was already used, so two tabs can't both redeem it. */
+  async useInvite(tokenHash: string, now: Date): Promise<boolean> {
+    const { changes } = await this.db.run("UPDATE invites SET used_at = ? WHERE token_hash = ? AND used_at IS NULL", [
+      now.toISOString(),
+      tokenHash,
+    ]);
+    return changes === 1;
+  }
+
+  /** Drops a member's unused invites, so only the newest link works. */
+  async deletePendingInvites(memberId: string): Promise<void> {
+    await this.db.run("DELETE FROM invites WHERE member_id = ? AND used_at IS NULL", [memberId]);
+  }
+
+  // --- audit log ---
+
+  async recordAudit(
+    entry: {
+      actor: string;
+      actorMemberId?: string | null;
+      action: string;
+      repo?: string | null;
+      service?: string | null;
+      details?: Record<string, unknown> | null;
+    },
+    now: Date,
+  ): Promise<void> {
+    await this.db.run(
+      "INSERT INTO audit_log (id, at, actor, actor_member_id, action, repo, service, details) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      [
+        randomUUID(),
+        now.toISOString(),
+        entry.actor,
+        entry.actorMemberId ?? null,
+        entry.action,
+        entry.repo ? normalizeRepo(entry.repo) : null,
+        entry.service ?? null,
+        entry.details ? JSON.stringify(entry.details) : null,
+      ],
+    );
+  }
+
+  /** Newest first. */
+  async listAudit(
+    filter: AuditFilter = {},
+    { limit = 50, offset = 0 }: { limit?: number; offset?: number } = {},
+  ): Promise<AuditEntry[]> {
+    const conditions: string[] = [];
+    const params: SqlValue[] = [];
+    if (filter.repo) {
+      conditions.push("repo = ?");
+      params.push(normalizeRepo(filter.repo));
+    }
+    if (filter.actor) {
+      conditions.push("actor = ?");
+      params.push(filter.actor);
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+    const order = this.db.dialect === "postgres" ? "seq" : "rowid";
+    const rows = await this.db.all(
+      `SELECT * FROM audit_log ${where} ORDER BY at DESC, ${order} DESC LIMIT ? OFFSET ?`,
+      [...params, limit, offset],
+    );
+    return rows.map(toAudit);
+  }
+
+  /** The repos and actors that appear in the audit log, for its filters. */
+  async auditFacets(): Promise<{ repos: string[]; actors: string[] }> {
+    const repos = await this.db.all("SELECT DISTINCT repo FROM audit_log WHERE repo IS NOT NULL ORDER BY repo");
+    const actors = await this.db.all("SELECT DISTINCT actor FROM audit_log ORDER BY actor");
+    return { repos: repos.map((r) => r.repo as string), actors: actors.map((r) => r.actor as string) };
   }
 
   // --- CI results ---
 
-  upsertCiResult(result: CiResult): void {
-    this.db
-      .prepare(
-        `INSERT INTO ci_results (repo, sha, tag, status, received_at) VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT (repo, sha) DO UPDATE SET tag = excluded.tag, status = excluded.status, received_at = excluded.received_at`,
-      )
-      .run(normalizeRepo(result.repo), result.sha, result.tag, result.status, result.receivedAt);
+  async upsertCiResult(result: CiResult): Promise<void> {
+    await this.db.run(
+      `INSERT INTO ci_results (repo, sha, tag, status, received_at) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT (repo, sha) DO UPDATE SET tag = excluded.tag, status = excluded.status, received_at = excluded.received_at`,
+      [normalizeRepo(result.repo), result.sha, result.tag, result.status, result.receivedAt],
+    );
   }
 
-  getCiResult(repo: string, sha: string): CiResult | undefined {
-    const row = this.db.prepare("SELECT * FROM ci_results WHERE repo = ? AND sha = ?").get(normalizeRepo(repo), sha);
+  async getCiResult(repo: string, sha: string): Promise<CiResult | undefined> {
+    const row = await this.db.get("SELECT * FROM ci_results WHERE repo = ? AND sha = ?", [normalizeRepo(repo), sha]);
     if (!row) return undefined;
     return {
       repo: row.repo as string,
@@ -206,21 +653,19 @@ export class Store {
    * Records a version `keel create-version` just pushed, as `pending`. If keel already knows it (its CI
    * reported first), only the fields it was missing are filled in: the CI outcome is never overwritten.
    */
-  registerVersion(
+  async registerVersion(
     input: { repo: string; tag: string; sha: string; branch?: string; createdByName?: string; createdByEmail?: string },
     now: Date,
-  ): Version {
+  ): Promise<Version> {
     const repo = normalizeRepo(input.repo);
-    this.db
-      .prepare(
-        `INSERT INTO versions (repo, tag, sha, branch, created_by_name, created_by_email, created_at, ci_status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')
-         ON CONFLICT (repo, tag) DO UPDATE SET
-           branch = COALESCE(versions.branch, excluded.branch),
-           created_by_name = COALESCE(versions.created_by_name, excluded.created_by_name),
-           created_by_email = COALESCE(versions.created_by_email, excluded.created_by_email)`,
-      )
-      .run(
+    await this.db.run(
+      `INSERT INTO versions (repo, tag, sha, branch, created_by_name, created_by_email, created_at, ci_status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')
+       ON CONFLICT (repo, tag) DO UPDATE SET
+         branch = COALESCE(versions.branch, excluded.branch),
+         created_by_name = COALESCE(versions.created_by_name, excluded.created_by_name),
+         created_by_email = COALESCE(versions.created_by_email, excluded.created_by_email)`,
+      [
         repo,
         input.tag,
         input.sha,
@@ -228,78 +673,94 @@ export class Store {
         input.createdByName ?? null,
         input.createdByEmail ?? null,
         now.toISOString(),
-      );
-    return this.getVersion(repo, input.tag) as Version;
+      ],
+    );
+    return (await this.getVersion(repo, input.tag)) as Version;
   }
 
   /** Stores a version's CI outcome, creating the version if `create-version` never registered it. */
-  recordVersionCi(
+  async recordVersionCi(
     input: { repo: string; tag: string; sha: string; status: VersionCiStatus; runUrl?: string },
     now: Date,
-  ): Version {
+  ): Promise<Version> {
     const repo = normalizeRepo(input.repo);
     const ts = now.toISOString();
-    this.db
-      .prepare(
-        `INSERT INTO versions (repo, tag, sha, created_at, ci_status, ci_finished_at, run_url)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT (repo, tag) DO UPDATE SET
-           sha = excluded.sha,
-           ci_status = excluded.ci_status,
-           ci_finished_at = excluded.ci_finished_at,
-           run_url = COALESCE(excluded.run_url, versions.run_url)`,
-      )
-      .run(repo, input.tag, input.sha, ts, input.status, ts, input.runUrl ?? null);
-    return this.getVersion(repo, input.tag) as Version;
+    await this.db.run(
+      `INSERT INTO versions (repo, tag, sha, created_at, ci_status, ci_finished_at, run_url)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (repo, tag) DO UPDATE SET
+         sha = excluded.sha,
+         ci_status = excluded.ci_status,
+         ci_finished_at = excluded.ci_finished_at,
+         run_url = COALESCE(excluded.run_url, versions.run_url)`,
+      [repo, input.tag, input.sha, ts, input.status, ts, input.runUrl ?? null],
+    );
+    return (await this.getVersion(repo, input.tag)) as Version;
   }
 
-  getVersion(repo: string, tag: string): Version | undefined {
-    const row = this.db.prepare("SELECT * FROM versions WHERE repo = ? AND tag = ?").get(normalizeRepo(repo), tag);
+  async getVersion(repo: string, tag: string): Promise<Version | undefined> {
+    const row = await this.db.get("SELECT * FROM versions WHERE repo = ? AND tag = ?", [normalizeRepo(repo), tag]);
     return row ? toVersion(row) : undefined;
   }
 
   /** Newest first. */
-  listVersions(repo: string, { limit = 20, status }: { limit?: number; status?: VersionCiStatus } = {}): Version[] {
+  async listVersions(
+    repo: string,
+    { limit = 20, status }: { limit?: number; status?: VersionCiStatus } = {},
+  ): Promise<Version[]> {
     const params: (string | number)[] = [normalizeRepo(repo)];
     let where = "repo = ?";
     if (status) {
       where += " AND ci_status = ?";
       params.push(status);
     }
-    return this.db
-      .prepare(`SELECT * FROM versions WHERE ${where} ORDER BY created_at DESC, tag DESC LIMIT ?`)
-      .all(...params, limit)
-      .map(toVersion);
+    const rows = await this.db.all(`SELECT * FROM versions WHERE ${where} ORDER BY created_at DESC, tag DESC LIMIT ?`, [
+      ...params,
+      limit,
+    ]);
+    return rows.map(toVersion);
   }
 
-  /** Marks as `expired` the versions still `pending` that were created before `cutoff`. Returns them. */
-  expirePendingVersions(cutoff: Date, now: Date): Version[] {
-    const stale = this.db
-      .prepare("SELECT * FROM versions WHERE ci_status = 'pending' AND created_at < ?")
-      .all(cutoff.toISOString())
-      .map(toVersion);
-    const update = this.db.prepare(
-      "UPDATE versions SET ci_status = 'expired', ci_finished_at = ? WHERE repo = ? AND tag = ? AND ci_status = 'pending'",
-    );
-    for (const v of stale) update.run(now.toISOString(), v.repo, v.tag);
-    return stale;
+  /**
+   * Marks as `expired` the versions still `pending` that were created before `cutoff`. Returns the ones this call
+   * expired: with several replicas, a version another one expired first is not returned twice.
+   */
+  async expirePendingVersions(cutoff: Date, now: Date): Promise<Version[]> {
+    const stale = (
+      await this.db.all("SELECT * FROM versions WHERE ci_status = 'pending' AND created_at < ?", [cutoff.toISOString()])
+    ).map(toVersion);
+    const expired: Version[] = [];
+    for (const v of stale) {
+      const { changes } = await this.db.run(
+        "UPDATE versions SET ci_status = 'expired', ci_finished_at = ? WHERE repo = ? AND tag = ? AND ci_status = 'pending'",
+        [now.toISOString(), v.repo, v.tag],
+      );
+      if (changes === 1) expired.push(v);
+    }
+    return expired;
   }
 
   // --- deploys ---
 
-  insertDeploy(
-    input: { repo: string; tag: string; sha: string; service: Service; status: DeployStatus; error?: string },
+  async insertDeploy(
+    input: {
+      repo: string;
+      tag: string;
+      sha: string;
+      service: Service;
+      status: DeployStatus;
+      error?: string;
+      requestedBy?: string | null;
+    },
     now: Date,
-  ): DeployRecord {
+  ): Promise<DeployRecord> {
     const id = randomUUID();
     const ts = now.toISOString();
-    this.db
-      .prepare(
-        `INSERT INTO deploys (id, repo, tag, sha, service_id, service_alias, status, error, ci_passed_at, finished_at,
-           created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
+    await this.db.run(
+      `INSERT INTO deploys (id, repo, tag, sha, service_id, service_alias, status, error, ci_passed_at, finished_at,
+         requested_by, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
         id,
         normalizeRepo(input.repo),
         input.tag,
@@ -311,22 +772,24 @@ export class Store {
         // A deploy can be born already past CI when the Action reported before `keel deploy` ran.
         input.status === "ci_passed" ? ts : null,
         isTerminal(input.status) ? ts : null,
+        input.requestedBy ?? null,
         ts,
         ts,
-      );
-    return this.getDeploy(id) as DeployRecord;
+      ],
+    );
+    return (await this.getDeploy(id)) as DeployRecord;
   }
 
-  getDeploy(id: string): DeployRecord | undefined {
-    const row = this.db.prepare("SELECT * FROM deploys WHERE id = ?").get(id);
+  async getDeploy(id: string): Promise<DeployRecord | undefined> {
+    const row = await this.db.get("SELECT * FROM deploys WHERE id = ?", [id]);
     return row ? toDeploy(row) : undefined;
   }
 
   /** Oldest first by default (queue order); pass `newestFirst` for history views. */
-  listDeploys(
+  async listDeploys(
     filter: { status?: DeployStatus; repo?: string; sha?: string; serviceId?: string } = {},
     { limit = 100, newestFirst = false }: { limit?: number; newestFirst?: boolean } = {},
-  ) {
+  ): Promise<DeployRecord[]> {
     const conditions: [string, string | undefined][] = [
       ["status = ?", filter.status],
       ["repo = ?", filter.repo && normalizeRepo(filter.repo)],
@@ -336,37 +799,39 @@ export class Store {
     const active = conditions.filter((c): c is [string, string] => Boolean(c[1]));
     const where = active.map(([sql]) => sql);
     const params = active.map(([, value]) => value);
-    const sql = `SELECT * FROM deploys ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at ${newestFirst ? "DESC" : "ASC"} LIMIT ?`;
-    return this.db
-      .prepare(sql)
-      .all(...params, limit)
-      .map(toDeploy);
+    const direction = newestFirst ? "DESC" : "ASC";
+    const sql = `SELECT * FROM deploys ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at ${direction}, ${this.deployInsertOrder} ${direction} LIMIT ?`;
+    return (await this.db.all(sql, [...params, limit])).map(toDeploy);
   }
 
   /** Deploys of a repo whose id starts with `prefix`, like git's short commit hashes. */
-  findDeploysByPrefix(repo: string, prefix: string): DeployRecord[] {
-    return this.db
-      .prepare("SELECT * FROM deploys WHERE repo = ? AND id LIKE ? ORDER BY created_at DESC LIMIT 10")
-      .all(normalizeRepo(repo), `${prefix.replace(/[%_]/g, "")}%`)
-      .map(toDeploy);
+  async findDeploysByPrefix(repo: string, prefix: string): Promise<DeployRecord[]> {
+    // Without LIKE's wildcards (and Postgres's default escape character) the prefix matches literally in both engines.
+    const rows = await this.db.all(
+      `SELECT * FROM deploys WHERE repo = ? AND id LIKE ? ORDER BY created_at DESC, ${this.deployInsertOrder} DESC LIMIT 10`,
+      [normalizeRepo(repo), `${prefix.replace(/[%_\\]/g, "")}%`],
+    );
+    return rows.map(toDeploy);
   }
 
-  /** Moves a deploy to `to` only if the state machine allows it; returns the updated record or undefined. */
-  transition(
+  /**
+   * Moves a deploy to `to` only if the state machine allows it; returns the updated record or undefined.
+   * The UPDATE only matches while the deploy is still in the state it was read in, so when two callers race
+   * (two replicas, or the worker and a CI result), exactly one wins and the other gets undefined.
+   */
+  async transition(
     id: string,
     to: DeployStatus,
     now: Date,
     extra: { error?: string; deployStartedAt?: Date } = {},
-  ): DeployRecord | undefined {
-    const current = this.getDeploy(id);
+  ): Promise<DeployRecord | undefined> {
+    const current = await this.getDeploy(id);
     if (!current || !canTransition(current.status, to)) return undefined;
-    const result = this.db
-      .prepare(
-        `UPDATE deploys SET status = ?, error = ?, deploy_started_at = COALESCE(?, deploy_started_at),
-           ci_passed_at = COALESCE(?, ci_passed_at), finished_at = COALESCE(?, finished_at), updated_at = ?
-         WHERE id = ? AND status = ?`,
-      )
-      .run(
+    const result = await this.db.run(
+      `UPDATE deploys SET status = ?, error = ?, deploy_started_at = COALESCE(?, deploy_started_at),
+         ci_passed_at = COALESCE(?, ci_passed_at), finished_at = COALESCE(?, finished_at), updated_at = ?
+       WHERE id = ? AND status = ?`,
+      [
         to,
         extra.error ?? null,
         extra.deployStartedAt?.toISOString() ?? null,
@@ -375,7 +840,22 @@ export class Store {
         now.toISOString(),
         id,
         current.status,
-      );
+      ],
+    );
     return result.changes === 1 ? this.getDeploy(id) : undefined;
+  }
+
+  /**
+   * Claims a `ci_passed` deploy for the worker: moves it to `deploying` unless its service already has a deploy
+   * `deploying`. Returns the claimed record, or undefined when someone else got there first. Runs in a transaction
+   * with the service row locked, so replicas claiming deploys of the same service take turns and only one runs.
+   */
+  async claimDeploy(id: string, serviceId: string, now: Date): Promise<DeployRecord | undefined> {
+    return this.transaction(async (tx) => {
+      await tx.lockRow("services", serviceId);
+      const [busy] = await tx.listDeploys({ serviceId, status: "deploying" }, { limit: 1 });
+      if (busy) return undefined;
+      return tx.transition(id, "deploying", now, { deployStartedAt: now });
+    });
   }
 }

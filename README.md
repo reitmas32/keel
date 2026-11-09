@@ -18,11 +18,35 @@ Estados de un deploy: `waiting_ci → ci_passed → deploying → deployed`, con
 
 ## Instalar la CLI
 
-Requiere Node 22.5 o superior y git.
+Un solo binario (Rust) para Linux, macOS y Windows, en x86_64 y arm64. Solo necesita git.
 
 ```bash
-npm i -g https://github.com/reitmas32/keel/releases/latest/download/keel-cli.tgz
+# Linux y macOS (instala en ~/.local/bin; KEEL_INSTALL_DIR para otro lugar)
+curl -fsSL https://github.com/reitmas32/keel/releases/latest/download/install.sh | sh
 ```
+
+```powershell
+# Windows (instala en %LOCALAPPDATA%\keel\bin y lo agrega al PATH del usuario)
+irm https://github.com/reitmas32/keel/releases/latest/download/install.ps1 | iex
+```
+
+Con un gestor de paquetes:
+
+```bash
+# Homebrew (macOS y Linux), cuando exista el tap reitmas32/homebrew-tap
+brew install reitmas32/tap/keel
+```
+
+```powershell
+# Scoop (Windows)
+scoop install https://github.com/reitmas32/keel/releases/latest/download/keel.json
+```
+
+Cada release adjunta la fórmula (`keel.rb`) y el manifiesto de Scoop (`keel.json`) con las sumas de sus binarios. Si el repo tiene el secret `HOMEBREW_TAP_TOKEN`, las releases estables también actualizan `Formula/keel.rb` en `reitmas32/homebrew-tap`.
+
+Los dos scripts comprueban el binario contra `SHA256SUMS` de la release. También puedes bajar `keel-<target>` de la [última release](https://github.com/reitmas32/keel/releases/latest) o compilarlo con `cargo install --path apps/cli`. `keel update` reemplaza el binario por el de la última release, también comprobando su suma.
+
+La CLI de TypeScript (`keel-cli.tgz` por npm) queda retirada; la configuración de `~/.keel` (orgs y organización activa) sigue sirviendo igual.
 
 ## Uso de la CLI
 
@@ -41,9 +65,35 @@ keel scopes                      # scopes del repo: su servicio en Dokploy y qu�
 keel deploys                     # deploys del repo: estado, cuándo terminaron y por qué fallaron
 keel deploys -s staging -n 50    # solo un servicio, hasta 50
 keel deploys d3f1                # detalle y línea de tiempo de un deploy (id o sus primeros caracteres)
+keel deploys d3f1 --log          # además, el log de build/deploy de Dokploy de ese deploy (redactado)
+keel deploy -r -s api-prod --wait  # espera a que termine; sale con 28 si falla
+keel status                      # scopes, versión actual, último deploy, CI y estado en Dokploy
+keel logs -s api-prod -f         # logs del scope en vivo, redactados
+keel context                     # (alias: keel remote) org, repo y Dokploy de esta carpeta
 keel update                      # instala la última versión de la CLI publicada en GitHub
 keel update --check              # solo avisa si hay una versión nueva
 ```
+
+Todos los comandos aceptan `--json`. Sin terminal (un script, un agente), los errores salen como JSON con `kind` y un código de salida estable, y lo que normalmente se pregunta hay que pasarlo con opciones (`-s`, `-v`/`-l`/`-r`, `-y`).
+
+### Operar Dokploy directamente
+
+La misma CLI opera Dokploy con tu API key, para lo que no es desplegar una versión: leer logs, env, Compose, dominios y bases, y cambiar infraestructura con planes revisados. Viene de [dokploy-agent](https://github.com/reitmas32/agentic-dokploy): las lecturas nunca muestran secretos y todo cambio es un plan que caduca y se aplica una sola vez con su token.
+
+```bash
+keel get services                               # apps, Composes y bases con su estado
+keel get logs shop/production/api -f            # logs en vivo, redactados
+keel get env production/api                     # claves y largo de cada valor, nunca valores
+keel compose diff production/docs --file docs.yaml  # diff saneado contra el remoto
+keel plan env-patch production/api --set SENTRY_DSN --unset OLD_FLAG --redeploy
+keel apply --plan <id> --approve <token>        # una persona revisó el plan
+```
+
+La configuración vive en `~/.keel/dokploy/` (`instances/<org>.env` con `DOKPLOY_URL` y `DOKPLOY_API_KEY`, permisos 600). Si ya usabas dokploy-agent, keel lee `~/.config/dokploy-agent` hasta que corras `keel config migrate`. Sin esa configuración, los comandos de versiones y deploys funcionan igual.
+
+Un servicio de Dokploy que es un scope de keel se despliega solo con keel: `keel plan deploy|redeploy` sobre él se rechaza (`keel_managed`) y un cambio de env no puede tocar su variable del tag. Así ningún deploy se salta el CI ni deja desactualizado `keel scopes` o `keel rollback`.
+
+La referencia completa de comandos está en `keel --help` y `keel <comando> --help`.
 
 `keel deploys` muestra, del más reciente al más antiguo:
 
@@ -110,9 +160,36 @@ La versión actual es la del último deploy exitoso. El nombre en Dokploy (`proy
 
 `keel rollback -s <scope>` vuelve a desplegar la versión anterior que llegó a `deployed` en ese scope, saltándose las que fallaron, con el mismo commit con el que se desplegó. Con `--to` eliges una versión anterior concreta, que debe haberse desplegado ahí antes. Pide confirmación (o `-y` sin terminal interactiva) y no arranca si hay un deploy en curso en ese scope. Un segundo `rollback` deshace el primero: la versión anterior pasa a ser la que se reemplazó.
 
+### Tokens, locks, promote y más
+
+- `keel login --token keel_pat_…` guarda un token personal (créalo en el admin, en «Tokens de API»). `KEEL_TOKEN` lo reemplaza. El token actúa con el rol de su dueño (ver [Miembros y roles](#miembros-y-roles)). Con `KEEL_API_AUTH=required` en el servidor, la API solo acepta peticiones con token, y cada deploy guarda quién lo pidió.
+- `keel lock -s prod -m "incidente"` congela un scope: keel rechaza sus deploys (exit 31) hasta `keel unlock -s prod`.
+- `keel promote --from stg --to prod` despliega en `prod` la versión que corre en `stg`.
+- `keel deploy … --rollback-on-failure` (también en `promote`) espera el deploy y, si falla, vuelve a la versión anterior.
+- `keel changes -s prod [-v v1.4.0]` lista los commits y PRs entre lo desplegado y una versión.
+- `keel env diff staging/api production/api` compara los nombres de las variables de dos servicios de Dokploy sin mostrar valores.
+- `keel init` escribe el workflow de release y revisa que el repo esté vinculado y tenga sus secrets; `keel init --check` solo audita.
+- `keel skills add keel-cli` instala el skill para Claude Code, Codex y Copilot en el repo (`-g` para tu usuario).
+
+## Skills para agentes
+
+El repo también es un marketplace de plugins para Claude Code, Codex y Copilot. El skill `keel-cli` le enseña a un agente a usar esta CLI con seguridad: desplegar y hacer rollback solo con keel, leer estado y logs redactados, y cambiar Dokploy con planes que aprueba una persona.
+
+```bash
+claude plugin marketplace add reitmas32/keel
+claude plugin install keel-cli@keel
+```
+
+Los plugins viven en [`plugins/`](plugins/README.md) y el catálogo en [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json). Para validarlos:
+
+```bash
+python3 plugins/scripts/validate.py
+python3 -m unittest discover -s plugins/tests
+```
+
 ## Levantar una instancia del servidor en Dokploy
 
-La API, el admin y el worker corren en **una sola imagen** (`getfoundathyon/keel-api`) y en un solo contenedor: comparten la base SQLite del volumen `/data`. Levanta una instancia por organización (p.ej. `keel.jalo…` y `keel.konectus…`).
+La API, el admin y el worker corren en **una sola imagen** (`getfoundathyon/keel-api`) y en un solo contenedor: comparten la base SQLite del volumen `/data` (o un Postgres, ver [Usar Postgres](#usar-postgres-en-lugar-de-sqlite)). Levanta una instancia por organización (p.ej. `keel.jalo…` y `keel.konectus…`).
 
 ### 1. Crea el servicio Compose
 
@@ -129,6 +206,13 @@ services:
       KEEL_ADMIN_PASSWORD: ${KEEL_ADMIN_PASSWORD:?Contraseña del admin, mínimo 12 caracteres}
       KEEL_CI_EXPIRY_MINUTES: ${KEEL_CI_EXPIRY_MINUTES:-60}
       KEEL_DEPLOY_TIMEOUT_MINUTES: ${KEEL_DEPLOY_TIMEOUT_MINUTES:-15}
+      # optional: la API acepta llamadas sin token, con el rol KEEL_ANONYMOUS_ROLE. required: siempre pide token.
+      KEEL_API_AUTH: ${KEEL_API_AUTH:-optional}
+      KEEL_ANONYMOUS_ROLE: ${KEEL_ANONYMOUS_ROLE:-deployer}
+      # Base de datos: SQLite en el volumen /data por defecto. Para Postgres (p.ej. varias réplicas de keel),
+      # descomenta estas dos líneas y define POSTGRES_DSN en el Environment.
+      # DB_ENGINE: postgres
+      # POSTGRES_DSN: ${POSTGRES_DSN:?DSN de Postgres, p.ej. postgres://keel:contraseña@postgres:5432/keel}
     volumes:
       - keel-data:/data
     expose:
@@ -137,6 +221,8 @@ services:
 volumes:
   keel-data:
 ```
+
+El archivo del repo trae además, comentado, un servicio `postgres` de ejemplo.
 
 - Usa una versión fija (`:v0.3.0`) en lugar de `:latest`, así un redeploy no cambia de versión sin que lo decidas. Para actualizar keel, cambia la tag y redespliega.
 - `keel-data` es un volumen con nombre: la base (scopes, servicios, tokens de CI e historial) sobrevive a redeploys y actualizaciones de la imagen.
@@ -160,6 +246,10 @@ KEEL_ADMIN_PASSWORD=<contraseña larga y aleatoria>
 | `KEEL_CI_EXPIRY_MINUTES`      | no (60)              | Minutos que un deploy espera al CI antes de expirar          |
 | `KEEL_DEPLOY_TIMEOUT_MINUTES` | no (15)              | Minutos que Dokploy tiene para terminar un deployment        |
 | `KEEL_DB_PATH`                | no (`/data/keel.db`) | Ruta de la base SQLite dentro del contenedor                 |
+| `DB_ENGINE`                   | no (`sqlite`)        | `sqlite` o `postgres`                                        |
+| `POSTGRES_DSN`                | con `postgres`       | `postgres://usuario:contraseña@host:5432/base`               |
+| `KEEL_API_AUTH`               | no (`optional`)      | `required`: toda la API (salvo `/health` y `/ci-result`) pide token |
+| `KEEL_ANONYMOUS_ROLE`         | no (`deployer`)      | Rol de las llamadas sin token: `none`, `viewer`, `publisher` o `deployer` |
 
 Si falta una variable requerida, el deploy del compose falla mostrando su descripción. Para generar la contraseña: `openssl rand -base64 24`.
 
@@ -183,13 +273,50 @@ Vuelve a pulsar **Deploy** para que Dokploy aplique el dominio. Comprueba que re
 curl https://keel.konectus.com/api/health
 ```
 
-Debe devolver `{"ok":true}`. El admin queda en `https://keel.konectus.com/` (entra con `KEEL_ADMIN_PASSWORD`) y la API en `https://keel.konectus.com/api`, que es la URL que usas en `keel login` y en la variable `KEEL_API_URL` de cada repo.
+Debe devolver `{"ok":true}`. El admin queda en `https://keel.konectus.com/` (la primera vez entra con `KEEL_ADMIN_PASSWORD`, ver [Miembros y roles](#miembros-y-roles)) y la API en `https://keel.konectus.com/api`, que es la URL que usas en `keel login` y en la variable `KEEL_API_URL` de cada repo.
 
 > La GitHub Action tiene que poder llegar a `https://<dominio>/api/ci-result`. Con runners hospedados por GitHub, el dominio debe ser público (el resto de la API y el admin pueden protegerse aparte); si keel solo es accesible en una red interna, usa runners self-hosted dentro de esa red.
 
+### Usar Postgres en lugar de SQLite
+
+Con `DB_ENGINE=postgres` y `POSTGRES_DSN`, keel guarda todo en Postgres (probado con la 17) y al arrancar crea o migra sus tablas (registradas en `schema_migrations`). Con Postgres puedes correr **varias réplicas** de keel: los cambios de estado de un deploy son atómicos y solo una réplica lo ejecuta en Dokploy. Con SQLite, una sola réplica.
+
+Para pasar una instancia existente de SQLite a Postgres, una sola vez:
+
+1. Detén keel y copia la carpeta de la base fuera del volumen, con sus archivos `-wal` si los hay (p.ej. `docker cp <contenedor>:/data ./keel-data`).
+2. Desde un clon de este repo, con `pnpm install` hecho:
+
+   ```bash
+   pnpm --filter @keel/server db:sqlite-to-postgres "$PWD/keel-data/keel.db" postgres://keel:contraseña@host:5432/keel
+   ```
+
+   Crea las tablas, copia todas en una transacción (si algo falla no escribe nada) e imprime las filas copiadas por tabla. Si Postgres ya tiene datos de keel se niega; `--force` los borra y copia de nuevo.
+3. Define `DB_ENGINE=postgres` y `POSTGRES_DSN` en el Environment y redespliega.
+
+### Miembros y roles
+
+Cada persona entra al admin con su email y contraseña, y su rol decide qué puede hacer en el admin y con sus tokens de API. Los roles van de menos a más; cada uno puede todo lo del anterior:
+
+| Rol          | Puede                                                                                       |
+| ------------ | ------------------------------------------------------------------------------------------- |
+| `viewer`     | ver scopes, servicios, versiones, deploys y bloqueos                                        |
+| `publisher`  | registrar versiones (`keel create-version`)                                                  |
+| `deployer`   | desplegar (`keel deploy`, `rollback`, `promote`)                                             |
+| `maintainer` | bloquear y desbloquear servicios; en el admin, vincular y desvincular servicios y rotar el token de CI |
+| `admin`      | todo: miembros, tokens de todos, crear y eliminar scopes, auditoría                          |
+
+En **Miembros**, un admin puede dar **permisos por repo y servicio** con patrones `*` (p.ej. `konectus-io/*` y `prod*` → `viewer`): suben o bajan el rol donde coinciden, gana el más específico y, empatados, el rol más bajo. A un `admin` nunca se le baja. Un token puede tener un **rol máximo** menor que el de su dueño. Si la API niega algo responde `403` con el rol y la acción. Todo cambio desde la API o el admin queda en **Auditoría**.
+
+Para arrancar:
+
+1. Entra al admin dejando el email vacío y con `KEEL_ADMIN_PASSWORD`: entras como el admin de arranque (`admin@localhost`), que también es dueño de los tokens creados antes de los roles. Esta entrada queda como acceso de emergencia.
+2. En **Miembros**, invita a cada persona con su rol y mándale el enlace de invitación (un solo uso, vence en 7 días). Con él pone su contraseña.
+3. Cada quien crea su token en **Tokens de API** y ejecuta `keel login --token …`.
+4. Cuando todos tengan token, define `KEEL_API_AUTH=required`. Mientras sea `optional`, las llamadas sin token actúan con `KEEL_ANONYMOUS_ROLE` (por defecto `deployer`, como antes de los roles): los roles solo protegen de verdad con `required`.
+
 ## Vincular un repo
 
-1. Entra al admin (`https://<dominio>/`) con `KEEL_ADMIN_PASSWORD`.
+1. Entra al admin (`https://<dominio>/`) como admin.
 2. **Nuevo scope**: pega la URL del repo de GitHub. Copia el token de CI que aparece (solo se muestra una vez).
 3. En el scope, **vincula servicios** de Dokploy: un alias (lo que eliges en `keel deploy`, p.ej. `api-prod`) y la URL del servicio copiada del dashboard de Dokploy (`…/services/application/<id>` o `…/services/compose/<id>`). Para un Compose puedes indicar la variable del tag; si la dejas vacía es `DOCKER_TAG`.
 4. En el repo de GitHub:
@@ -209,15 +336,20 @@ Debe devolver `{"ok":true}`. El admin queda en `https://keel.konectus.com/` (ent
 
 ```bash
 pnpm install
-pnpm test        # vitest en todos los paquetes
+pnpm test        # vitest en todos los paquetes; los tests del store del servidor corren en SQLite y en Postgres (PGlite)
 pnpm typecheck
 pnpm lint
 pnpm build
+
+# CLI (Rust)
+cargo test
+cargo clippy --all-targets -- -D warnings
+cargo run -p keel -- --help
 ```
 
 ```
-apps/cli        CLI keel (TypeScript, empaquetada con tsup)
-apps/server     Next.js: API (route handlers), admin y worker (instrumentation.ts), SQLite con node:sqlite
+apps/cli        CLI keel (Rust): versiones y deploys vía keel, operación de Dokploy
+apps/server     Next.js: API (route handlers), admin y worker (instrumentation.ts), SQLite (node:sqlite) o Postgres (pg)
 packages/shared Esquemas de la API y máquina de estados del deploy
 deploy/         docker-compose de ejemplo para Dokploy
 templates/      Workflow de GitHub para los repos que se despliegan con keel
@@ -225,9 +357,11 @@ templates/      Workflow de GitHub para los repos que se despliegan con keel
 
 Para el servidor en local, copia `apps/server/.env.example` a `apps/server/.env` y ejecuta `pnpm --filter @keel/server dev`.
 
+Los tests de Postgres usan PGlite (Postgres en WASM, sin Docker). Para correrlos contra un servidor real, define `TEST_POSTGRES_DSN=postgres://…` (cada contexto de test usa su propio schema); así lo hace el CI con `postgres:17`.
+
 ### Publicar una versión de keel
 
-Push de un tag `vX.Y.Z` → [`release.yml`](.github/workflows/release.yml) corre lint, typecheck y tests, publica la imagen del servidor en Docker Hub (`<DOCKERHUB_IMAGE>:vX.Y.Z` y `:latest`, linux/amd64) y adjunta `keel-cli.tgz` al GitHub Release.
+Push de un tag `vX.Y.Z` → [`release.yml`](.github/workflows/release.yml) corre lint, typecheck y tests, publica la imagen del servidor en Docker Hub (`<DOCKERHUB_IMAGE>:vX.Y.Z` y `:latest`, linux/amd64), compila la CLI para Linux (musl, x86_64 y arm64), macOS (Intel y Apple Silicon) y Windows (x86_64 y arm64), y adjunta los binarios `keel-<target>`, `SHA256SUMS`, `install.sh` e `install.ps1` al GitHub Release. La versión del binario (`keel --version`) es la del tag.
 
 Configuración del repo (Settings → Secrets and variables → Actions):
 
@@ -242,6 +376,6 @@ El token se crea en Docker Hub → Account settings → Personal access tokens.
 ## Limitaciones actuales
 
 - Application solo con proveedor Docker; Compose solo si la imagen toma el tag de una variable de su Environment.
-- `POST /api/deploys` no tiene autenticación: cualquiera que alcance la API puede pedir un deploy (solo se ejecuta si el CI de ese commit pasó).
-- El worker corre dentro del proceso de Next.js: una sola réplica por instancia.
-- Las carpetas `github.com:<org>` de `~/.keel` no son válidas en Windows.
+- Con `KEEL_API_AUTH=optional` (por defecto), cualquiera que alcance la API puede pedir un deploy con el rol `KEEL_ANONYMOUS_ROLE` (solo se ejecuta si el CI de ese commit pasó). Usa `required` para que los roles apliquen a todos.
+- El worker corre dentro del proceso de Next.js. Con SQLite, una sola réplica por instancia; con Postgres pueden ser varias.
+- En Windows, las carpetas de `~/.keel` se llaman `github.com_<org>` (`:` no es válido en un nombre de archivo).

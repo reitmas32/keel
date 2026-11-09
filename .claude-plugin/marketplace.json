@@ -1,0 +1,45 @@
+{
+  "name": "keel",
+  "owner": {
+    "name": "Foundathyon",
+    "url": "https://github.com/fundathyon"
+  },
+  "metadata": {
+    "description": "Foundathyon's skills for coding agents — one source for Claude Code, Codex and GitHub Copilot.",
+    "version": "0.4.0"
+  },
+  "plugins": [
+    {
+      "name": "keel-docs",
+      "source": "./plugins/keel-docs",
+      "description": "Write, extend and audit docs/ so it builds with `keel docs` and follows the Foundathyon documentation standard.",
+      "version": "0.1.0",
+      "category": "documentation",
+      "keywords": ["documentation", "docs", "keel", "markdown"]
+    },
+    {
+      "name": "keel-release",
+      "source": "./plugins/keel-release",
+      "description": "Cut a release with keel: choose the next semantic version, bump the version files, pass the checks, and tag with `keel create-version` — asking before anything is pushed.",
+      "version": "0.1.0",
+      "category": "release",
+      "keywords": ["release", "semver", "versioning", "tags", "keel"]
+    },
+    {
+      "name": "keel-setup",
+      "source": "./plugins/keel-setup",
+      "description": "Prepare a repository for keel releases, or audit one: `.keel` from `keel init`, the Release workflow that confirms every version to keel-api, keel-api's canonical report-version.sh, docs/releases.md and the KEEL_CI_TOKEN credential — asking before CI or secrets change.",
+      "version": "0.1.0",
+      "category": "release",
+      "keywords": ["keel", "release", "ci", "github-actions", "setup", "audit"]
+    },
+    {
+      "name": "keel-cli",
+      "source": "./plugins/keel-cli",
+      "description": "Use the keel CLI safely: create, promote and deploy versions through keel once CI passes, roll back automatically on failure, freeze scopes, read deploys, changes, status and redacted logs, and change Dokploy only through reviewed plans a person approves — never secrets on the command line.",
+      "version": "0.2.0",
+      "category": "deployment",
+      "keywords": ["keel", "deploy", "rollback", "dokploy", "ci", "logs", "env", "compose"]
+    }
+  ]
+}

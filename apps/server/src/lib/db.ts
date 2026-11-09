@@ -1,100 +1,34 @@
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import type { Env } from "./env";
 
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS scopes (
-  id            TEXT PRIMARY KEY,
-  name          TEXT NOT NULL,
-  repo          TEXT NOT NULL UNIQUE,
-  ci_token_hash TEXT NOT NULL,
-  created_at    TEXT NOT NULL
-);
+export type SqlValue = string | number | null;
+export type Row = Record<string, unknown>;
 
-CREATE TABLE IF NOT EXISTS services (
-  id          TEXT PRIMARY KEY,
-  scope_id    TEXT NOT NULL REFERENCES scopes(id) ON DELETE CASCADE,
-  alias       TEXT NOT NULL,
-  dokploy_url TEXT NOT NULL,
-  kind        TEXT NOT NULL,
-  dokploy_id  TEXT NOT NULL,
-  tag_variable TEXT,
-  created_at  TEXT NOT NULL,
-  UNIQUE (scope_id, alias)
-);
-
-CREATE TABLE IF NOT EXISTS ci_results (
-  repo        TEXT NOT NULL,
-  sha         TEXT NOT NULL,
-  tag         TEXT NOT NULL,
-  status      TEXT NOT NULL,
-  received_at TEXT NOT NULL,
-  PRIMARY KEY (repo, sha)
-);
-
-CREATE TABLE IF NOT EXISTS deploys (
-  id                TEXT PRIMARY KEY,
-  repo              TEXT NOT NULL,
-  tag               TEXT NOT NULL,
-  sha               TEXT NOT NULL,
-  service_id        TEXT NOT NULL REFERENCES services(id) ON DELETE CASCADE,
-  service_alias     TEXT NOT NULL,
-  status            TEXT NOT NULL,
-  error             TEXT,
-  deploy_started_at TEXT,
-  ci_passed_at      TEXT,
-  finished_at       TEXT,
-  created_at        TEXT NOT NULL,
-  updated_at        TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS deploys_status ON deploys (status, created_at);
-CREATE INDEX IF NOT EXISTS deploys_repo_sha ON deploys (repo, sha);
-
--- v0.4.0: every version keel knows of, from \`keel create-version\` (pending) or from its CI result.
-CREATE TABLE IF NOT EXISTS versions (
-  repo             TEXT NOT NULL,
-  tag              TEXT NOT NULL,
-  sha              TEXT NOT NULL,
-  branch           TEXT,
-  created_by_name  TEXT,
-  created_by_email TEXT,
-  created_at       TEXT NOT NULL,
-  ci_status        TEXT NOT NULL,
-  ci_finished_at   TEXT,
-  run_url          TEXT,
-  PRIMARY KEY (repo, tag)
-);
-
-CREATE INDEX IF NOT EXISTS versions_repo_created ON versions (repo, created_at);
-CREATE INDEX IF NOT EXISTS versions_status ON versions (ci_status, created_at);
-`;
-
-/** Opens (creating if needed) the SQLite database and applies the schema. Use ":memory:" in tests. */
-export function openDb(path: string): DatabaseSync {
-  if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
-  const db = new DatabaseSync(path);
-  db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
-  db.exec(SCHEMA);
-  migrate(db);
-  return db;
+/**
+ * The little SQL surface the Store needs, implemented for SQLite (db-sqlite.ts) and Postgres (db-postgres.ts).
+ * Queries use `?` placeholders; the Postgres adapter rewrites them to `$1…`.
+ */
+export interface Db {
+  readonly dialect: "sqlite" | "postgres";
+  all(sql: string, params?: SqlValue[]): Promise<Row[]>;
+  get(sql: string, params?: SqlValue[]): Promise<Row | undefined>;
+  /** Returns how many rows the statement changed. */
+  run(sql: string, params?: SqlValue[]): Promise<{ changes: number }>;
+  /** Runs SQL without parameters. SQLite accepts several statements; Postgres only one. */
+  exec(sql: string): Promise<void>;
+  /**
+   * Runs `fn` in a transaction on one connection, committing when it resolves and rolling back when it throws.
+   * Inside `fn` use the `tx` handle; a nested `transaction` call on it joins the outer one.
+   */
+  transaction<T>(fn: (tx: Db) => Promise<T>): Promise<T>;
+  close(): Promise<void>;
 }
 
-/** Brings databases created by older keel versions up to the current schema. Each step is idempotent. */
-function migrate(db: DatabaseSync): void {
-  const serviceColumns = db
-    .prepare("PRAGMA table_info(services)")
-    .all()
-    .map((c) => c.name);
-  // v0.2.0: Compose services store the env variable that holds their image tag.
-  if (!serviceColumns.includes("tag_variable")) db.exec("ALTER TABLE services ADD COLUMN tag_variable TEXT");
-
-  const deployColumns = db
-    .prepare("PRAGMA table_info(deploys)")
-    .all()
-    .map((c) => c.name);
-  // v0.3.0: when the CI was approved and when the deploy reached a final state, for `keel deploys`.
-  for (const column of ["ci_passed_at", "finished_at"]) {
-    if (!deployColumns.includes(column)) db.exec(`ALTER TABLE deploys ADD COLUMN ${column} TEXT`);
+/** Opens the database the environment asks for and brings its schema up to date. */
+export async function openDb(env: Pick<Env, "DB_ENGINE" | "KEEL_DB_PATH" | "POSTGRES_DSN">): Promise<Db> {
+  if (env.DB_ENGINE === "postgres") {
+    const { openPostgresDb } = await import("./db-postgres");
+    return openPostgresDb(env.POSTGRES_DSN as string);
   }
+  const { openSqliteDb } = await import("./db-sqlite");
+  return openSqliteDb(env.KEEL_DB_PATH);
 }

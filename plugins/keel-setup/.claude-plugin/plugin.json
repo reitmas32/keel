@@ -1,0 +1,11 @@
+{
+  "name": "keel-setup",
+  "version": "0.1.0",
+  "description": "Prepare a repository for keel releases, or audit one: `.keel` from `keel init`, the Release workflow that confirms every version to keel-api, keel-api's canonical report-version.sh, docs/releases.md and the KEEL_CI_TOKEN credential — asking before CI or secrets change.",
+  "author": {
+    "name": "Foundathyon",
+    "url": "https://github.com/fundathyon"
+  },
+  "repository": "https://github.com/reitmas32/keel",
+  "keywords": ["keel", "release", "ci", "github-actions", "setup", "audit"]
+}

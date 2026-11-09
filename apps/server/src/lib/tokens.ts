@@ -6,6 +6,14 @@ export function generateCiToken(): { token: string; hash: string } {
   return { token, hash: hashToken(token) };
 }
 
+export const API_TOKEN_PREFIX = "keel_pat_";
+
+/** A personal API token for `keel login --token`. Only its hash is stored. */
+export function generateApiToken(): { token: string; hash: string } {
+  const token = `${API_TOKEN_PREFIX}${randomBytes(24).toString("base64url")}`;
+  return { token, hash: hashToken(token) };
+}
+
 export function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
