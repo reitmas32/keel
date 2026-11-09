@@ -37,7 +37,9 @@ describe("openDb", () => {
       .prepare("PRAGMA table_info(deploys)")
       .all()
       .map((c) => c.name);
-    expect(deployColumns).toEqual(expect.arrayContaining(["ci_passed_at", "finished_at"]));
+    expect(deployColumns).toEqual(expect.arrayContaining(["ci_passed_at", "finished_at", "requested_by"]));
+    expect(store.listApiTokens()).toEqual([]);
+    expect(store.getServiceLock("sv1")).toBeUndefined();
     // Opening again must not try to add the column twice.
     expect(() => openDb(path).close()).not.toThrow();
   });

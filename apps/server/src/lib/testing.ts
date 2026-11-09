@@ -1,6 +1,7 @@
 import type { AppContext } from "./context";
 import { openDb } from "./db";
 import type { DokployClient, DokployDeploymentStatus, DokployTarget } from "./dokploy";
+import type { Env } from "./env";
 import { addService, createScope } from "./scopes";
 import { Store } from "./store";
 import { DeployWorker } from "./worker";
@@ -62,6 +63,19 @@ export function createTestContext() {
     },
     clock.now(),
   );
-  const ctx = { store, dokploy, worker, now: clock.now } as unknown as AppContext;
-  return { ctx, store, dokploy, worker, clock, scope, service, ciToken };
+  const env = { KEEL_API_AUTH: "optional" } as Env;
+  const ctx = { env, store, dokploy, worker, now: clock.now } as unknown as AppContext;
+  return { ctx, env, store, dokploy, worker, clock, scope, service, ciToken };
+}
+
+/** A request to an `/api` route, with an optional query string (`?a=b`), body and headers. */
+export function apiRequest(
+  query = "",
+  { method = "GET", body, headers = {} }: { method?: string; body?: unknown; headers?: Record<string, string> } = {},
+) {
+  return new Request(`http://keel.test/api${query}`, {
+    method,
+    headers: { "content-type": "application/json", ...headers },
+    ...(body !== undefined && { body: typeof body === "string" ? body : JSON.stringify(body) }),
+  });
 }

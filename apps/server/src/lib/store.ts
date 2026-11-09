@@ -46,6 +46,21 @@ export interface DeployRecord extends Deploy {
   finishedAt: string | null;
 }
 
+export interface ApiToken {
+  id: string;
+  name: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+}
+
+export interface ServiceLockRecord {
+  serviceId: string;
+  reason: string;
+  /** API token name, `admin` from the admin UI, or null without a token. */
+  lockedBy: string | null;
+  createdAt: string;
+}
+
 type Row = Record<string, unknown>;
 
 const toScope = (r: Row): Scope => ({
@@ -78,8 +93,23 @@ const toDeploy = (r: Row): DeployRecord => ({
   deployStartedAt: (r.deploy_started_at as string | null) ?? null,
   ciPassedAt: (r.ci_passed_at as string | null) ?? null,
   finishedAt: (r.finished_at as string | null) ?? null,
+  requestedBy: (r.requested_by as string | null) ?? null,
   createdAt: r.created_at as string,
   updatedAt: r.updated_at as string,
+});
+
+const toApiToken = (r: Row): ApiToken => ({
+  id: r.id as string,
+  name: r.name as string,
+  createdAt: r.created_at as string,
+  lastUsedAt: (r.last_used_at as string | null) ?? null,
+});
+
+const toServiceLock = (r: Row): ServiceLockRecord => ({
+  serviceId: r.service_id as string,
+  reason: r.reason as string,
+  lockedBy: (r.locked_by as string | null) ?? null,
+  createdAt: r.created_at as string,
 });
 
 const toVersion = (r: Row): Version => ({
@@ -175,6 +205,61 @@ export class Store {
 
   deleteService(id: string): void {
     this.db.prepare("DELETE FROM services WHERE id = ?").run(id);
+  }
+
+  // --- service locks ---
+
+  getServiceLock(serviceId: string): ServiceLockRecord | undefined {
+    const row = this.db.prepare("SELECT * FROM service_locks WHERE service_id = ?").get(serviceId);
+    return row ? toServiceLock(row) : undefined;
+  }
+
+  /** Locks a service. Locking it again replaces the reason and who locked it, keeping the original date. */
+  lockService(input: { serviceId: string; reason: string; lockedBy: string | null }, now: Date): ServiceLockRecord {
+    this.db
+      .prepare(
+        `INSERT INTO service_locks (service_id, reason, locked_by, created_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT (service_id) DO UPDATE SET reason = excluded.reason, locked_by = excluded.locked_by`,
+      )
+      .run(input.serviceId, input.reason, input.lockedBy, now.toISOString());
+    return this.getServiceLock(input.serviceId) as ServiceLockRecord;
+  }
+
+  /** Returns whether the service was locked. */
+  unlockService(serviceId: string): boolean {
+    return this.db.prepare("DELETE FROM service_locks WHERE service_id = ?").run(serviceId).changes > 0;
+  }
+
+  // --- API tokens ---
+
+  createApiToken(input: { name: string; tokenHash: string }, now: Date): ApiToken {
+    const token: ApiToken = { id: randomUUID(), name: input.name, createdAt: now.toISOString(), lastUsedAt: null };
+    this.db
+      .prepare("INSERT INTO api_tokens (id, name, token_hash, created_at) VALUES (?, ?, ?, ?)")
+      .run(token.id, token.name, input.tokenHash, token.createdAt);
+    return token;
+  }
+
+  listApiTokens(): ApiToken[] {
+    return this.db.prepare("SELECT * FROM api_tokens ORDER BY created_at DESC, name").all().map(toApiToken);
+  }
+
+  getApiTokenByName(name: string): ApiToken | undefined {
+    const row = this.db.prepare("SELECT * FROM api_tokens WHERE name = ?").get(name);
+    return row ? toApiToken(row) : undefined;
+  }
+
+  getApiTokenByHash(hash: string): ApiToken | undefined {
+    const row = this.db.prepare("SELECT * FROM api_tokens WHERE token_hash = ?").get(hash);
+    return row ? toApiToken(row) : undefined;
+  }
+
+  touchApiToken(id: string, now: Date): void {
+    this.db.prepare("UPDATE api_tokens SET last_used_at = ? WHERE id = ?").run(now.toISOString(), id);
+  }
+
+  deleteApiToken(id: string): void {
+    this.db.prepare("DELETE FROM api_tokens WHERE id = ?").run(id);
   }
 
   // --- CI results ---
@@ -288,7 +373,15 @@ export class Store {
   // --- deploys ---
 
   insertDeploy(
-    input: { repo: string; tag: string; sha: string; service: Service; status: DeployStatus; error?: string },
+    input: {
+      repo: string;
+      tag: string;
+      sha: string;
+      service: Service;
+      status: DeployStatus;
+      error?: string;
+      requestedBy?: string | null;
+    },
     now: Date,
   ): DeployRecord {
     const id = randomUUID();
@@ -296,8 +389,8 @@ export class Store {
     this.db
       .prepare(
         `INSERT INTO deploys (id, repo, tag, sha, service_id, service_alias, status, error, ci_passed_at, finished_at,
-           created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           requested_by, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -311,6 +404,7 @@ export class Store {
         // A deploy can be born already past CI when the Action reported before `keel deploy` ran.
         input.status === "ci_passed" ? ts : null,
         isTerminal(input.status) ? ts : null,
+        input.requestedBy ?? null,
         ts,
         ts,
       );

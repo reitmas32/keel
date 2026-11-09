@@ -65,6 +65,8 @@ export const deploySchema = z.object({
   ciPassedAt: z.string().nullable().optional(),
   deployStartedAt: z.string().nullable().optional(),
   finishedAt: z.string().nullable().optional(),
+  // Name of the API token that asked for it; null without a token. Optional: servers before v0.6.0 don't send it.
+  requestedBy: z.string().nullable().optional(),
 });
 export type Deploy = z.infer<typeof deploySchema>;
 
@@ -73,6 +75,40 @@ export interface DeployDetail extends Deploy {
   serviceKind: "application" | "compose" | null;
   tagVariable: string | null;
 }
+
+export const LOCK_REASON_MAX = 500;
+
+/** `keel lock` body: why nobody should deploy the service for now. */
+export const lockServiceRequestSchema = z.object({
+  reason: z.string().trim().min(1).max(LOCK_REASON_MAX),
+});
+export type LockServiceRequest = z.infer<typeof lockServiceRequestSchema>;
+
+/** A lock as listed with its service. `lockedBy` is the API token name, or null without a token. */
+export const serviceLockInfoSchema = z.object({
+  reason: z.string(),
+  lockedBy: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type ServiceLockInfo = z.infer<typeof serviceLockInfoSchema>;
+
+/** `PUT /repos/:owner/:name/services/:alias/lock` response. */
+export const serviceLockSchema = serviceLockInfoSchema.extend({ alias: z.string() });
+export type ServiceLock = z.infer<typeof serviceLockSchema>;
+
+/** `DELETE /repos/:owner/:name/services/:alias/lock` response. */
+export const unlockServiceResponseSchema = z.object({ ok: z.literal(true), wasLocked: z.boolean() });
+export type UnlockServiceResponse = z.infer<typeof unlockServiceResponseSchema>;
+
+export const API_AUTH_MODES = ["optional", "required"] as const;
+export type ApiAuthMode = (typeof API_AUTH_MODES)[number];
+
+/** `GET /whoami`: the API token's name (null without one) and whether this server requires a token. */
+export const whoamiResponseSchema = z.object({
+  name: z.string().nullable(),
+  auth: z.enum(API_AUTH_MODES),
+});
+export type WhoamiResponse = z.infer<typeof whoamiResponseSchema>;
 
 /** A service of a repo as `keel scopes` shows it. Servers before v0.5.0 only send `alias`. */
 export const serviceSummarySchema = z.object({
@@ -87,5 +123,7 @@ export const serviceSummarySchema = z.object({
   current: deploySchema.nullable().optional(),
   // The newest deploy of any status.
   last: deploySchema.nullable().optional(),
+  // Null when the service can be deployed. Optional: servers before v0.6.0 don't send it.
+  lock: serviceLockInfoSchema.nullable().optional(),
 });
 export type ServiceSummary = z.infer<typeof serviceSummarySchema>;

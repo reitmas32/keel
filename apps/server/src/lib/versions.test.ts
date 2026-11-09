@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { recordCiResult, registerVersion } from "./deploys";
 import { handlers } from "./handlers";
-import { createTestContext, SHA } from "./testing";
+import { apiRequest, createTestContext, SHA } from "./testing";
 
 const RUN = "https://github.com/konectus-io/app/actions/runs/123";
 const register = (tag = "v1.4.0") => ({
@@ -122,10 +122,10 @@ describe("version API", () => {
     expect(created.status).toBe(201);
     expect(await created.json()).toMatchObject({ tag: "v1.4.0", ciStatus: "pending" });
 
-    const list = await handlers.listRepoVersions(ctx, "konectus-io", "app", new URLSearchParams());
+    const list = await handlers.listRepoVersions(ctx, apiRequest(), "konectus-io", "app");
     expect(await list.json()).toMatchObject({ repo: "konectus-io/app", versions: [{ tag: "v1.4.0" }] });
 
-    const filtered = await handlers.listRepoVersions(ctx, "konectus-io", "app", new URLSearchParams("status=success"));
+    const filtered = await handlers.listRepoVersions(ctx, apiRequest("?status=success"), "konectus-io", "app");
     expect((await filtered.json()).versions).toEqual([]);
   });
 
@@ -134,10 +134,10 @@ describe("version API", () => {
 
     expect((await handlers.registerVersion(ctx, post({ repo: "konectus-io/app" }))).status).toBe(400);
     expect((await handlers.registerVersion(ctx, post({ ...register(), repo: "other/repo" }))).status).toBe(404);
-    const bad = await handlers.listRepoVersions(ctx, "konectus-io", "app", new URLSearchParams("status=green"));
+    const bad = await handlers.listRepoVersions(ctx, apiRequest("?status=green"), "konectus-io", "app");
     expect(bad.status).toBe(400);
     expect((await bad.json()).error).toMatch(/pending, success/);
-    expect((await handlers.listRepoVersions(ctx, "other", "repo", new URLSearchParams())).status).toBe(404);
+    expect((await handlers.listRepoVersions(ctx, apiRequest(), "other", "repo")).status).toBe(404);
   });
 
   it("ci-result accepts the run link and old Actions that don't send it", async () => {

@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS deploys (
   deploy_started_at TEXT,
   ci_passed_at      TEXT,
   finished_at       TEXT,
+  requested_by      TEXT,
   created_at        TEXT NOT NULL,
   updated_at        TEXT NOT NULL
 );
@@ -68,6 +69,23 @@ CREATE TABLE IF NOT EXISTS versions (
 
 CREATE INDEX IF NOT EXISTS versions_repo_created ON versions (repo, created_at);
 CREATE INDEX IF NOT EXISTS versions_status ON versions (ci_status, created_at);
+
+-- v0.6.0: personal API tokens for the CLI. Only the sha256 of the token is stored.
+CREATE TABLE IF NOT EXISTS api_tokens (
+  id           TEXT PRIMARY KEY,
+  name         TEXT NOT NULL,
+  token_hash   TEXT NOT NULL UNIQUE,
+  created_at   TEXT NOT NULL,
+  last_used_at TEXT
+);
+
+-- v0.6.0: a locked service refuses new deploys until someone unlocks it.
+CREATE TABLE IF NOT EXISTS service_locks (
+  service_id TEXT PRIMARY KEY REFERENCES services(id) ON DELETE CASCADE,
+  reason     TEXT NOT NULL,
+  locked_by  TEXT,
+  created_at TEXT NOT NULL
+);
 `;
 
 /** Opens (creating if needed) the SQLite database and applies the schema. Use ":memory:" in tests. */
@@ -97,4 +115,6 @@ function migrate(db: DatabaseSync): void {
   for (const column of ["ci_passed_at", "finished_at"]) {
     if (!deployColumns.includes(column)) db.exec(`ALTER TABLE deploys ADD COLUMN ${column} TEXT`);
   }
+  // v0.6.0: the API token name that asked for the deploy.
+  if (!deployColumns.includes("requested_by")) db.exec("ALTER TABLE deploys ADD COLUMN requested_by TEXT");
 }

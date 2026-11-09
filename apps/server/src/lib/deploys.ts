@@ -7,17 +7,28 @@ import {
   type Version,
 } from "@keel/shared";
 import { ApiError } from "./errors";
-import type { DeployRecord, Store } from "./store";
+import { formatDate } from "./format";
+import type { DeployRecord, Service, ServiceLockRecord, Store } from "./store";
 import { verifyToken } from "./tokens";
 
 const ciOutcome = (status: CiResultRequest["status"]): DeployStatus =>
   status === "success" ? "ci_passed" : "ci_failed";
 
+/** The 423 a locked service answers to a new deploy. */
+export const lockedMessage = (service: Service, lock: ServiceLockRecord) =>
+  `El servicio ${service.alias} está bloqueado: ${lock.reason} (por ${lock.lockedBy ?? "alguien"}, ${formatDate(lock.createdAt)}). Desbloquéalo con \`keel unlock -s ${service.alias}\`.`;
+
 /**
  * Queues a deploy. If the Action already reported this SHA (it can finish before `keel deploy` runs),
- * the deploy skips `waiting_ci` and starts from the stored CI outcome.
+ * the deploy skips `waiting_ci` and starts from the stored CI outcome. A locked service refuses it with 423;
+ * deploys already queued keep going.
  */
-export function requestDeploy(store: Store, req: CreateDeployRequest, now: Date): DeployRecord {
+export function requestDeploy(
+  store: Store,
+  req: CreateDeployRequest,
+  now: Date,
+  requestedBy: string | null = null,
+): DeployRecord {
   const scope = store.getScopeByRepo(req.repo);
   if (!scope)
     throw new ApiError(404, `El repo ${req.repo} no está vinculado a ningún scope en esta instancia de keel.`);
@@ -30,6 +41,9 @@ export function requestDeploy(store: Store, req: CreateDeployRequest, now: Date)
       `El servicio ${req.service} no existe en ${scope.repo}. Disponibles: ${available.join(", ") || "ninguno"}.`,
     );
   }
+
+  const lock = store.getServiceLock(service.id);
+  if (lock) throw new ApiError(423, lockedMessage(service, lock));
 
   // Re-running `keel deploy` for the same commit and service returns the in-flight deploy instead of duplicating it.
   const inFlight = store
@@ -46,6 +60,7 @@ export function requestDeploy(store: Store, req: CreateDeployRequest, now: Date)
       sha: req.sha,
       service,
       status,
+      requestedBy,
       ...(status === "ci_failed" && { error: `El CI de ${req.tag} terminó con ${ci?.status}.` }),
     },
     now,

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { recordCiResult, requestDeploy } from "./deploys";
 import { handlers } from "./handlers";
 import { parseGithubRepoUrl } from "./scopes";
-import { createTestContext, SHA } from "./testing";
+import { apiRequest, createTestContext, SHA } from "./testing";
 
 const post = (body: unknown, headers: Record<string, string> = {}) =>
   new Request("http://keel.test/api", {
@@ -15,7 +15,7 @@ describe("API handlers", () => {
   it("runs the CLI + Action flow over HTTP", async () => {
     const { ctx, ciToken } = createTestContext();
 
-    const services = await handlers.listServices(ctx, "konectus-io", "app");
+    const services = await handlers.listServices(ctx, apiRequest(), "konectus-io", "app");
     expect(await services.json()).toMatchObject({
       repo: "konectus-io/app",
       services: [
@@ -41,7 +41,7 @@ describe("API handlers", () => {
     );
     expect(ci.status).toBe(200);
 
-    const fetched = await handlers.getDeploy(ctx, deploy.id);
+    const fetched = await handlers.getDeploy(ctx, apiRequest(), deploy.id);
     expect((await fetched.json()).status).toBe("ci_passed");
   });
 
@@ -66,7 +66,7 @@ describe("API handlers", () => {
 
   it("returns 404 for an unknown deploy", async () => {
     const { ctx } = createTestContext();
-    expect((await handlers.getDeploy(ctx, "missing")).status).toBe(404);
+    expect((await handlers.getDeploy(ctx, apiRequest(), "missing")).status).toBe(404);
   });
 });
 
@@ -99,7 +99,7 @@ describe("GET /repos/:owner/:name/services", () => {
     recordCiResult(store, { ...failing, status: "failure" }, ciToken, clock.now());
     requestDeploy(store, failing, clock.now());
 
-    const body = await (await handlers.listServices(ctx, "konectus-io", "app")).json();
+    const body = await (await handlers.listServices(ctx, apiRequest(), "konectus-io", "app")).json();
     expect(body.services[0]).toMatchObject({
       alias: "api-prod",
       dokployName: "DEV/production/app",
@@ -111,7 +111,7 @@ describe("GET /repos/:owner/:name/services", () => {
   it("still lists a service when Dokploy can't describe it", async () => {
     const { ctx, dokploy } = createTestContext();
     dokploy.names.clear();
-    const body = await (await handlers.listServices(ctx, "konectus-io", "app")).json();
+    const body = await (await handlers.listServices(ctx, apiRequest(), "konectus-io", "app")).json();
     expect(body.services[0]).toMatchObject({ alias: "api-prod", dokployName: null, dokployId: "app123" });
   });
 });
