@@ -30,6 +30,20 @@ curl -fsSL https://github.com/reitmas32/keel/releases/latest/download/install.sh
 irm https://github.com/reitmas32/keel/releases/latest/download/install.ps1 | iex
 ```
 
+Con un gestor de paquetes:
+
+```bash
+# Homebrew (macOS y Linux), cuando exista el tap reitmas32/homebrew-tap
+brew install reitmas32/tap/keel
+```
+
+```powershell
+# Scoop (Windows)
+scoop install https://github.com/reitmas32/keel/releases/latest/download/keel.json
+```
+
+Cada release adjunta la fórmula (`keel.rb`) y el manifiesto de Scoop (`keel.json`) con las sumas de sus binarios. Si el repo tiene el secret `HOMEBREW_TAP_TOKEN`, las releases estables también actualizan `Formula/keel.rb` en `reitmas32/homebrew-tap`.
+
 Los dos scripts comprueban el binario contra `SHA256SUMS` de la release. También puedes bajar `keel-<target>` de la [última release](https://github.com/reitmas32/keel/releases/latest) o compilarlo con `cargo install --path apps/cli`. `keel update` reemplaza el binario por el de la última release, también comprobando su suma.
 
 La CLI de TypeScript (`keel-cli.tgz` por npm) queda retirada; la configuración de `~/.keel` (orgs y organización activa) sigue sirviendo igual.
