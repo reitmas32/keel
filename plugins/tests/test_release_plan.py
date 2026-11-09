@@ -12,7 +12,7 @@ from pathlib import Path
 
 SCRIPT = (
     Path(__file__).resolve().parent.parent
-    / "plugins/keel-release/skills/keel-release/scripts/release_plan.py"
+    / "keel-release/skills/keel-release/scripts/release_plan.py"
 )
 
 KEEL = """\

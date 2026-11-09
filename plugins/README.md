@@ -1,4 +1,4 @@
-# keel-ai-marketplace
+# keel plugins
 
 Foundathyon's skills for coding agents. One repository, one copy of each skill,
 installable into **Claude Code**, **Codex** and **GitHub Copilot** — and into
@@ -9,9 +9,9 @@ such as Cursor, Gemini CLI or OpenCode.
 
 | Skill | What it does | Version |
 | --- | --- | --- |
-| [`keel-docs`](plugins/keel-docs/skills/keel-docs/SKILL.md) | Writes, extends and audits a repository's `docs/` so it builds with `keel docs` and follows the Foundathyon documentation standard | 0.1.0 |
-| [`keel-release`](plugins/keel-release/skills/keel-release/SKILL.md) | Cuts a release: proposes the next semantic version from the commits, bumps the version files `.keel` lists, runs the checks and `keel docs --check --strict`, and tags with `keel create-version` — asking before anything is pushed | 0.1.0 |
-| [`keel-setup`](plugins/keel-setup/skills/keel-setup/SKILL.md) | Prepares a repository for keel releases, or audits one: `.keel` from `keel init`, the Release workflow and keel-api's canonical `report-version.sh` that confirm every version to keel-api, `docs/releases.md`, `dist/` ignored, and the `KEEL_CI_TOKEN` credential — asking before CI or secrets change, and never tagging | 0.1.0 |
+| [`keel-docs`](keel-docs/skills/keel-docs/SKILL.md) | Writes, extends and audits a repository's `docs/` so it builds with `keel docs` and follows the Foundathyon documentation standard | 0.1.0 |
+| [`keel-release`](keel-release/skills/keel-release/SKILL.md) | Cuts a release: proposes the next semantic version from the commits, bumps the version files `.keel` lists, runs the checks and `keel docs --check --strict`, and tags with `keel create-version` — asking before anything is pushed | 0.1.0 |
+| [`keel-setup`](keel-setup/skills/keel-setup/SKILL.md) | Prepares a repository for keel releases, or audits one: `.keel` from `keel init`, the Release workflow and keel-api's canonical `report-version.sh` that confirm every version to keel-api, `docs/releases.md`, `dist/` ignored, and the `KEEL_CI_TOKEN` credential — asking before CI or secrets change, and never tagging | 0.1.0 |
 
 ## Install
 
@@ -41,27 +41,27 @@ lacks one, since somebody wrote that by hand.
 
 keel reads this repository through the GitHub API with the same token as
 `keel update`: `KEEL_GITHUB_TOKEN`, `GITHUB_TOKEN`, `GH_TOKEN`, then
-`gh auth token`. `--from ./path/to/keel-ai-marketplace` reads a local checkout
+`gh auth token`. `--from ./path/to/keel` reads a local checkout
 instead — the way to try a skill before publishing it.
 
 ### As a plugin, with each agent's own marketplace
 
-The catalogue in [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json)
+The catalogue in [`.claude-plugin/marketplace.json`](../.claude-plugin/marketplace.json)
 is the one file Claude Code, Copilot CLI and Codex all read, and each plugin
 carries both a Claude manifest and an [Agent Plugins](https://agent-plugins.org)
 `plugin.json`. The marketplace is called `keel`.
 
 ```bash
 # Claude Code
-claude plugin marketplace add fundathyon/keel-ai-marketplace
+claude plugin marketplace add reitmas32/keel
 claude plugin install keel-docs@keel
 
 # Copilot CLI
-copilot plugin marketplace add fundathyon/keel-ai-marketplace
+copilot plugin marketplace add reitmas32/keel
 copilot plugin install keel-docs@keel
 
 # Codex
-codex plugin marketplace add fundathyon/keel-ai-marketplace
+codex plugin marketplace add reitmas32/keel
 codex plugin add keel-docs@keel
 ```
 
@@ -78,7 +78,7 @@ also accepts the same keys in `.github/copilot/settings.json`:
 {
   "extraKnownMarketplaces": {
     "keel": {
-      "source": { "source": "github", "repo": "fundathyon/keel-ai-marketplace" }
+      "source": { "source": "github", "repo": "reitmas32/keel" }
     }
   },
   "enabledPlugins": {
@@ -99,8 +99,8 @@ plugins/<plugin>/
     references/                     read on demand, so SKILL.md stays short
     scripts/                        run by the agent; standard library only
     assets/                         templates and files copied into repositories as-is
-scripts/validate.py                 checks every rule below
-tests/                              tests for the skills' scripts
+plugins/scripts/validate.py         checks every rule below
+plugins/tests/                      tests for the skills' scripts
 ```
 
 ## Adding or changing a skill
@@ -111,7 +111,7 @@ what it does *and when to use it*, the version bumped everywhere it appears —
 and both checks passing:
 
 ```bash
-python3 scripts/validate.py
+python3 plugins/scripts/validate.py
 claude plugin validate . --strict
 ```
 

@@ -12,3 +12,5 @@ coverage/
 .vitest/
 next-env.d.ts
 target/
+__pycache__/
+*.pyc

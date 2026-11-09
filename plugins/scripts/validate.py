@@ -15,7 +15,7 @@ Standard library only, except that PyYAML is used when it is installed — it
 parses frontmatter the way the agents do, where the fallback reader is only
 approximate. CI installs it.
 
-    python3 scripts/validate.py [--root DIR]
+    python3 plugins/scripts/validate.py [--root DIR]
 
 Exit status: 0 valid, 1 not.
 """
@@ -243,7 +243,7 @@ def check_plugin(root: Path, entry: dict, report: Report) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parent.parent)
+    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
     args = parser.parse_args()
     root: Path = args.root
     report = Report()

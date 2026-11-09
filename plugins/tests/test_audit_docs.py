@@ -12,7 +12,7 @@ from pathlib import Path
 
 SCRIPT = (
     Path(__file__).resolve().parent.parent
-    / "plugins/keel-docs/skills/keel-docs/scripts/audit_docs.py"
+    / "keel-docs/skills/keel-docs/scripts/audit_docs.py"
 )
 
 INDEX = """\

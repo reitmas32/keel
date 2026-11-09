@@ -17,7 +17,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-SKILL = Path(__file__).resolve().parent.parent / "plugins/keel-setup/skills/keel-setup"
+SKILL = Path(__file__).resolve().parent.parent / "keel-setup/skills/keel-setup"
 SCRIPT = SKILL / "scripts/check_setup.py"
 ASSETS = SKILL / "assets"
 

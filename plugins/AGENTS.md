@@ -1,6 +1,6 @@
-# keel-ai-marketplace agent guide
+# keel plugins agent guide
 
-This repository is the single source of Foundathyon's agent skills. Every skill
+`plugins/` is the single source of Foundathyon's agent skills. Every skill
 here is installed into Claude Code, Codex and GitHub Copilot, by `keel skills`
 or by each agent's own plugin marketplace — so a skill has to work in all of
 them, and a broken manifest breaks installs for everyone.
@@ -10,8 +10,8 @@ them, and a broken manifest breaks installs for everyone.
 Run from the repository root:
 
 ```sh
-python3 scripts/validate.py          # every manifest and skill rule
-python3 -m unittest discover tests   # the skills' own scripts
+python3 plugins/scripts/validate.py  # every manifest and skill rule
+python3 -m unittest discover -s plugins/tests  # the skills' own scripts
 claude plugin validate . --strict    # Claude Code's view of the marketplace
 ```
 
@@ -19,7 +19,7 @@ To try a skill for real before merging, install it from this checkout into a
 scratch repository:
 
 ```sh
-keel skills add <skill> --from /path/to/keel-ai-marketplace
+keel skills add <skill> --from /path/to/keel
 ```
 
 ## Adding a skill
