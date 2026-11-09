@@ -16,12 +16,13 @@ export default async function AuditPage({ searchParams }: { searchParams: Search
   await requireRole("admin", undefined, { redirect: true });
   const search = await searchParams;
   const repo = param(search.repo);
+  const scope = param(search.scope);
   const actor = param(search.actor);
   const page = Math.max(1, Math.floor(Number(param(search.page) ?? 1)) || 1);
 
   const { store } = await getContext();
   const [rows, facets] = await Promise.all([
-    store.listAudit({ repo, actor }, { limit: PAGE_SIZE + 1, offset: (page - 1) * PAGE_SIZE }),
+    store.listAudit({ repo, scope, actor }, { limit: PAGE_SIZE + 1, offset: (page - 1) * PAGE_SIZE }),
     store.auditFacets(),
   ]);
   const entries = rows.slice(0, PAGE_SIZE);
@@ -29,6 +30,7 @@ export default async function AuditPage({ searchParams }: { searchParams: Search
   const href = (p: number) => {
     const query = new URLSearchParams({
       ...(repo && { repo }),
+      ...(scope && { scope }),
       ...(actor && { actor }),
       ...(p > 1 && { page: String(p) }),
     });
@@ -60,6 +62,19 @@ export default async function AuditPage({ searchParams }: { searchParams: Search
               </select>
             </div>
             <div className="field">
+              <label className="label" htmlFor="audit-scope">
+                Scope
+              </label>
+              <select id="audit-scope" className="input" name="scope" defaultValue={scope ?? ""}>
+                <option value="">Todos</option>
+                {facets.scopes.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field">
               <label className="label" htmlFor="audit-actor">
                 Quién
               </label>
@@ -75,7 +90,7 @@ export default async function AuditPage({ searchParams }: { searchParams: Search
             <button type="submit" className="btn btn-outline">
               Filtrar
             </button>
-            {(repo || actor) && (
+            {(repo || scope || actor) && (
               <Link className="btn btn-ghost" href="/audit">
                 Quitar filtros
               </Link>
@@ -84,7 +99,7 @@ export default async function AuditPage({ searchParams }: { searchParams: Search
         }
       >
         {entries.length === 0 ? (
-          <p className="empty">Sin entradas{repo || actor ? " con estos filtros" : " todavía"}.</p>
+          <p className="empty">Sin entradas{repo || scope || actor ? " con estos filtros" : " todavía"}.</p>
         ) : (
           <div className="table-wrap">
             <table className="table">
@@ -93,7 +108,7 @@ export default async function AuditPage({ searchParams }: { searchParams: Search
                   <th>Cuándo</th>
                   <th>Quién</th>
                   <th>Acción</th>
-                  <th>Repo / servicio</th>
+                  <th>Repo / scope</th>
                   <th>Detalles</th>
                 </tr>
               </thead>
@@ -105,7 +120,7 @@ export default async function AuditPage({ searchParams }: { searchParams: Search
                     <td>
                       <code>{e.action}</code>
                     </td>
-                    <td>{e.repo ? <code>{e.service ? `${e.repo}/${e.service}` : e.repo}</code> : none}</td>
+                    <td>{e.repo ? <code>{e.scope ? `${e.repo}/${e.scope}` : e.repo}</code> : none}</td>
                     <td>{e.details ? <div className="details">{JSON.stringify(e.details)}</div> : none}</td>
                   </tr>
                 ))}

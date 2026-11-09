@@ -96,7 +96,7 @@ export async function addGrantAction(
       store,
       actorOf(viewer),
       memberId,
-      { repo: field(form, "repo"), service: field(form, "service"), role: field(form, "role") },
+      { repo: field(form, "repo"), scope: field(form, "scope"), role: field(form, "role") },
       now(),
     );
     return { ok: true };

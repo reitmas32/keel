@@ -5,7 +5,7 @@ import { requestDeploy } from "./deploys";
 import { handlers } from "./handlers";
 import { apiRequest, createTestContext, memberToken, SHA } from "./testing";
 
-const deployBody = { repo: "konectus-io/app", tag: "v1.0.0", sha: SHA, service: "api-prod" };
+const deployBody = { repo: "konectus-io/app", tag: "v1.0.0", sha: SHA, scope: "api-prod" };
 const versionBody = { repo: "konectus-io/app", tag: "v1.0.0", sha: SHA };
 
 /** Every role-checked handler, with the role it needs and the action its 403 names. */
@@ -15,8 +15,8 @@ function calls(ctx: AppContext, headers: Record<string, string>, deployId: strin
   return [
     {
       role: "viewer",
-      what: "ver servicios en konectus-io/app",
-      run: () => handlers.listServices(ctx, req(), "konectus-io", "app"),
+      what: "ver scopes en konectus-io/app",
+      run: () => handlers.listScopes(ctx, req(), "konectus-io", "app"),
     },
     {
       role: "viewer",
@@ -50,13 +50,13 @@ function calls(ctx: AppContext, headers: Record<string, string>, deployId: strin
     },
     {
       role: "maintainer",
-      what: "bloquear servicios en konectus-io/app/api-prod",
-      run: () => handlers.lockService(ctx, req("PUT", { reason: "x" }), "konectus-io", "app", "api-prod"),
+      what: "bloquear scopes en konectus-io/app/api-prod",
+      run: () => handlers.lockScope(ctx, req("PUT", { reason: "x" }), "konectus-io", "app", "api-prod"),
     },
     {
       role: "maintainer",
-      what: "desbloquear servicios en konectus-io/app/api-prod",
-      run: () => handlers.unlockService(ctx, req("DELETE"), "konectus-io", "app", "api-prod"),
+      what: "desbloquear scopes en konectus-io/app/api-prod",
+      run: () => handlers.unlockScope(ctx, req("DELETE"), "konectus-io", "app", "api-prod"),
     },
   ] as const;
 }
@@ -88,26 +88,23 @@ describe("role checks on the API", () => {
     }
   });
 
-  it("applies grants per service and caps tokens at their max role", async () => {
-    const { ctx, store, clock, service, scope } = await withDeploy();
-    const { addService } = await import("./scopes");
-    await addService(
+  it("applies grants per scope and caps tokens at their max role", async () => {
+    const { ctx, store, clock, scope, app } = await withDeploy();
+    const { addScope } = await import("./apps");
+    await addScope(
       store,
-      scope,
+      app,
       { alias: "api-stg", dokployUrl: "https://dokploy.example.com/dashboard/project/p/services/application/s1" },
       clock.now(),
     );
-    // Deployer everywhere except prod services, where they only read.
+    // Deployer everywhere except prod scopes, where they only read.
     const { headers } = await memberToken(store, clock.now(), {
       role: "deployer",
       grants: [["konectus-io/*", "*-prod", "viewer"]],
     });
     const deploy = (alias: string, h = headers) =>
-      handlers.createDeploy(
-        ctx,
-        apiRequest("", { method: "POST", headers: h, body: { ...deployBody, service: alias } }),
-      );
-    expect((await deploy(service.alias)).status).toBe(403);
+      handlers.createDeploy(ctx, apiRequest("", { method: "POST", headers: h, body: { ...deployBody, scope: alias } }));
+    expect((await deploy(scope.alias)).status).toBe(403);
     expect((await deploy("api-stg")).status).toBe(202);
 
     // A maintainer whose token is capped at publisher can register versions but not deploy.
@@ -121,7 +118,7 @@ describe("role checks on the API", () => {
 
     // An admin is never lowered by a grant.
     const admin = await memberToken(store, clock.now(), { role: "admin", grants: [["*", "*", "viewer"]] });
-    expect((await deploy(service.alias, admin.headers)).status).toBe(202);
+    expect((await deploy(scope.alias, admin.headers)).status).toBe(202);
   });
 
   it("checks the role before revealing whether the repo exists", async () => {
@@ -140,7 +137,7 @@ describe("anonymous calls", () => {
     const { ctx } = await createTestContext();
     const created = await handlers.createDeploy(ctx, apiRequest("", { method: "POST", body: deployBody }));
     expect(created.status).toBe(202);
-    const locked = await handlers.lockService(
+    const locked = await handlers.lockScope(
       ctx,
       apiRequest("", { method: "PUT", body: { reason: "x" } }),
       "konectus-io",
@@ -148,7 +145,7 @@ describe("anonymous calls", () => {
       "api-prod",
     );
     expect(locked.status).toBe(403);
-    expect((await locked.json()).error).toMatch(/^Tu rol \(deployer\) no permite bloquear servicios/);
+    expect((await locked.json()).error).toMatch(/^Tu rol \(deployer\) no permite bloquear scopes/);
   });
 
   it.each([
@@ -163,8 +160,8 @@ describe("anonymous calls", () => {
     for (const call of calls(ctx, {}, deployId)) statuses.push((await call.run()).status);
     expect(statuses.filter((s) => s !== 403)).toHaveLength(allowedCount);
     if (anonymousRole === "none") {
-      const body = await (await handlers.listServices(ctx, apiRequest(), "konectus-io", "app")).json();
-      expect(body.error).toMatch(/^Tu rol \(none\) no permite ver servicios en konectus-io\/app\./);
+      const body = await (await handlers.listScopes(ctx, apiRequest(), "konectus-io", "app")).json();
+      expect(body.error).toMatch(/^Tu rol \(none\) no permite ver scopes en konectus-io\/app\./);
     }
   });
 });
@@ -180,10 +177,10 @@ describe("audit of API mutations", () => {
     await handlers.createDeploy(ctx, post(deployBody));
     await handlers.createDeploy(ctx, post({ ...deployBody, sha: "b".repeat(40) }, {}));
     const lockReq = apiRequest("", { method: "PUT", headers, body: { reason: "release" } });
-    await handlers.lockService(ctx, lockReq, "konectus-io", "app", "api-prod");
-    await handlers.unlockService(ctx, apiRequest("", { method: "DELETE", headers }), "konectus-io", "app", "api-prod");
-    // Unlocking an unlocked service changes nothing and isn't recorded.
-    await handlers.unlockService(ctx, apiRequest("", { method: "DELETE", headers }), "konectus-io", "app", "api-prod");
+    await handlers.lockScope(ctx, lockReq, "konectus-io", "app", "api-prod");
+    await handlers.unlockScope(ctx, apiRequest("", { method: "DELETE", headers }), "konectus-io", "app", "api-prod");
+    // Unlocking an unlocked scope changes nothing and isn't recorded.
+    await handlers.unlockScope(ctx, apiRequest("", { method: "DELETE", headers }), "konectus-io", "app", "api-prod");
     await handlers.ciResult(
       ctx,
       apiRequest("", {
@@ -193,10 +190,10 @@ describe("audit of API mutations", () => {
       }),
     );
     // Reads and refused calls are not mutations.
-    await handlers.listServices(ctx, apiRequest("", { headers }), "konectus-io", "app");
+    await handlers.listScopes(ctx, apiRequest("", { headers }), "konectus-io", "app");
 
     const entries = (await store.listAudit()).reverse();
-    expect(entries.map((e) => [e.actor, e.action, e.repo, e.service])).toEqual([
+    expect(entries.map((e) => [e.actor, e.action, e.repo, e.scope])).toEqual([
       ["Rafa", "version.register", "konectus-io/app", null],
       ["Rafa", "deploy.create", "konectus-io/app", "api-prod"],
       ["anónimo", "deploy.create", "konectus-io/app", "api-prod"],

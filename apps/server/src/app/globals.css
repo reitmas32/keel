@@ -671,21 +671,21 @@ a.card:hover {
   background: hsl(var(--muted) / 0.3);
 }
 
-.scope-card {
+.app-card {
   display: flex;
   flex-direction: column;
   gap: 1rem;
   padding: 1.25rem;
 }
 
-.scope-card-head {
+.app-card-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 0.75rem;
 }
 
-.scope-card-meta {
+.app-card-meta {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -887,9 +887,9 @@ a.badge:hover {
   border: 1px solid hsl(var(--border));
 }
 
-/* ---------- services ---------- */
+/* ---------- scopes ---------- */
 
-.service-list {
+.scope-list {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -897,7 +897,7 @@ a.badge:hover {
   border-radius: var(--radius);
 }
 
-.service-row {
+.scope-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -906,15 +906,15 @@ a.badge:hover {
   transition: background-color 0.15s;
 }
 
-.service-row + .service-row {
+.scope-row + .scope-row {
   border-top: 1px solid hsl(var(--border));
 }
 
-.service-row:hover {
+.scope-row:hover {
   background: hsl(var(--muted) / 0.4);
 }
 
-.service-main {
+.scope-main {
   display: flex;
   flex-direction: column;
   gap: 0.375rem;
@@ -922,7 +922,7 @@ a.badge:hover {
   min-width: 0;
 }
 
-.service-title {
+.scope-title {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -930,18 +930,18 @@ a.badge:hover {
   font-weight: 600;
 }
 
-.service-title a {
+.scope-title a {
   display: inline-flex;
   align-items: center;
   gap: 0.375rem;
   text-decoration: none;
 }
 
-.service-title a:hover {
+.scope-title a:hover {
   text-decoration: underline;
 }
 
-.service-lock {
+.scope-lock {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
@@ -949,7 +949,7 @@ a.badge:hover {
   min-width: 0;
 }
 
-.service-actions {
+.scope-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
@@ -1113,7 +1113,7 @@ a.badge:hover {
     padding: 1rem;
   }
 
-  .service-actions {
+  .scope-actions {
     margin-left: 0;
   }
 }

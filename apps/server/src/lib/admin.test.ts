@@ -2,15 +2,15 @@ import type { Role } from "@keel/shared";
 import { describe, expect, it } from "vitest";
 import { memberPrincipal, type Principal } from "./access";
 import {
-  createScopeAs,
+  createAppAs,
   createTokenAs,
-  deleteScopeAs,
-  linkServiceAs,
-  lockServiceAs,
+  deleteAppAs,
+  linkScopeAs,
+  lockScopeAs,
   revokeTokenAs,
   rotateCiTokenAs,
-  unlinkServiceAs,
-  unlockServiceAs,
+  unlinkScopeAs,
+  unlockScopeAs,
 } from "./admin";
 import { ApiError } from "./errors";
 import { addMember, createTestContext } from "./testing";
@@ -35,65 +35,64 @@ async function setup() {
 }
 
 describe("admin actions", () => {
-  it("need maintainer to link, unlink, lock and rotate, and admin to create or delete scopes", async () => {
-    const { store, clock, scope, service, as } = await setup();
+  it("need maintainer to link, unlink, lock and rotate, and admin to create or delete apps", async () => {
+    const { store, clock, app, scope, as } = await setup();
     const now = clock.now();
     const deployer = await as("deployer");
     const maintainer = await as("maintainer");
 
-    expect(await statusOf(() => createScopeAs(store, maintainer, { name: "x", repoUrl: "jalo/x" }, now))).toBe(403);
-    expect(await statusOf(() => deleteScopeAs(store, maintainer, scope.id, now))).toBe(403);
-    expect(await statusOf(() => rotateCiTokenAs(store, deployer, scope.id, now))).toBe(403);
-    const link = (p: Principal) =>
-      linkServiceAs(store, p, scope.id, { alias: "api-stg", dokployUrl: DOKPLOY_URL }, now);
+    expect(await statusOf(() => createAppAs(store, maintainer, { name: "x", repoUrl: "jalo/x" }, now))).toBe(403);
+    expect(await statusOf(() => deleteAppAs(store, maintainer, app.id, now))).toBe(403);
+    expect(await statusOf(() => rotateCiTokenAs(store, deployer, app.id, now))).toBe(403);
+    const link = (p: Principal) => linkScopeAs(store, p, app.id, { alias: "api-stg", dokployUrl: DOKPLOY_URL }, now);
     expect(await statusOf(() => link(deployer))).toBe(403);
     await expect(link(deployer)).rejects.toThrow(
-      "Tu rol (deployer) no permite vincular servicios en konectus-io/app. Pide a un admin de keel que te dé acceso.",
+      "Tu rol (deployer) no permite vincular scopes en konectus-io/app. Pide a un admin de keel que te dé acceso.",
     );
-    expect(await statusOf(() => lockServiceAs(store, deployer, scope.id, service.id, "x", now))).toBe(403);
-    expect(await statusOf(() => unlockServiceAs(store, deployer, scope.id, service.id, now))).toBe(403);
-    expect(await statusOf(() => unlinkServiceAs(store, deployer, scope.id, service.id, now))).toBe(403);
+    expect(await statusOf(() => lockScopeAs(store, deployer, app.id, scope.id, "x", now))).toBe(403);
+    expect(await statusOf(() => unlockScopeAs(store, deployer, app.id, scope.id, now))).toBe(403);
+    expect(await statusOf(() => unlinkScopeAs(store, deployer, app.id, scope.id, now))).toBe(403);
 
     const linked = await link(maintainer);
-    expect(await rotateCiTokenAs(store, maintainer, scope.id, now)).toMatch(/^keel_/);
-    await lockServiceAs(store, maintainer, scope.id, service.id, "release", now);
-    expect((await store.getServiceLock(service.id))?.lockedBy).toBe("maintainer");
-    await unlockServiceAs(store, maintainer, scope.id, service.id, now);
-    await unlinkServiceAs(store, maintainer, scope.id, linked.id, now);
+    expect(await rotateCiTokenAs(store, maintainer, app.id, now)).toMatch(/^keel_/);
+    await lockScopeAs(store, maintainer, app.id, scope.id, "release", now);
+    expect((await store.getScopeLock(scope.id))?.lockedBy).toBe("maintainer");
+    await unlockScopeAs(store, maintainer, app.id, scope.id, now);
+    await unlinkScopeAs(store, maintainer, app.id, linked.id, now);
 
     const admin = await as("admin");
-    const { scope: created } = await createScopeAs(store, admin, { name: "x", repoUrl: "jalo/x" }, now);
-    await deleteScopeAs(store, admin, created.id, now);
+    const { app: created } = await createAppAs(store, admin, { name: "x", repoUrl: "jalo/x" }, now);
+    await deleteAppAs(store, admin, created.id, now);
 
     const entries = (await store.listAudit()).reverse();
-    expect(entries.map((e) => [e.actor, e.action, e.repo, e.service])).toEqual([
-      ["maintainer", "service.link", "konectus-io/app", "api-stg"],
+    expect(entries.map((e) => [e.actor, e.action, e.repo, e.scope])).toEqual([
+      ["maintainer", "scope.link", "konectus-io/app", "api-stg"],
       ["maintainer", "ci_token.rotate", "konectus-io/app", null],
       ["maintainer", "lock.set", "konectus-io/app", "api-prod"],
       ["maintainer", "lock.clear", "konectus-io/app", "api-prod"],
-      ["maintainer", "service.unlink", "konectus-io/app", "api-stg"],
-      ["admin", "scope.create", "jalo/x", null],
-      ["admin", "scope.delete", "jalo/x", null],
+      ["maintainer", "scope.unlink", "konectus-io/app", "api-stg"],
+      ["admin", "app.create", "jalo/x", null],
+      ["admin", "app.delete", "jalo/x", null],
     ]);
     expect(JSON.stringify(entries)).not.toMatch(/keel_[\w-]{20}/);
   });
 
-  it("checks lock and unlink against the service's own grants", async () => {
-    const { store, clock, scope, service, as } = await setup();
+  it("checks lock and unlink against the scope's own grants", async () => {
+    const { store, clock, app, scope, as } = await setup();
     const prodOnly = await as("deployer", [["konectus-io/app", "*-prod", "maintainer"]]);
-    await lockServiceAs(store, prodOnly, scope.id, service.id, "release", clock.now());
-    const stg = await linkServiceAs(
+    await lockScopeAs(store, prodOnly, app.id, scope.id, "release", clock.now());
+    const stg = await linkScopeAs(
       store,
       await as("admin"),
-      scope.id,
+      app.id,
       { alias: "api-stg", dokployUrl: DOKPLOY_URL },
       clock.now(),
     );
-    expect(await statusOf(() => lockServiceAs(store, prodOnly, scope.id, stg.id, "x", clock.now()))).toBe(403);
+    expect(await statusOf(() => lockScopeAs(store, prodOnly, app.id, stg.id, "x", clock.now()))).toBe(403);
     // Linking is checked on the whole repo, where the grant doesn't apply.
     expect(
       await statusOf(() =>
-        linkServiceAs(store, prodOnly, scope.id, { alias: "web-prod", dokployUrl: DOKPLOY_URL }, clock.now()),
+        linkScopeAs(store, prodOnly, app.id, { alias: "web-prod", dokployUrl: DOKPLOY_URL }, clock.now()),
       ),
     ).toBe(403);
   });

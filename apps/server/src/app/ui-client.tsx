@@ -3,10 +3,10 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { type ReactNode, useState } from "react";
-import { IconAudit, IconCheck, IconCopy, IconKey, IconScopes, IconUsers } from "./icons";
+import { IconApps, IconAudit, IconCheck, IconCopy, IconKey, IconUsers } from "./icons";
 
 const NAV = [
-  { href: "/scopes", label: "Scopes", icon: <IconScopes /> },
+  { href: "/apps", label: "Apps", icon: <IconApps /> },
   { href: "/tokens", label: "Tokens de API", icon: <IconKey /> },
   { href: "/members", label: "Miembros", icon: <IconUsers />, admin: true },
   { href: "/audit", label: "Auditoría", icon: <IconAudit />, admin: true },

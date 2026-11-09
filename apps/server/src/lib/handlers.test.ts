@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { parseGithubRepoUrl } from "./apps";
 import { recordCiResult, requestDeploy } from "./deploys";
 import { handlers } from "./handlers";
-import { parseGithubRepoUrl } from "./scopes";
 import { apiRequest, createTestContext, SHA } from "./testing";
 
 const post = (body: unknown, headers: Record<string, string> = {}) =>
@@ -15,22 +15,22 @@ describe("API handlers", () => {
   it("runs the CLI + Action flow over HTTP", async () => {
     const { ctx, ciToken } = await createTestContext();
 
-    const services = await handlers.listServices(ctx, apiRequest(), "konectus-io", "app");
-    expect(await services.json()).toMatchObject({
+    const scopes = await handlers.listScopes(ctx, apiRequest(), "konectus-io", "app");
+    expect(await scopes.json()).toMatchObject({
       repo: "konectus-io/app",
-      services: [
+      scopes: [
         { alias: "api-prod", kind: "application", dokployName: "DEV/production/app", current: null, last: null },
       ],
     });
 
     const created = await handlers.createDeploy(
       ctx,
-      post({ repo: "konectus-io/app", tag: "v1.0.0", sha: SHA, service: "api-prod" }),
+      post({ repo: "konectus-io/app", tag: "v1.0.0", sha: SHA, scope: "api-prod" }),
     );
     expect(created.status).toBe(202);
     const deploy = await created.json();
-    expect(deploy).toMatchObject({ status: "waiting_ci", service: "api-prod" });
-    expect(deploy).not.toHaveProperty("serviceId");
+    expect(deploy).toMatchObject({ status: "waiting_ci", scope: "api-prod" });
+    expect(deploy).not.toHaveProperty("scopeId");
 
     const ci = await handlers.ciResult(
       ctx,
@@ -85,10 +85,10 @@ describe("parseGithubRepoUrl", () => {
   });
 });
 
-describe("GET /repos/:owner/:name/services", () => {
-  it("adds each service's Dokploy name, current version and last deploy", async () => {
+describe("GET /repos/:owner/:name/scopes", () => {
+  it("adds each scope's Dokploy name, current version and last deploy", async () => {
     const { ctx, store, worker, dokploy, clock, ciToken } = await createTestContext();
-    const deployReq = { repo: "konectus-io/app", tag: "v1.0.0", sha: SHA, service: "api-prod" };
+    const deployReq = { repo: "konectus-io/app", tag: "v1.0.0", sha: SHA, scope: "api-prod" };
     await recordCiResult(store, { ...deployReq, status: "success" }, ciToken, clock.now());
     await requestDeploy(store, deployReq, clock.now());
     await worker.tick();
@@ -99,8 +99,8 @@ describe("GET /repos/:owner/:name/services", () => {
     await recordCiResult(store, { ...failing, status: "failure" }, ciToken, clock.now());
     await requestDeploy(store, failing, clock.now());
 
-    const body = await (await handlers.listServices(ctx, apiRequest(), "konectus-io", "app")).json();
-    expect(body.services[0]).toMatchObject({
+    const body = await (await handlers.listScopes(ctx, apiRequest(), "konectus-io", "app")).json();
+    expect(body.scopes[0]).toMatchObject({
       alias: "api-prod",
       dokployName: "DEV/production/app",
       current: { tag: "v1.0.0", status: "deployed" },
@@ -108,10 +108,10 @@ describe("GET /repos/:owner/:name/services", () => {
     });
   });
 
-  it("still lists a service when Dokploy can't describe it", async () => {
+  it("still lists a scope when Dokploy can't describe it", async () => {
     const { ctx, dokploy } = await createTestContext();
     dokploy.names.clear();
-    const body = await (await handlers.listServices(ctx, apiRequest(), "konectus-io", "app")).json();
-    expect(body.services[0]).toMatchObject({ alias: "api-prod", dokployName: null, dokployId: "app123" });
+    const body = await (await handlers.listScopes(ctx, apiRequest(), "konectus-io", "app")).json();
+    expect(body.scopes[0]).toMatchObject({ alias: "api-prod", dokployName: null, dokployId: "app123" });
   });
 });

@@ -32,7 +32,7 @@ export async function login(_state: LoginState, form: FormData): Promise<LoginSt
     return { error: email ? "Email o contraseña incorrectos." : "Contraseña incorrecta.", email };
   }
   await startSession(member.id);
-  redirect("/scopes");
+  redirect("/apps");
 }
 
 export async function logout(): Promise<void> {

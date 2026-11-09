@@ -11,9 +11,9 @@ import {
 } from "./roles";
 import type { Member } from "./store";
 
-const grant = (repoPattern: string, servicePattern: string, role: Role): GrantRule => ({
+const grant = (repoPattern: string, scopePattern: string, role: Role): GrantRule => ({
   repoPattern,
-  servicePattern,
+  scopePattern,
   role,
 });
 
@@ -39,10 +39,10 @@ describe("effectiveRole", () => {
   });
 
   it("lets a grant lower or raise the role", () => {
-    expect(effectiveRole("deployer", [grant("konectus-io/*", "prod*", "viewer")], { ...app, service: "prod" })).toBe(
+    expect(effectiveRole("deployer", [grant("konectus-io/*", "prod*", "viewer")], { ...app, scope: "prod" })).toBe(
       "viewer",
     );
-    expect(effectiveRole("viewer", [grant("konectus-io/app", "*", "maintainer")], { ...app, service: "stg" })).toBe(
+    expect(effectiveRole("viewer", [grant("konectus-io/app", "*", "maintainer")], { ...app, scope: "stg" })).toBe(
       "maintainer",
     );
   });
@@ -54,25 +54,25 @@ describe("effectiveRole", () => {
       grant("konectus-io/app", "*", "deployer"),
       grant("konectus-io/app", "prod*", "publisher"),
     ];
-    expect(effectiveRole("viewer", grants, { ...app, service: "prod-eu" })).toBe("publisher");
-    expect(effectiveRole("viewer", grants, { ...app, service: "stg" })).toBe("deployer");
-    expect(effectiveRole("viewer", grants, { repo: "konectus-io/web", service: "stg" })).toBe("viewer");
+    expect(effectiveRole("viewer", grants, { ...app, scope: "prod-eu" })).toBe("publisher");
+    expect(effectiveRole("viewer", grants, { ...app, scope: "stg" })).toBe("deployer");
+    expect(effectiveRole("viewer", grants, { repo: "konectus-io/web", scope: "stg" })).toBe("viewer");
     expect(effectiveRole("viewer", grants, { repo: "jalo/web" })).toBe("admin");
 
     // Same literal characters: fewer * wins.
     expect(compareSpecificity(grant("ab*", "*", "viewer"), grant("a*b*", "*", "viewer"))).toBeLessThan(0);
     // A full tie: the lower role wins.
     const tie = [grant("konectus-io/a*", "*", "maintainer"), grant("konectus-io/*", "a*", "viewer")];
-    expect(effectiveRole("deployer", tie, { ...app, service: "api" })).toBe("viewer");
+    expect(effectiveRole("deployer", tie, { ...app, scope: "api" })).toBe("viewer");
     const same = [grant("konectus-io/app", "*", "maintainer"), grant("konectus-io/app", "*", "publisher")];
     expect(effectiveRole("viewer", same, app)).toBe("publisher");
   });
 
   it("never lowers an admin", () => {
-    expect(effectiveRole("admin", [grant("*", "*", "viewer")], { ...app, service: "prod" })).toBe("admin");
+    expect(effectiveRole("admin", [grant("*", "*", "viewer")], { ...app, scope: "prod" })).toBe("admin");
   });
 
-  it("uses only grants for every service when the action has no service", () => {
+  it("uses only grants for every scope when the action has no scope", () => {
     const grants = [grant("konectus-io/app", "prod*", "viewer"), grant("konectus-io/*", "*", "publisher")];
     expect(effectiveRole("deployer", grants, app)).toBe("publisher");
     expect(effectiveRole("deployer", [grant("konectus-io/app", "prod*", "viewer")], app)).toBe("deployer");
@@ -109,7 +109,7 @@ describe("roleOn", () => {
 
 describe("forbidden", () => {
   it("is a 403 that says the role, the action and where", () => {
-    const error = forbidden("viewer", "desplegar", { ...app, service: "api-prod" });
+    const error = forbidden("viewer", "desplegar", { ...app, scope: "api-prod" });
     expect(error.status).toBe(403);
     expect(error.message).toBe(
       "Tu rol (viewer) no permite desplegar en konectus-io/app/api-prod. Pide a un admin de keel que te dé acceso.",
@@ -122,9 +122,9 @@ describe("normalizeGrantPatterns", () => {
   it("lowercases, defaults empty patterns to * and rejects invalid ones", () => {
     expect(normalizeGrantPatterns(" Konectus-IO/* ", "")).toEqual({
       repoPattern: "konectus-io/*",
-      servicePattern: "*",
+      scopePattern: "*",
     });
     expect(() => normalizeGrantPatterns("a b", "*")).toThrow(/repo inválido/);
-    expect(() => normalizeGrantPatterns("*", "prod/x")).toThrow(/servicio inválido/);
+    expect(() => normalizeGrantPatterns("*", "prod/x")).toThrow(/scope inválido/);
   });
 });

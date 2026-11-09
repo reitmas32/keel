@@ -1,6 +1,6 @@
 import { DEFAULT_TAG_VARIABLE, parseDokployServiceUrl } from "./dokploy";
 import { ApiError } from "./errors";
-import type { Scope, Service, Store } from "./store";
+import type { App, Scope, Store } from "./store";
 import { generateCiToken } from "./tokens";
 
 /** Accepts `https://github.com/o/r(.git)`, `git@github.com:o/r.git` or `o/r` and returns `o/r`. */
@@ -13,32 +13,32 @@ export function parseGithubRepoUrl(input: string): string | undefined {
   return match ? `${match[1]}/${match[2]}`.toLowerCase() : undefined;
 }
 
-/** Creates a scope for a repo and returns the plaintext CI token, which is shown only once. */
-export async function createScope(store: Store, input: { name: string; repoUrl: string }, now: Date) {
+/** Creates an app for a repo and returns the plaintext CI token, which is shown only once. */
+export async function createApp(store: Store, input: { name: string; repoUrl: string }, now: Date) {
   const repo = parseGithubRepoUrl(input.repoUrl);
   if (!repo) throw new ApiError(400, `URL de repo de GitHub inválida: ${input.repoUrl}`);
-  if (await store.getScopeByRepo(repo)) throw new ApiError(409, `El repo ${repo} ya está vinculado a un scope.`);
+  if (await store.getAppByRepo(repo)) throw new ApiError(409, `El repo ${repo} ya está vinculado a una app.`);
   const { token, hash } = generateCiToken();
-  const scope = await store.createScope({ name: input.name.trim() || repo, repo, ciTokenHash: hash }, now);
-  return { scope, ciToken: token };
+  const app = await store.createApp({ name: input.name.trim() || repo, repo, ciTokenHash: hash }, now);
+  return { app, ciToken: token };
 }
 
-export async function rotateCiToken(store: Store, scopeId: string): Promise<string> {
-  if (!(await store.getScope(scopeId))) throw new ApiError(404, "Scope no encontrado.");
+export async function rotateCiToken(store: Store, appId: string): Promise<string> {
+  if (!(await store.getApp(appId))) throw new ApiError(404, "App no encontrada.");
   const { token, hash } = generateCiToken();
-  await store.setCiTokenHash(scopeId, hash);
+  await store.setCiTokenHash(appId, hash);
   return token;
 }
 
 const ALIAS_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-export async function addService(
+export async function addScope(
   store: Store,
-  scope: Scope,
+  app: App,
   input: { alias: string; dokployUrl: string; tagVariable?: string },
   now: Date,
-): Promise<Service> {
+): Promise<Scope> {
   const alias = input.alias.trim().toLowerCase();
   if (!ALIAS_PATTERN.test(alias)) {
     throw new ApiError(400, "El alias solo puede tener minúsculas, números y guiones (p.ej. api-prod).");
@@ -58,12 +58,12 @@ export async function addService(
       throw new ApiError(400, `Variable de tag inválida: ${tagVariable}. Usa un nombre de variable como DOCKER_TAG.`);
     }
   }
-  if (await store.getServiceByAlias(scope.id, alias)) {
-    throw new ApiError(409, `Ya existe un servicio con alias ${alias} en ${scope.repo}.`);
+  if (await store.getScopeByAlias(app.id, alias)) {
+    throw new ApiError(409, `Ya existe un scope con alias ${alias} en ${app.repo}.`);
   }
-  return store.addService(
+  return store.addScope(
     {
-      scopeId: scope.id,
+      appId: app.id,
       alias,
       dokployUrl: input.dokployUrl.trim(),
       kind: parsed.kind,

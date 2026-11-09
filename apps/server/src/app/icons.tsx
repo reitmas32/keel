@@ -29,7 +29,7 @@ export function KeelMark() {
   );
 }
 
-export const IconScopes = () => (
+export const IconApps = () => (
   <Icon>
     <path d="M12 3 3 7.5l9 4.5 9-4.5z" />
     <path d="m3 12 9 4.5 9-4.5" />

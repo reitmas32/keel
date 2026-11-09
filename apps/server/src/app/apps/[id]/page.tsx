@@ -8,64 +8,64 @@ import { IconExternal, IconLock, IconShield, IconTrash, IconUnlock } from "../..
 import { requireMember } from "../../session";
 import { Card, deployTone, Page, PageHeader, RoleBadge, StatusBadge, versionTone } from "../../ui";
 import { ConfirmButton } from "../../ui-client";
-import { deleteScopeAction, deleteServiceAction, unlockServiceAction } from "../actions";
-import { AddServiceForm, LockServiceButton, RotateTokenForm } from "../components";
+import { deleteAppAction, unlinkScopeAction, unlockScopeAction } from "../actions";
+import { AddScopeForm, LockScopeButton, RotateTokenForm } from "../components";
 
 const none = <span className="muted">—</span>;
 
-export default async function ScopePage({ params }: { params: Promise<{ id: string }> }) {
+export default async function AppPage({ params }: { params: Promise<{ id: string }> }) {
   const viewer = await requireMember();
   const { store } = await getContext();
-  const scope = await store.getScope((await params).id);
-  if (!scope) notFound();
+  const app = await store.getApp((await params).id);
+  if (!app) notFound();
 
-  // What the member can do here: the scope's role decides linking, the CI token and deleting; each service's role
+  // What the member can do here: the app's role decides linking, the CI token and deleting; each scope's role
   // decides locking and unlinking it (a grant like `prod*` can differ from the rest of the repo).
-  const scopeRole = roleOn(viewer, { repo: scope.repo });
-  const canMaintain = roleAtLeast(scopeRole, "maintainer");
-  const canDelete = roleAtLeast(scopeRole, "admin");
-  const services = await Promise.all(
-    (await store.listServices(scope.id)).map(async (service) => ({
-      ...service,
-      lock: await store.getServiceLock(service.id),
-      canMaintain: roleAtLeast(roleOn(viewer, { repo: scope.repo, service: service.alias }), "maintainer"),
+  const appRole = roleOn(viewer, { repo: app.repo });
+  const canMaintain = roleAtLeast(appRole, "maintainer");
+  const canDelete = roleAtLeast(appRole, "admin");
+  const scopes = await Promise.all(
+    (await store.listScopes(app.id)).map(async (scope) => ({
+      ...scope,
+      lock: await store.getScopeLock(scope.id),
+      canMaintain: roleAtLeast(roleOn(viewer, { repo: app.repo, scope: scope.alias }), "maintainer"),
     })),
   );
-  const deploys = await store.listDeploys({ repo: scope.repo }, { limit: 20, newestFirst: true });
-  const versions = await store.listVersions(scope.repo, { limit: 20 });
+  const deploys = await store.listDeploys({ repo: app.repo }, { limit: 20, newestFirst: true });
+  const versions = await store.listVersions(app.repo, { limit: 20 });
   const h = await headers();
   const apiUrl = `${h.get("x-forwarded-proto") ?? "http"}://${h.get("host")}/api`;
 
   return (
-    <Page crumbs={[{ label: "Scopes", href: "/scopes" }, { label: scope.name }]}>
+    <Page crumbs={[{ label: "Apps", href: "/apps" }, { label: app.name }]}>
       <PageHeader
-        title={scope.name}
+        title={app.name}
         description={
-          <a className="link" href={`https://github.com/${scope.repo}`} target="_blank" rel="noreferrer">
-            github.com/{scope.repo}
+          <a className="link" href={`https://github.com/${app.repo}`} target="_blank" rel="noreferrer">
+            github.com/{app.repo}
           </a>
         }
         actions={
-          <span className="role-hint" title="Tu rol efectivo en este scope, con tus permisos por repo">
+          <span className="role-hint" title="Tu rol efectivo en esta app, con tus permisos por repo">
             <IconShield />
-            Tu rol aquí <RoleBadge role={scopeRole} />
+            Tu rol aquí <RoleBadge role={appRole} />
           </span>
         }
       />
 
       <div className="stack">
         <Card
-          title="Servicios de Dokploy"
+          title="Scopes"
           description={
             <>
-              El alias es lo que eliges en <code>keel deploy -s</code>. Un servicio bloqueado rechaza los deploys
-              nuevos.
+              Cada scope apunta a un servicio de Dokploy. Su nombre es lo que eliges en <code>keel deploy -s</code>. Un
+              scope bloqueado rechaza los deploys nuevos.
             </>
           }
           footer={
             canMaintain && (
               <div className="stack" style={{ gap: "0.75rem" }}>
-                <AddServiceForm scopeId={scope.id} />
+                <AddScopeForm appId={app.id} />
                 <p className="hint">
                   Copia la URL del servicio desde el dashboard de Dokploy. En un <strong>Application</strong> keel
                   cambia el tag de su imagen Docker. En un <strong>Compose</strong> cambia la variable del tag (por
@@ -79,26 +79,28 @@ export default async function ScopePage({ params }: { params: Promise<{ id: stri
             )
           }
         >
-          {services.length === 0 ? (
-            <p className="empty">Todavía no hay servicios vinculados.</p>
+          {scopes.length === 0 ? (
+            <p className="empty">
+              Todavía no hay scopes. Agrega uno por cada servicio de Dokploy al que despliega esta app.
+            </p>
           ) : (
-            <ul className="service-list">
-              {services.map((service) => (
-                <li key={service.id} className="service-row">
-                  <div className="service-main">
-                    <div className="service-title">
-                      <a href={service.dokployUrl} target="_blank" rel="noreferrer">
-                        {service.alias}
+            <ul className="scope-list">
+              {scopes.map((scope) => (
+                <li key={scope.id} className="scope-row">
+                  <div className="scope-main">
+                    <div className="scope-title">
+                      <a href={scope.dokployUrl} target="_blank" rel="noreferrer">
+                        {scope.alias}
                         <IconExternal />
                       </a>
                       <span className="badge badge-outline">
-                        {service.kind === "compose" ? "Compose" : "Application"}
+                        {scope.kind === "compose" ? "Compose" : "Application"}
                       </span>
                     </div>
                     <span className="muted small">
-                      <code>{service.dokployId}</code> ·{" "}
-                      {service.kind === "compose" ? (
-                        <code>{service.tagVariable}=&lt;versión&gt;</code>
+                      <code>{scope.dokployId}</code> ·{" "}
+                      {scope.kind === "compose" ? (
+                        <code>{scope.tagVariable}=&lt;versión&gt;</code>
                       ) : (
                         <>
                           imagen <code>:&lt;versión&gt;</code>
@@ -107,8 +109,8 @@ export default async function ScopePage({ params }: { params: Promise<{ id: stri
                     </span>
                   </div>
 
-                  <div className="service-lock">
-                    {service.lock ? (
+                  <div className="scope-lock">
+                    {scope.lock ? (
                       <>
                         <span>
                           <StatusBadge tone="running">
@@ -116,9 +118,9 @@ export default async function ScopePage({ params }: { params: Promise<{ id: stri
                             Bloqueado
                           </StatusBadge>
                         </span>
-                        <span className="small">{service.lock.reason}</span>
+                        <span className="small">{scope.lock.reason}</span>
                         <span className="muted small">
-                          por {service.lock.lockedBy ?? "alguien"}, {formatDate(service.lock.createdAt)}
+                          por {scope.lock.lockedBy ?? "alguien"}, {formatDate(scope.lock.createdAt)}
                         </span>
                       </>
                     ) : (
@@ -128,24 +130,27 @@ export default async function ScopePage({ params }: { params: Promise<{ id: stri
                     )}
                   </div>
 
-                  {service.canMaintain && (
-                    <div className="service-actions">
-                      {service.lock ? (
-                        <form action={unlockServiceAction}>
+                  {scope.canMaintain && (
+                    <div className="scope-actions">
+                      {scope.lock ? (
+                        <form action={unlockScopeAction}>
+                          <input type="hidden" name="appId" value={app.id} />
                           <input type="hidden" name="scopeId" value={scope.id} />
-                          <input type="hidden" name="serviceId" value={service.id} />
                           <button type="submit" className="btn btn-outline btn-sm">
                             <IconUnlock />
                             Desbloquear
                           </button>
                         </form>
                       ) : (
-                        <LockServiceButton scopeId={scope.id} serviceId={service.id} alias={service.alias} />
+                        <LockScopeButton appId={app.id} scopeId={scope.id} alias={scope.alias} />
                       )}
-                      <form action={deleteServiceAction}>
+                      <form action={unlinkScopeAction}>
+                        <input type="hidden" name="appId" value={app.id} />
                         <input type="hidden" name="scopeId" value={scope.id} />
-                        <input type="hidden" name="serviceId" value={service.id} />
-                        <ConfirmButton variant="outline" message={`¿Desvincular ${service.alias}?`}>
+                        <ConfirmButton
+                          variant="outline"
+                          message={`¿Desvincular el scope ${scope.alias}? Sus deploys y su bloqueo se borran; el servicio de Dokploy no se toca.`}
+                        >
                           Desvincular
                         </ConfirmButton>
                       </form>
@@ -167,9 +172,9 @@ export default async function ScopePage({ params }: { params: Promise<{ id: stri
           }
         >
           {canMaintain ? (
-            <RotateTokenForm scopeId={scope.id} />
+            <RotateTokenForm appId={app.id} />
           ) : (
-            <p className="hint">Solo un maintainer de este scope puede generar un nuevo token de CI.</p>
+            <p className="hint">Solo un maintainer de esta app puede generar un nuevo token de CI.</p>
           )}
         </Card>
 
@@ -212,7 +217,7 @@ export default async function ScopePage({ params }: { params: Promise<{ id: stri
           )}
         </Card>
 
-        <Card title="Deploys recientes" description="Los 20 más recientes de todos los servicios del scope.">
+        <Card title="Deploys recientes" description="Los 20 más recientes de todos los scopes de la app.">
           {deploys.length === 0 ? (
             <p className="empty">Sin deploys todavía.</p>
           ) : (
@@ -221,7 +226,7 @@ export default async function ScopePage({ params }: { params: Promise<{ id: stri
                 <thead>
                   <tr>
                     <th>Versión</th>
-                    <th>Servicio</th>
+                    <th>Scope</th>
                     <th>Estado</th>
                     <th>Pedido por</th>
                     <th>Creado</th>
@@ -233,7 +238,7 @@ export default async function ScopePage({ params }: { params: Promise<{ id: stri
                       <td>
                         <code>{d.tag}</code>
                       </td>
-                      <td>{d.service}</td>
+                      <td>{d.scope}</td>
                       <td>
                         <StatusBadge tone={deployTone(d.status)}>{d.status}</StatusBadge>
                         {d.error && <div className="sub">{d.error}</div>}
@@ -252,13 +257,13 @@ export default async function ScopePage({ params }: { params: Promise<{ id: stri
           <Card
             className="card-danger"
             title="Zona peligrosa"
-            description="Elimina el scope, sus servicios vinculados y su historial de deploys. No se puede deshacer."
+            description="Elimina la app, sus scopes y su historial de deploys. Los servicios de Dokploy no se tocan. No se puede deshacer."
             action={
-              <form action={deleteScopeAction}>
-                <input type="hidden" name="scopeId" value={scope.id} />
-                <ConfirmButton message={`¿Eliminar el scope ${scope.repo}, sus servicios y su historial de deploys?`}>
+              <form action={deleteAppAction}>
+                <input type="hidden" name="appId" value={app.id} />
+                <ConfirmButton message={`¿Eliminar la app ${app.repo}, sus scopes y su historial de deploys?`}>
                   <IconTrash />
-                  Eliminar scope
+                  Eliminar app
                 </ConfirmButton>
               </form>
             }

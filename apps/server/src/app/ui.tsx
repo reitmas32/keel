@@ -9,7 +9,7 @@ import { NavLinks } from "./ui-client";
 
 export function Brand({ sub }: { sub?: string }) {
   return (
-    <Link href="/scopes" className="brand">
+    <Link href="/apps" className="brand">
       <span className="brand-mark">
         <KeelMark />
       </span>

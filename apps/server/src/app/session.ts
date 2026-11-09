@@ -38,19 +38,19 @@ export async function requireMember(): Promise<Viewer> {
 /**
  * Like requireMember, and also needs `role`: on `target` when given, else as base role (only `admin` needs that:
  * members, audit, everyone's tokens). Throws ApiError 403, which actions turn into a form error; pages pass
- * `{ redirect: true }` to go back to /scopes instead.
+ * `{ redirect: true }` to go back to /apps instead.
  */
 export async function requireRole(
   role: Role,
   target?: Target,
-  { redirect: toScopes = false, action = "hacer esto" }: { redirect?: boolean; action?: string } = {},
+  { redirect: toApps = false, action = "hacer esto" }: { redirect?: boolean; action?: string } = {},
 ): Promise<Viewer> {
   const viewer = await requireMember();
   try {
     if (target) requireRoleOn(viewer, role, action, target);
     else if (role === "admin") requireGlobalAdmin(viewer, action);
   } catch (error) {
-    if (toScopes) redirect("/scopes");
+    if (toApps) redirect("/apps");
     throw error;
   }
   return viewer;

@@ -8,19 +8,19 @@ import {
 } from "@keel/shared";
 import { ApiError } from "./errors";
 import { formatDate } from "./format";
-import type { DeployRecord, Service, ServiceLockRecord, Store } from "./store";
+import type { DeployRecord, Scope, ScopeLockRecord, Store } from "./store";
 import { verifyToken } from "./tokens";
 
 const ciOutcome = (status: CiResultRequest["status"]): DeployStatus =>
   status === "success" ? "ci_passed" : "ci_failed";
 
-/** The 423 a locked service answers to a new deploy. */
-export const lockedMessage = (service: Service, lock: ServiceLockRecord) =>
-  `El servicio ${service.alias} está bloqueado: ${lock.reason} (por ${lock.lockedBy ?? "alguien"}, ${formatDate(lock.createdAt)}). Desbloquéalo con \`keel unlock -s ${service.alias}\`.`;
+/** The 423 a locked scope answers to a new deploy. */
+export const lockedMessage = (scope: Scope, lock: ScopeLockRecord) =>
+  `El scope ${scope.alias} está bloqueado: ${lock.reason} (por ${lock.lockedBy ?? "alguien"}, ${formatDate(lock.createdAt)}). Desbloquéalo con \`keel unlock -s ${scope.alias}\`.`;
 
 /**
  * Queues a deploy. If the Action already reported this SHA (it can finish before `keel deploy` runs),
- * the deploy skips `waiting_ci` and starts from the stored CI outcome. A locked service refuses it with 423;
+ * the deploy skips `waiting_ci` and starts from the stored CI outcome. A locked scope refuses it with 423;
  * deploys already queued keep going.
  */
 export async function requestDeploy(
@@ -29,28 +29,27 @@ export async function requestDeploy(
   now: Date,
   requestedBy: string | null = null,
 ): Promise<DeployRecord> {
-  const scope = await store.getScopeByRepo(req.repo);
-  if (!scope)
-    throw new ApiError(404, `El repo ${req.repo} no está vinculado a ningún scope en esta instancia de keel.`);
+  const app = await store.getAppByRepo(req.repo);
+  if (!app) throw new ApiError(404, `El repo ${req.repo} no está vinculado a ninguna app de keel.`);
 
-  const service = await store.getServiceByAlias(scope.id, req.service);
-  if (!service) {
-    const available = (await store.listServices(scope.id)).map((s) => s.alias);
+  const scope = await store.getScopeByAlias(app.id, req.scope);
+  if (!scope) {
+    const available = (await store.listScopes(app.id)).map((s) => s.alias);
     throw new ApiError(
       404,
-      `El servicio ${req.service} no existe en ${scope.repo}. Disponibles: ${available.join(", ") || "ninguno"}.`,
+      `El scope ${req.scope} no existe en ${app.repo}. Disponibles: ${available.join(", ") || "ninguno"}.`,
     );
   }
 
   return store.transaction(async (tx) => {
     // Waits for a CI result of this repo being applied right now, and keeps two replicas from queuing the same deploy.
-    await tx.lockScope(scope.id);
+    await tx.lockAppRow(app.id);
 
-    const lock = await tx.getServiceLock(service.id);
-    if (lock) throw new ApiError(423, lockedMessage(service, lock));
+    const lock = await tx.getScopeLock(scope.id);
+    if (lock) throw new ApiError(423, lockedMessage(scope, lock));
 
-    // Re-running `keel deploy` for the same commit and service returns the in-flight deploy instead of duplicating it.
-    const inFlight = (await tx.listDeploys({ repo: req.repo, sha: req.sha, serviceId: service.id })).find(
+    // Re-running `keel deploy` for the same commit and scope returns the in-flight deploy instead of duplicating it.
+    const inFlight = (await tx.listDeploys({ repo: req.repo, sha: req.sha, scopeId: scope.id })).find(
       (d) => !isTerminal(d.status),
     );
     if (inFlight) return inFlight;
@@ -62,7 +61,7 @@ export async function requestDeploy(
         repo: req.repo,
         tag: req.tag,
         sha: req.sha,
-        service,
+        scope,
         status,
         requestedBy,
         ...(status === "ci_failed" && { error: `El CI de ${req.tag} terminó con ${ci?.status}.` }),
@@ -79,15 +78,15 @@ export async function recordCiResult(
   token: string | undefined,
   now: Date,
 ): Promise<{ updated: DeployRecord[] }> {
-  const scope = await store.getScopeByRepo(req.repo);
-  const hash = scope && (await store.getCiTokenHash(scope.id));
+  const app = await store.getAppByRepo(req.repo);
+  const hash = app && (await store.getCiTokenHash(app.id));
   // Same response for unknown repo and bad token so the endpoint doesn't reveal which repos exist.
-  if (!scope || !hash || !token || !verifyToken(token, hash)) {
+  if (!app || !hash || !token || !verifyToken(token, hash)) {
     throw new ApiError(401, "Token de CI inválido para este repo.");
   }
 
   return store.transaction(async (tx) => {
-    await tx.lockScope(scope.id);
+    await tx.lockAppRow(app.id);
     await tx.upsertCiResult({ ...req, receivedAt: now.toISOString() });
     await tx.recordVersionCi(
       { repo: req.repo, tag: req.tag, sha: req.sha, status: req.status, ...(req.runUrl && { runUrl: req.runUrl }) },
@@ -111,8 +110,7 @@ export async function recordCiResult(
  * token-signed `ci-result`.
  */
 export async function registerVersion(store: Store, req: RegisterVersionRequest, now: Date): Promise<Version> {
-  const scope = await store.getScopeByRepo(req.repo);
-  if (!scope)
-    throw new ApiError(404, `El repo ${req.repo} no está vinculado a ningún scope en esta instancia de keel.`);
+  const app = await store.getAppByRepo(req.repo);
+  if (!app) throw new ApiError(404, `El repo ${req.repo} no está vinculado a ninguna app de keel.`);
   return store.registerVersion(req, now);
 }

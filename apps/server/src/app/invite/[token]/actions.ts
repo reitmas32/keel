@@ -26,5 +26,5 @@ export async function acceptInviteAction(token: string, _state: InviteState, for
     throw error;
   }
   await startSession(memberId);
-  redirect("/scopes");
+  redirect("/apps");
 }

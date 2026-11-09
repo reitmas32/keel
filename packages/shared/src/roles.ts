@@ -1,10 +1,10 @@
 /**
  * Member roles, lowest to highest. Each one can do everything the ones before it can:
- * - viewer: read scopes, services, versions, deploys and locks;
+ * - viewer: read apps, their scopes, versions, deploys and locks;
  * - publisher: register versions (`POST /api/versions`);
  * - deployer: create deploys (deploy, rollback and promote);
- * - maintainer: lock and unlock services; in the admin, link and unlink services and rotate a scope's CI token;
- * - admin: everything, including members, everyone's tokens, scopes and the audit log.
+ * - maintainer: lock and unlock scopes; in the admin, link and unlink scopes and rotate an app's CI token;
+ * - admin: everything, including members, everyone's tokens, apps and the audit log.
  */
 export const ROLES = ["viewer", "publisher", "deployer", "maintainer", "admin"] as const;
 export type Role = (typeof ROLES)[number];

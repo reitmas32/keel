@@ -19,7 +19,7 @@ const audit = (
   action: string,
   details: Record<string, unknown>,
   now: Date,
-  target: { repo?: string | null; service?: string | null } = {},
+  target: { repo?: string | null; scope?: string | null } = {},
 ) => store.recordAudit({ actor: actor.name, actorMemberId: actor.memberId, action, details, ...target }, now);
 
 function parseRole(value: string): Role {
@@ -179,18 +179,18 @@ export async function addMemberGrant(
   store: Store,
   actor: AuditActor,
   memberId: string,
-  input: { repo: string; service: string; role: string },
+  input: { repo: string; scope: string; role: string },
   now: Date,
 ): Promise<MemberGrant> {
   const member = await getMemberOr404(store, memberId);
-  const { repoPattern, servicePattern } = normalizeGrantPatterns(input.repo, input.service);
+  const { repoPattern, scopePattern } = normalizeGrantPatterns(input.repo, input.scope);
   const role = parseRole(input.role);
-  const grant = await store.addGrant({ memberId, repoPattern, servicePattern, role }, now);
+  const grant = await store.addGrant({ memberId, repoPattern, scopePattern, role }, now);
   await audit(
     store,
     actor,
     "member.grant",
-    { op: "add", memberId, name: member.name, repo: repoPattern, service: servicePattern, role },
+    { op: "add", memberId, name: member.name, repo: repoPattern, scope: scopePattern, role },
     now,
   );
   return grant;
@@ -208,7 +208,7 @@ export async function removeMemberGrant(store: Store, actor: AuditActor, grantId
       op: "remove",
       memberId: grant.memberId,
       repo: grant.repoPattern,
-      service: grant.servicePattern,
+      scope: grant.scopePattern,
       role: grant.role,
     },
     now,

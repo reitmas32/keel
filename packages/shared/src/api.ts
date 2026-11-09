@@ -4,12 +4,31 @@ import { ANONYMOUS_ROLES, ROLES } from "./roles";
 
 export const CI_STATUSES = ["success", "failure", "cancelled"] as const;
 
-export const createDeployRequestSchema = z.object({
-  repo: z.string().min(1),
-  tag: z.string().min(1),
-  sha: z.string().regex(/^[0-9a-f]{7,40}$/),
-  service: z.string().min(1),
-});
+/**
+ * `POST /deploys`. The deploy target is `scope`; clients before v0.7.0 send it as `service`, which is still accepted.
+ * At least one is required, and when both come they must match. Parsing leaves only `scope`.
+ */
+export const createDeployRequestSchema = z
+  .object({
+    repo: z.string().min(1),
+    tag: z.string().min(1),
+    sha: z.string().regex(/^[0-9a-f]{7,40}$/),
+    scope: z.string().min(1).optional(),
+    /** Deprecated: the name of `scope` before v0.7.0. */
+    service: z.string().min(1).optional(),
+  })
+  .superRefine((body, ctx) => {
+    if (body.scope === undefined && body.service === undefined) {
+      ctx.addIssue({ code: "custom", path: ["scope"], message: "falta el scope al que desplegar" });
+    } else if (body.scope !== undefined && body.service !== undefined && body.scope !== body.service) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["service"],
+        message: `no coincide con scope (${body.scope}); manda solo scope`,
+      });
+    }
+  })
+  .transform(({ scope, service, ...rest }) => ({ ...rest, scope: (scope ?? service) as string }));
 export type CreateDeployRequest = z.infer<typeof createDeployRequestSchema>;
 
 export const ciResultRequestSchema = z.object({
@@ -57,6 +76,8 @@ export const deploySchema = z.object({
   repo: z.string(),
   tag: z.string(),
   sha: z.string(),
+  scope: z.string(),
+  /** The same as `scope`, under its name before v0.7.0, for older clients. */
   service: z.string(),
   status: z.enum(DEPLOY_STATUSES),
   error: z.string().nullable(),
@@ -71,42 +92,46 @@ export const deploySchema = z.object({
 });
 export type Deploy = z.infer<typeof deploySchema>;
 
-/** A deploy plus the service details `keel deploys <id>` shows. */
+/** A deploy plus the scope details `keel deploys <id>` shows. */
 export interface DeployDetail extends Deploy {
+  scopeKind: "application" | "compose" | null;
+  /** The same as `scopeKind`, under its name before v0.7.0, for older clients. */
   serviceKind: "application" | "compose" | null;
   tagVariable: string | null;
 }
 
 export const LOCK_REASON_MAX = 500;
 
-/** `keel lock` body: why nobody should deploy the service for now. */
-export const lockServiceRequestSchema = z.object({
+/** `keel lock` body: why nobody should deploy the scope for now. */
+export const lockScopeRequestSchema = z.object({
   reason: z.string().trim().min(1).max(LOCK_REASON_MAX),
 });
-export type LockServiceRequest = z.infer<typeof lockServiceRequestSchema>;
+export type LockScopeRequest = z.infer<typeof lockScopeRequestSchema>;
 
-/** A lock as listed with its service. `lockedBy` is the API token name, or null without a token. */
-export const serviceLockInfoSchema = z.object({
+/** A lock as listed with its scope. `lockedBy` is the API token name, or null without a token. */
+export const scopeLockInfoSchema = z.object({
   reason: z.string(),
   lockedBy: z.string().nullable(),
   createdAt: z.string(),
 });
-export type ServiceLockInfo = z.infer<typeof serviceLockInfoSchema>;
+export type ScopeLockInfo = z.infer<typeof scopeLockInfoSchema>;
 
-/** `PUT /repos/:owner/:name/services/:alias/lock` response. */
-export const serviceLockSchema = serviceLockInfoSchema.extend({ alias: z.string() });
-export type ServiceLock = z.infer<typeof serviceLockSchema>;
+/** `PUT /repos/:owner/:name/scopes/:alias/lock` response. */
+export const scopeLockSchema = scopeLockInfoSchema.extend({ alias: z.string() });
+export type ScopeLock = z.infer<typeof scopeLockSchema>;
 
-/** `DELETE /repos/:owner/:name/services/:alias/lock` response. */
-export const unlockServiceResponseSchema = z.object({ ok: z.literal(true), wasLocked: z.boolean() });
-export type UnlockServiceResponse = z.infer<typeof unlockServiceResponseSchema>;
+/** `DELETE /repos/:owner/:name/scopes/:alias/lock` response. */
+export const unlockScopeResponseSchema = z.object({ ok: z.literal(true), wasLocked: z.boolean() });
+export type UnlockScopeResponse = z.infer<typeof unlockScopeResponseSchema>;
 
 export const API_AUTH_MODES = ["optional", "required"] as const;
 export type ApiAuthMode = (typeof API_AUTH_MODES)[number];
 
-/** A member's grant as `GET /whoami` lists it: `role` on the repos and services matching the glob patterns. */
+/** A member's grant as `GET /whoami` lists it: `role` on the repos and scopes matching the glob patterns. */
 export const whoamiGrantSchema = z.object({
   repo: z.string(),
+  scope: z.string(),
+  /** The same as `scope`, under its name before v0.7.0, for older clients. */
   service: z.string(),
   role: z.enum(ROLES),
 });
@@ -115,7 +140,7 @@ export type WhoamiGrant = z.infer<typeof whoamiGrantSchema>;
 /**
  * `GET /whoami`: who the call runs as and whether this server requires a token. Without a token `name`, `email`
  * and `role` are null and `anonymousRole` says what anonymous calls may do. The fields after `auth` are optional
- * because servers before members (v0.7.0) only send `name` (the token's name) and `auth`.
+ * because servers before members (v0.6.0) only send `name` (the token's name) and `auth`.
  */
 export const whoamiResponseSchema = z.object({
   /** The member's name (the token's name for tokens created before members); null without a token. */
@@ -130,8 +155,8 @@ export const whoamiResponseSchema = z.object({
 });
 export type WhoamiResponse = z.infer<typeof whoamiResponseSchema>;
 
-/** A service of a repo as `keel scopes` shows it. Servers before v0.5.0 only send `alias`. */
-export const serviceSummarySchema = z.object({
+/** A scope of an app as `keel scopes` shows it. Servers before v0.5.0 only send `alias`. */
+export const scopeSummarySchema = z.object({
   alias: z.string(),
   kind: z.enum(["application", "compose"]).optional(),
   tagVariable: z.string().nullable().optional(),
@@ -139,11 +164,11 @@ export const serviceSummarySchema = z.object({
   dokployUrl: z.string().optional(),
   // `project/environment/name` as Dokploy calls it; null when Dokploy didn't answer.
   dokployName: z.string().nullable().optional(),
-  // The newest deploy that reached `deployed`: what the service runs, as far as keel knows.
+  // The newest deploy that reached `deployed`: what the scope runs, as far as keel knows.
   current: deploySchema.nullable().optional(),
   // The newest deploy of any status.
   last: deploySchema.nullable().optional(),
-  // Null when the service can be deployed. Optional: servers before v0.6.0 don't send it.
-  lock: serviceLockInfoSchema.nullable().optional(),
+  // Null when the scope can be deployed. Optional: servers before v0.6.0 don't send it.
+  lock: scopeLockInfoSchema.nullable().optional(),
 });
-export type ServiceSummary = z.infer<typeof serviceSummarySchema>;
+export type ScopeSummary = z.infer<typeof scopeSummarySchema>;

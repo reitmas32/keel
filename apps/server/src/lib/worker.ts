@@ -1,5 +1,5 @@
 import type { DokployClient, DokployDeploymentStatus, DokployTarget } from "./dokploy";
-import type { DeployRecord, Service, Store } from "./store";
+import type { DeployRecord, Scope, Store } from "./store";
 
 export interface WorkerOptions {
   /** How long a deploy may sit in `waiting_ci` before it expires. */
@@ -12,10 +12,10 @@ export interface WorkerOptions {
 
 const minutes = (n: number) => n * 60_000;
 
-const targetOf = (service: Service): DokployTarget => ({
-  kind: service.kind,
-  id: service.dokployId,
-  tagVariable: service.tagVariable,
+const targetOf = (scope: Scope): DokployTarget => ({
+  kind: scope.kind,
+  id: scope.dokployId,
+  tagVariable: scope.tagVariable,
 });
 
 /** Advances queued deploys. `tick()` is idempotent and safe to call on an interval. */
@@ -38,7 +38,7 @@ export class DeployWorker {
     this.running = true;
     try {
       await this.expireWaiting();
-      // Check first so a finished deploy frees its service for the next queued one in the same tick.
+      // Check first so a finished deploy frees its scope for the next queued one in the same tick.
       await this.checkDeploying();
       await this.startPassed();
     } finally {
@@ -66,27 +66,27 @@ export class DeployWorker {
   }
 
   private async startPassed(): Promise<void> {
-    // One deploy at a time per service, oldest first; the rest wait for the next tick.
-    const busy = new Set((await this.store.listDeploys({ status: "deploying" })).map((d) => d.serviceId));
+    // One deploy at a time per scope, oldest first; the rest wait for the next tick.
+    const busy = new Set((await this.store.listDeploys({ status: "deploying" })).map((d) => d.scopeId));
     for (const d of await this.store.listDeploys({ status: "ci_passed" })) {
-      if (busy.has(d.serviceId)) continue;
-      busy.add(d.serviceId);
+      if (busy.has(d.scopeId)) continue;
+      busy.add(d.scopeId);
       await this.start(d);
     }
   }
 
   private async start(d: DeployRecord): Promise<void> {
-    const service = await this.store.getService(d.serviceId);
+    const scope = await this.store.getScope(d.scopeId);
     const startedAt = this.now();
-    // Only the replica that claims the deploy calls Dokploy, and never while another deploy of the service runs.
-    if (!(await this.store.claimDeploy(d.id, d.serviceId, startedAt))) return;
-    if (!service) {
-      await this.fail(d, "El servicio ya no existe.");
+    // Only the replica that claims the deploy calls Dokploy, and never while another deploy of the scope runs.
+    if (!(await this.store.claimDeploy(d.id, d.scopeId, startedAt))) return;
+    if (!scope) {
+      await this.fail(d, "El scope ya no existe.");
       return;
     }
     try {
-      const change = await this.dokploy.deploy(targetOf(service), d.tag);
-      this.log(`deploy ${d.id}: ${service.alias} → ${change}`);
+      const change = await this.dokploy.deploy(targetOf(scope), d.tag);
+      this.log(`deploy ${d.id}: ${scope.alias} → ${change}`);
     } catch (error) {
       await this.fail(d, (error as Error).message);
     }
@@ -94,16 +94,16 @@ export class DeployWorker {
 
   private async checkDeploying(): Promise<void> {
     for (const d of await this.store.listDeploys({ status: "deploying" })) {
-      const service = await this.store.getService(d.serviceId);
+      const scope = await this.store.getScope(d.scopeId);
       const startedAt = new Date(d.deployStartedAt ?? d.updatedAt);
-      if (!service) {
-        await this.fail(d, "El servicio ya no existe.");
+      if (!scope) {
+        await this.fail(d, "El scope ya no existe.");
         continue;
       }
       let status: DokployDeploymentStatus;
       let message: string | undefined;
       try {
-        ({ status, message } = await this.dokploy.latestDeploymentStatus(targetOf(service), startedAt));
+        ({ status, message } = await this.dokploy.latestDeploymentStatus(targetOf(scope), startedAt));
       } catch (error) {
         // Transient: keep polling until the timeout below decides.
         this.log(`deploy ${d.id}: no se pudo consultar Dokploy: ${(error as Error).message}`);
@@ -112,7 +112,10 @@ export class DeployWorker {
       if (status === "done") {
         if (await this.store.transition(d.id, "deployed", this.now())) this.log(`deploy ${d.id} completado`);
       } else if (status === "error") {
-        await this.fail(d, message || "Dokploy reportó un error en el deployment. Revisa los logs del servicio.");
+        await this.fail(
+          d,
+          message || "Dokploy reportó un error en el deployment. Revisa los logs del servicio en Dokploy.",
+        );
       } else if (this.now().getTime() - startedAt.getTime() > minutes(this.options.deployTimeoutMinutes)) {
         await this.fail(d, `Dokploy no terminó el deployment en ${this.options.deployTimeoutMinutes} min.`);
       }

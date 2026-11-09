@@ -75,7 +75,7 @@ describe("versions", () => {
     expect(await store.getVersion("konectus-io/app", "v1.4.0")).toBeUndefined();
   });
 
-  it("rejects registering a version for a repo without a scope", async () => {
+  it("rejects registering a version for a repo without an app", async () => {
     const { store, clock } = await createTestContext();
     await expect(registerVersion(store, { ...register(), repo: "other/repo" }, clock.now())).rejects.toThrow(
       /no está vinculado/,
