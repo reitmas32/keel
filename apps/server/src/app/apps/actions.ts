@@ -65,7 +65,7 @@ export async function addScopeAction(appId: string, _state: FormState, form: For
       { alias: field(form, "alias"), dokployUrl: field(form, "dokployUrl"), tagVariable: field(form, "tagVariable") },
       now(),
     );
-    revalidatePath(`/apps/${appId}`);
+    revalidatePath(`/apps/${appId}`, "layout");
     return {};
   });
 }
@@ -86,7 +86,7 @@ export async function lockScopeAction(
   return attempt(async (viewer) => {
     const { store, now } = await getContext();
     await lockScopeAs(store, viewer, appId, scopeId, field(form, "reason"), now());
-    revalidatePath(`/apps/${appId}`);
+    revalidatePath(`/apps/${appId}`, "layout");
     return { ok: true };
   });
 }
@@ -99,7 +99,7 @@ export async function unlockScopeAction(form: FormData): Promise<void> {
   const appId = field(form, "appId");
   const { store, now } = await getContext();
   await unlockScopeAs(store, viewer, appId, field(form, "scopeId"), now());
-  revalidatePath(`/apps/${appId}`);
+  revalidatePath(`/apps/${appId}`, "layout");
 }
 
 export async function unlinkScopeAction(form: FormData): Promise<void> {
@@ -107,7 +107,7 @@ export async function unlinkScopeAction(form: FormData): Promise<void> {
   const appId = field(form, "appId");
   const { store, now } = await getContext();
   await unlinkScopeAs(store, viewer, appId, field(form, "scopeId"), now());
-  revalidatePath(`/apps/${appId}`);
+  revalidatePath(`/apps/${appId}`, "layout");
 }
 
 export async function deleteAppAction(form: FormData): Promise<void> {

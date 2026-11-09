@@ -3,7 +3,18 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { type ReactNode, useState } from "react";
-import { IconApps, IconAudit, IconCheck, IconCopy, IconKey, IconUsers } from "./icons";
+import {
+  IconApps,
+  IconAudit,
+  IconCheck,
+  IconCopy,
+  IconKey,
+  IconLayers,
+  IconRocket,
+  IconSettings,
+  IconTag,
+  IconUsers,
+} from "./icons";
 
 const NAV = [
   { href: "/apps", label: "Apps", icon: <IconApps /> },
@@ -29,6 +40,48 @@ export function NavLinks({ admin }: { admin: boolean }) {
         );
       })}
     </ul>
+  );
+}
+
+export const APP_SECTIONS = [
+  { slug: "scopes", label: "Scopes", icon: <IconLayers /> },
+  { slug: "versions", label: "Versiones", icon: <IconTag /> },
+  { slug: "deploys", label: "Deploys", icon: <IconRocket /> },
+  { slug: "settings", label: "Configuración", icon: <IconSettings /> },
+] as const;
+
+export type AppSection = (typeof APP_SECTIONS)[number]["slug"];
+
+/**
+ * While an app is open (`/apps/<id>/…`), a sidebar group with its sections, the way Dokploy shows a project's
+ * services. The app's name comes from the server; the id from the URL.
+ */
+export function AppNav({ apps }: { apps: { id: string; name: string }[] }) {
+  const pathname = usePathname();
+  const match = pathname.match(/^\/apps\/([^/]+)(?:\/([^/]+))?/);
+  const app = match && apps.find((a) => a.id === match[1]);
+  if (!app) return null;
+  const current = match?.[2] ?? "scopes";
+  return (
+    <nav className="sidebar-group sidebar-app" aria-label={`Secciones de ${app.name}`}>
+      <div className="sidebar-label" title={app.name}>
+        {app.name}
+      </div>
+      <ul className="sidebar-nav">
+        {APP_SECTIONS.map((section) => (
+          <li key={section.slug}>
+            <Link
+              href={`/apps/${app.id}/${section.slug}`}
+              className="nav-item"
+              aria-current={current === section.slug ? "page" : undefined}
+            >
+              {section.icon}
+              {section.label}
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </nav>
   );
 }
 

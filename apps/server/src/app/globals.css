@@ -1030,6 +1030,69 @@ a.badge:hover {
   font-size: 1.25rem;
 }
 
+/* ---------- the open app's sections in the sidebar ---------- */
+
+.sidebar-app {
+  border-top: 1px solid hsl(var(--sidebar-border));
+}
+
+.sidebar-app .sidebar-label {
+  display: block;
+  line-height: 2rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: hsl(var(--sidebar-foreground));
+}
+
+/* ---------- app settings and filters ---------- */
+
+.meta-list {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.5rem 1.5rem;
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+.meta-list dt {
+  color: hsl(var(--muted-foreground));
+}
+
+.meta-list dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  height: 1.75rem;
+  padding: 0 0.75rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: 999px;
+  font-size: 0.8125rem;
+  color: hsl(var(--muted-foreground));
+  text-decoration: none;
+}
+
+.chip:hover {
+  background: hsl(var(--accent));
+  color: hsl(var(--foreground));
+}
+
+.chip[aria-current="page"] {
+  background: hsl(var(--primary));
+  border-color: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+}
+
 /* ---------- narrow screens: the sidebar becomes a top bar ---------- */
 
 @media (max-width: 767px) {
@@ -1052,6 +1115,12 @@ a.badge:hover {
   .brand-sub,
   .sidebar-label {
     display: none;
+  }
+
+  .sidebar-group.sidebar-app {
+    border-top: 0;
+    order: 4;
+    padding-top: 0;
   }
 
   .sidebar-group {
