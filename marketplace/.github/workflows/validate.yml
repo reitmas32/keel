@@ -1,0 +1,53 @@
+name: validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  marketplace:
+    name: manifests, skills and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # PyYAML reads frontmatter the way the agents do; without it the
+      # validator falls back to an approximate reader.
+      - name: Install PyYAML
+        run: pip install pyyaml
+
+      - name: Validate the marketplace
+        run: python3 scripts/validate.py
+
+      - name: Test the skills' scripts
+        run: python3 -m unittest discover -v tests
+
+  claude:
+    name: claude plugin validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Claude Code
+        run: npm install --global @anthropic-ai/claude-code
+
+      - name: Validate as Claude Code reads it
+        run: |
+          claude plugin validate . --strict
+          for plugin in plugins/*/; do
+            claude plugin validate "$plugin" --strict
+          done

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "keel-docs",
+  "version": "0.1.0",
+  "description": "Write, extend and audit docs/ so it builds with `keel docs` and follows the Foundathyon documentation standard.",
+  "author": {
+    "name": "Foundathyon",
+    "url": "https://github.com/fundathyon"
+  },
+  "repository": "https://github.com/fundathyon/keel-ai-marketplace",
+  "keywords": ["documentation", "docs", "keel", "markdown"]
+}
