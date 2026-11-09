@@ -18,11 +18,21 @@ Estados de un deploy: `waiting_ci → ci_passed → deploying → deployed`, con
 
 ## Instalar la CLI
 
-Requiere Node 22.5 o superior y git.
+Un solo binario (Rust) para Linux, macOS y Windows, en x86_64 y arm64. Solo necesita git.
 
 ```bash
-npm i -g https://github.com/reitmas32/keel/releases/latest/download/keel-cli.tgz
+# Linux y macOS (instala en ~/.local/bin; KEEL_INSTALL_DIR para otro lugar)
+curl -fsSL https://github.com/reitmas32/keel/releases/latest/download/install.sh | sh
 ```
+
+```powershell
+# Windows (instala en %LOCALAPPDATA%\keel\bin y lo agrega al PATH del usuario)
+irm https://github.com/reitmas32/keel/releases/latest/download/install.ps1 | iex
+```
+
+Los dos scripts comprueban el binario contra `SHA256SUMS` de la release. También puedes bajar `keel-<target>` de la [última release](https://github.com/reitmas32/keel/releases/latest) o compilarlo con `cargo install --path apps/cli`. `keel update` reemplaza el binario por el de la última release, también comprobando su suma.
+
+La CLI de TypeScript (`keel-cli.tgz` por npm) queda retirada; la configuración de `~/.keel` (orgs y organización activa) sigue sirviendo igual.
 
 ## Uso de la CLI
 
@@ -41,9 +51,35 @@ keel scopes                      # scopes del repo: su servicio en Dokploy y qu�
 keel deploys                     # deploys del repo: estado, cuándo terminaron y por qué fallaron
 keel deploys -s staging -n 50    # solo un servicio, hasta 50
 keel deploys d3f1                # detalle y línea de tiempo de un deploy (id o sus primeros caracteres)
+keel deploys d3f1 --log          # además, el log de build/deploy de Dokploy de ese deploy (redactado)
+keel deploy -r -s api-prod --wait  # espera a que termine; sale con 28 si falla
+keel status                      # scopes, versión actual, último deploy, CI y estado en Dokploy
+keel logs -s api-prod -f         # logs del scope en vivo, redactados
+keel context                     # (alias: keel remote) org, repo y Dokploy de esta carpeta
 keel update                      # instala la última versión de la CLI publicada en GitHub
 keel update --check              # solo avisa si hay una versión nueva
 ```
+
+Todos los comandos aceptan `--json`. Sin terminal (un script, un agente), los errores salen como JSON con `kind` y un código de salida estable, y lo que normalmente se pregunta hay que pasarlo con opciones (`-s`, `-v`/`-l`/`-r`, `-y`).
+
+### Operar Dokploy directamente
+
+La misma CLI opera Dokploy con tu API key, para lo que no es desplegar una versión: leer logs, env, Compose, dominios y bases, y cambiar infraestructura con planes revisados. Viene de [dokploy-agent](https://github.com/reitmas32/agentic-dokploy): las lecturas nunca muestran secretos y todo cambio es un plan que caduca y se aplica una sola vez con su token.
+
+```bash
+keel get services                               # apps, Composes y bases con su estado
+keel get logs shop/production/api -f            # logs en vivo, redactados
+keel get env production/api                     # claves y largo de cada valor, nunca valores
+keel compose diff production/docs --file docs.yaml  # diff saneado contra el remoto
+keel plan env-patch production/api --set SENTRY_DSN --unset OLD_FLAG --redeploy
+keel apply --plan <id> --approve <token>        # una persona revisó el plan
+```
+
+La configuración vive en `~/.keel/dokploy/` (`instances/<org>.env` con `DOKPLOY_URL` y `DOKPLOY_API_KEY`, permisos 600). Si ya usabas dokploy-agent, keel lee `~/.config/dokploy-agent` hasta que corras `keel config migrate`. Sin esa configuración, los comandos de versiones y deploys funcionan igual.
+
+Un servicio de Dokploy que es un scope de keel se despliega solo con keel: `keel plan deploy|redeploy` sobre él se rechaza (`keel_managed`) y un cambio de env no puede tocar su variable del tag. Así ningún deploy se salta el CI ni deja desactualizado `keel scopes` o `keel rollback`.
+
+La referencia completa de comandos está en `keel --help` y `keel <comando> --help`.
 
 `keel deploys` muestra, del más reciente al más antiguo:
 
@@ -213,10 +249,15 @@ pnpm test        # vitest en todos los paquetes
 pnpm typecheck
 pnpm lint
 pnpm build
+
+# CLI (Rust)
+cargo test
+cargo clippy --all-targets -- -D warnings
+cargo run -p keel -- --help
 ```
 
 ```
-apps/cli        CLI keel (TypeScript, empaquetada con tsup)
+apps/cli        CLI keel (Rust): versiones y deploys vía keel, operación de Dokploy
 apps/server     Next.js: API (route handlers), admin y worker (instrumentation.ts), SQLite con node:sqlite
 packages/shared Esquemas de la API y máquina de estados del deploy
 deploy/         docker-compose de ejemplo para Dokploy
@@ -227,7 +268,7 @@ Para el servidor en local, copia `apps/server/.env.example` a `apps/server/.env`
 
 ### Publicar una versión de keel
 
-Push de un tag `vX.Y.Z` → [`release.yml`](.github/workflows/release.yml) corre lint, typecheck y tests, publica la imagen del servidor en Docker Hub (`<DOCKERHUB_IMAGE>:vX.Y.Z` y `:latest`, linux/amd64) y adjunta `keel-cli.tgz` al GitHub Release.
+Push de un tag `vX.Y.Z` → [`release.yml`](.github/workflows/release.yml) corre lint, typecheck y tests, publica la imagen del servidor en Docker Hub (`<DOCKERHUB_IMAGE>:vX.Y.Z` y `:latest`, linux/amd64), compila la CLI para Linux (musl, x86_64 y arm64), macOS (Intel y Apple Silicon) y Windows (x86_64 y arm64), y adjunta los binarios `keel-<target>`, `SHA256SUMS`, `install.sh` e `install.ps1` al GitHub Release. La versión del binario (`keel --version`) es la del tag.
 
 Configuración del repo (Settings → Secrets and variables → Actions):
 
@@ -244,4 +285,4 @@ El token se crea en Docker Hub → Account settings → Personal access tokens.
 - Application solo con proveedor Docker; Compose solo si la imagen toma el tag de una variable de su Environment.
 - `POST /api/deploys` no tiene autenticación: cualquiera que alcance la API puede pedir un deploy (solo se ejecuta si el CI de ese commit pasó).
 - El worker corre dentro del proceso de Next.js: una sola réplica por instancia.
-- Las carpetas `github.com:<org>` de `~/.keel` no son válidas en Windows.
+- En Windows, las carpetas de `~/.keel` se llaman `github.com_<org>` (`:` no es válido en un nombre de archivo).
