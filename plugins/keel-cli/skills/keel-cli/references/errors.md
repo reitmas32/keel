@@ -160,6 +160,14 @@ The scope was frozen with `keel lock`; the message says who, when and why.
 Report it and stop. Unlocking is the person's decision (`keel unlock -s
 <scope>`), never a workaround.
 
+### `forbidden` (33)
+
+keel knows who you are, but your role doesn't allow that action on that repo
+or scope (roles: viewer < publisher < deployer < maintainer < admin, and they
+can differ per scope). `keel whoami` shows the role and the per-scope grants.
+Report it and stop: a keel admin grants access, never retry with another
+token or scope.
+
 ### `missing_input` (32)
 
 keel needed a value it would ask at a terminal and there is none: `-s`,

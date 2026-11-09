@@ -90,6 +90,56 @@ pub async fn unlock(ctx: &Ctx, scope: Option<String>) -> Result<()> {
     Ok(())
 }
 
+// --------------------------------------------------------------------- whoami
+
+pub async fn whoami(ctx: &Ctx) -> Result<()> {
+    let org = crate::keel::config::active_org(&ctx.home, ctx.org.as_deref())?;
+    let api = crate::keel::api::KeelApi::for_org(&org)?;
+    let Some(who) = api.whoami().await? else {
+        return Err(fail(
+            Kind::KeelUnreachable,
+            "Este servidor de keel no tiene /whoami: actualízalo para usar tokens y roles.",
+        ));
+    };
+    if ctx.json {
+        return print_json(
+            &json!({"ok": true, "org": org.org, "apiUrl": org.api_url, "token": api.has_token(), "whoami": who}),
+        );
+    }
+    let c = ctx.colors();
+    match who.label() {
+        Some(label) => println!("{} {label}", c.bold("Eres")),
+        None => println!(
+            "{} sin token{}",
+            c.bold("Eres anónimo:"),
+            who.anonymous_role
+                .as_deref()
+                .map(|r| format!(", con rol {r}"))
+                .unwrap_or_default()
+        ),
+    }
+    if let Some(email) = &who.email {
+        println!("  {}", c.dim(email));
+    }
+    println!("  {} · {}", org.org, org.api_url);
+    if let Some(max) = &who.token_max_role {
+        println!("  este token está limitado a {max}");
+    }
+    if !who.grants.is_empty() {
+        println!("\n  {}", c.bold("Permisos por scope"));
+        for g in &who.grants {
+            println!("  {}  {} / {}", ui::pad_end(&g.role, 11), g.repo, g.service);
+        }
+    }
+    let auth = if who.auth == "required" {
+        "esta instancia exige token"
+    } else {
+        "esta instancia acepta peticiones sin token"
+    };
+    println!("\n  {}", c.dim(auth));
+    Ok(())
+}
+
 // -------------------------------------------------------------------- promote
 
 pub struct PromoteArgs {

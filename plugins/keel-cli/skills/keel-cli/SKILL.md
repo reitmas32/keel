@@ -162,6 +162,12 @@ promote and rollback to it with `locked` (31); `keel scopes` and
 `keel status` show who locked it, when and why. Lock or unlock only when the
 person asks; on `locked`, report the reason and stop.
 
+Each person has a role in keel — viewer, publisher (create versions),
+deployer (deploy, promote, rollback), maintainer (also lock) or admin — that
+can change per scope (e.g. deployer on `stg`, viewer on `prod`). Check with
+`keel whoami` before acting for someone; on `forbidden` (33) report it and
+stop.
+
 ## Workflow: diagnose a failed or stuck deploy
 
 ```sh
@@ -358,6 +364,7 @@ Branch on `kind`, not on the message:
 | `unauthorized` | 29 | keel rejected the personal token or requires one: the person creates one in the admin («Tokens de API») and runs `keel login --token` themselves |
 | `cancelled` | 30 | Someone said no, or waiting stopped; the deploy may still be running: `keel deploys <id>` |
 | `locked` | 31 | The scope is frozen: report the reason; only the person decides to `keel unlock` |
+| `forbidden` | 33 | Your role can't do that on that repo/scope (`keel whoami` shows role and grants): report it; a keel admin grants access |
 | `missing_input` | 32 | A flag is missing and there is no terminal to ask: add it (ask the person for its value if needed) |
 
 Details and examples: [references/errors.md](references/errors.md).

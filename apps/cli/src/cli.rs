@@ -71,6 +71,8 @@ pub enum Command {
     Doctor(Target),
     /// Estado del repo: scopes, versión actual, último deploy, CI y Dokploy.
     Status(Target),
+    /// Quién eres para keel: tu nombre, rol y permisos por scope.
+    Whoami,
     /// Actualiza keel al último binario publicado en GitHub.
     Update {
         /// Solo avisa si hay una versión nueva.
@@ -500,6 +502,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             .await
         }
         Command::Status(target) => kc::status(&ctx, config_arg, &target).await,
+        Command::Whoami => ops::whoami(&ctx).await,
         Command::Update { check } => update_command(&ctx, check).await,
         Command::Completions { shell } => {
             clap_complete::generate(shell, &mut Cli::command(), "keel", &mut std::io::stdout());
@@ -620,7 +623,7 @@ async fn doctor(ctx: &Ctx, target: &Target, config_arg: Option<PathBuf>) -> Resu
                 let api = crate::keel::api::KeelApi::for_org(&org)?;
                 let (user, ok) = match api.whoami().await {
                     Ok(Some(who)) => (
-                        json!({"name": who.name, "auth": who.auth, "token": api.has_token()}),
+                        json!({"name": who.name, "role": who.role, "auth": who.auth, "token": api.has_token()}),
                         true,
                     ),
                     Ok(None) => (json!({"supported": false, "token": api.has_token()}), true),

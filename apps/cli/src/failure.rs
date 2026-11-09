@@ -60,6 +60,8 @@ pub enum Kind {
     Locked,
     /// A required value is missing and there is no terminal to ask for it.
     MissingInput,
+    /// keel knows who you are, but your role doesn't allow the action.
+    Forbidden,
 }
 
 impl Kind {
@@ -86,6 +88,7 @@ impl Kind {
             Self::Cancelled => 30,
             Self::Locked => 31,
             Self::MissingInput => 32,
+            Self::Forbidden => 33,
         }
     }
 }

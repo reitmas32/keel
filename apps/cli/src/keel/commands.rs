@@ -8,7 +8,7 @@ use crate::dokploy::paths::{Target, keel_home, load_config};
 use crate::dokploy::{config::Config, print_json};
 use crate::failure::{Kind, fail, fail_with};
 use crate::keel::api::{
-    CreateDeploy, Deploy, DeployStatus, KeelApi, RegisterVersion, ServiceSummary, Version,
+    CreateDeploy, Deploy, DeployStatus, KeelApi, RegisterVersion, ServiceSummary, Version, WhoAmI,
     is_unsupported,
 };
 use crate::keel::config::{self, OrgConfig};
@@ -1197,7 +1197,7 @@ pub async fn status(ctx: &Ctx, config_path: Option<PathBuf>, target: &Target) ->
         repo.api.list_deploys(&repo.repo, None, Some(50)),
         repo.api.whoami(),
     )?;
-    let user = who.as_ref().and_then(|w| w.name.clone());
+    let user = who.as_ref().and_then(WhoAmI::label);
     let in_flight: Vec<&Deploy> = recent.iter().filter(|d| !d.status.is_terminal()).collect();
 
     // What Dokploy says about each scope, when there is a Dokploy key here.

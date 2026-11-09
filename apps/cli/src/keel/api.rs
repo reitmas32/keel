@@ -145,11 +145,44 @@ pub struct Lock {
     pub created_at: String,
 }
 
-/// Who the token belongs to, from `GET /whoami`.
+/// Who the token belongs to, from `GET /whoami`. Servers before members only
+/// send `name` and `auth`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WhoAmI {
     pub name: Option<String>,
     pub auth: String,
+    #[serde(default)]
+    pub email: Option<String>,
+    /// Base role (viewer, publisher, deployer, maintainer, admin), capped by the token.
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub grants: Vec<Grant>,
+    #[serde(default)]
+    pub token_max_role: Option<String>,
+    /// Role keel gives calls without a token while auth is optional.
+    #[serde(default)]
+    pub anonymous_role: Option<String>,
+}
+
+/// A role on the repos and scopes that match the patterns (`*` globs).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Grant {
+    pub repo: String,
+    pub service: String,
+    pub role: String,
+}
+
+impl WhoAmI {
+    /// `Ana (deployer)`, or just the name on servers without roles.
+    pub fn label(&self) -> Option<String> {
+        let name = self.name.clone()?;
+        Some(match &self.role {
+            Some(role) => format!("{name} ({role})"),
+            None => name,
+        })
+    }
 }
 
 impl ServiceSummary {
@@ -476,6 +509,7 @@ impl KeelApi {
             let unsupported = (code == 404 || code == 405) && !from_keel;
             let kind = match code {
                 401 => Kind::Unauthorized,
+                403 if from_keel => Kind::Forbidden,
                 423 => Kind::Locked,
                 _ if unsupported => Kind::KeelUnreachable,
                 _ => Kind::Error,
@@ -605,6 +639,44 @@ mod tests {
             .unwrap_err();
         assert_eq!(crate::failure::report(&error).1, 31);
         assert_eq!(bearer("t"), "Bearer t");
+    }
+
+    #[tokio::test]
+    async fn roles_come_from_whoami_and_403_is_forbidden() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/whoami"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "name": "ana", "email": "ana@acme.dev", "role": "deployer", "auth": "required",
+                "grants": [{"repo": "*", "service": "prod*", "role": "viewer"}],
+                "tokenMaxRole": null, "anonymousRole": "none"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/deploys"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(
+                serde_json::json!({"error": "Tu rol (viewer) no permite desplegar en a/b/prod."}),
+            ))
+            .mount(&server)
+            .await;
+        let api = KeelApi::with_token(&server.uri(), Some("keel_pat_ok".into())).unwrap();
+        let who = api.whoami().await.unwrap().unwrap();
+        assert_eq!(who.label().as_deref(), Some("ana (deployer)"));
+        assert_eq!(who.grants[0].service, "prod*");
+        let error = api
+            .create_deploy(&CreateDeploy {
+                repo: "a/b",
+                tag: "v1.0.0",
+                sha: "abcdef0",
+                service: "prod",
+            })
+            .await
+            .unwrap_err();
+        let (report, code) = crate::failure::report(&error);
+        assert_eq!(code, 33);
+        assert_eq!(report["error"]["kind"], "forbidden");
+        assert!(error.to_string().contains("Tu rol (viewer)"));
     }
 
     #[tokio::test]
