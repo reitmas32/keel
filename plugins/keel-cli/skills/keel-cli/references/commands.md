@@ -13,6 +13,7 @@ here does not work. Commands that change something are marked **changes**.
 | `--target <org/instance>` · `KEEL_TARGET` | Dokploy commands that take it | Dokploy instance. Plain `org` works when it has one instance called `production` |
 | `--config <path>` · `KEEL_CONFIG` | Dokploy | Alternative `config.toml` (default `~/.keel/dokploy/config.toml`) |
 | `--state-dir <abs path>` | Dokploy | Where plans, env backups and `audit.jsonl` live |
+| `KEEL_TOKEN` | keel | Personal token for this command, instead of the one saved by `keel login` |
 | `-h`, `--help` · `-V`, `--version` | all | Help; binary version |
 
 keel commands print tables for people and JSON with `--json`. Dokploy
@@ -29,11 +30,13 @@ A Dokploy service is named `name`, `environment/name` or
 
 | Command | What it does |
 | --- | --- |
-| `keel login --org github.com:<org> --api-url <url>` | Saves a keel organization and its API URL in `~/.keel/<org>/config.json` and makes it active. Both flags are required without a terminal |
+| `keel login --org github.com:<org> --api-url <url> [--token <keel_pat_…>]` | Saves a keel organization, its API URL and personal token in `~/.keel/<org>/config.json` (chmod 600) and makes it active. The token is checked before saving (`unauthorized` if rejected); at a terminal it is asked without echo; `--token ""` forgets it; `KEEL_TOKEN` overrides it per command |
 | `keel use [org]` | Selects the active organization (asks when omitted, at a terminal) |
 | `keel context` (alias `remote`) `[--target …]` | Where this folder points: keel org, repo and scopes; Dokploy instance and why it was chosen |
 | `keel status [--target org/instance]` | Repo state in one view: each scope with its current version and last deploy, the newest version and its CI, and Dokploy status |
-| `keel doctor [--target …]` | Checks the keel API and Dokploy (DNS, panel, key, version, inventory). Exits 0, 10 (network) or 2 (config/key) |
+| `keel init [--check] [--force]` | **changes** (repo) Writes `.github/workflows/keel-release.yml` from keel's template (a customized one needs `--force`; the diff is shown), checks the repo is linked in keel and, with `gh`, has the `DEPLOY_API_TOKEN` secret and `KEEL_API_URL` variable. `--check` only audits and exits 2 if something is missing. Never writes secrets |
+| `keel skills [list]` · `keel skills add <skill>… [-g] [--agent claude,codex,copilot] [--from <path>] [--ref <ref>]` · `keel skills remove <skill>…` · `keel skills update` | **changes** (local) Agent skills from `plugins/*/skills` of reitmas32/keel into `.claude/skills` and `.agents/skills` (or `~` with `-g`). Each copy has `.keel-skill.json`; folders without it are never touched |
+| `keel doctor [--target …]` | Checks the keel API (and who the token is) and Dokploy (DNS, panel, key, version, inventory). Exits 0, 10 (network) or 2 (config/key) |
 | `keel targets` | Configured Dokploy instances, their folders, approval mode and default |
 | `keel config check` | Validates the Dokploy configuration without reading credentials |
 | `keel config migrate [--dry-run]` | **changes** (local) Moves dokploy-agent's `~/.config/dokploy-agent` to `~/.keel/dokploy` |
@@ -46,9 +49,12 @@ A Dokploy service is named `name`, `environment/name` or
 | --- | --- |
 | `keel create-version <vX.Y.Z> [-d <scope> [--wait]]` | **changes** Validates the repo, creates and pushes the tag, registers it in keel. With `-d` also requests the deploy of that same version to the scope; `--wait` follows it |
 | `keel versions [-n <limit>]` | Versions with branch, author and CI result (20 by default, 200 max). Failed CI shows the run link |
-| `keel deploy -s <scope> (-v <tag> \| -r \| -l) [--wait]` | **changes** Requests a deploy; the server waits for CI. `-v` exact version, `-r`/`--latest-ready` highest with CI passed, `-l`/`--latest` highest tag regardless of CI. `--wait` exits 28 on failure |
+| `keel deploy -s <scope> (-v <tag> \| -r \| -l) [--wait] [--rollback-on-failure]` | **changes** Requests a deploy; the server waits for CI. `-v` exact version, `-r`/`--latest-ready` highest with CI passed, `-l`/`--latest` highest tag regardless of CI. `--wait` exits 28 on failure. `--rollback-on-failure` (implies `--wait`) deploys the previous version again if Dokploy fails |
+| `keel promote --from <scope> --to <scope> [-y] [--wait] [--rollback-on-failure] [--force]` | **changes** Deploys to `--to` the tag and commit `--from` runs. Refuses if `--from` has nothing deployed, `--to` is locked, or already runs it (unless `--force`). `-y` required without a terminal |
+| `keel changes -s <scope> [-v <tag>]` | Commits between what the scope runs and a version (newest semver tag by default), with PR numbers; `removed` lists commits a rollback would take out. Fetches tags first |
+| `keel lock -s <scope> -m <reason>` · `keel unlock -s <scope>` | **changes** Freezes or unfreezes deploys of a scope; while locked keel answers deploys with `locked` (31) |
 | `keel rollback -s <scope> [--to <tag>] -y [--wait]` | **changes** Redeploys the previous version that reached `deployed` in that scope (or `--to`, one deployed there before). `-y` is required without a terminal. Refuses while a deploy of that scope is in progress |
-| `keel scopes` (alias `services`) | Scopes of the repo: Dokploy service, type, current version, last deploy |
+| `keel scopes` (alias `services`) | Scopes of the repo: Dokploy service, type, current version, last deploy, and 🔒 with the reason when locked |
 | `keel deploys [id] [-s <scope>] [-n <limit>] [--log]` | Deploys of the repo, newest first. With an id (or its prefix): detail and timeline; `--log` adds Dokploy's deploy log, redacted (needs the Dokploy key) |
 | `keel logs -s <scope> [--container <c>] [-f] [--tail 200] [--since all\|30s\|10m\|1h\|2d] [--search <text>] [--target org/instance]` | Redacted container logs of a scope by its keel name. `-f` follows until Ctrl-C |
 
@@ -74,6 +80,7 @@ not linked to the repo.
 | `keel get services [filter]` | Every app, Compose and database with environment and status |
 | `keel get service <svc> [--raw]` | Server, source, image, env keys, domains; keel scope and version when managed; for databases host, port, database, user, image, limits (password redacted). `--raw` = full redacted API response |
 | `keel get env <svc> [--write-to /abs/new]` | Env keys and value lengths, never values. `--write-to` saves the real block to a new owner-only file |
+| `keel env diff <svcA> <svcB>` | Env keys only in A, only in B, with a different value, with the same value. Values are compared as hashes in memory and never printed |
 | `keel get env-backups [svc]` | Env backups saved before each env-set, env-patch or env-restore (local, no values) |
 | `keel get compose (--service <svc> \| --id <id>) [--show-compose] [--write-to /abs/new]` | Compose data; `--show-compose` adds the definition without environment or secret blocks; `--write-to` saves the original (secrets included) to a new owner-only file |
 | `keel compose diff <svc> --file <path>` | Sanitized diff between the remote Compose and a local file |
@@ -130,7 +137,7 @@ lift `keel_managed`.
 ```text
 ~/.keel/
 ├── current                         active keel org
-├── <org>/config.json               { "org", "apiUrl" }
+├── <org>/config.json               { "org", "apiUrl", "token"? } chmod 600
 └── dokploy/                        chmod 700, optional
     ├── config.toml                 [security]: allow_http, log_tail_max, raw_post_allowlist, plan_ttl_seconds
     └── instances/<org>.env         chmod 600: DOKPLOY_URL, DOKPLOY_API_KEY, DOKPLOY_PATHS, DOKPLOY_APPROVAL…

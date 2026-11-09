@@ -1,8 +1,8 @@
 ---
 name: keel-cli
-description: Operate releases and Dokploy with the keel CLI (the single Rust binary) safely — create versions, deploy them through the keel server only after CI passes, roll back, read versions, scopes, deploys, status and redacted logs, and change anything else on Dokploy (env variables, Compose files, mounts, databases, backups, start/stop) only through reviewed, expiring plans that a person approves one by one. Use when the user wants to deploy, ship, promote or roll back a version; asks what version runs where, whether a service is up, or for the logs; asks why a deploy failed or is stuck waiting for CI; wants to change, add or remove an env variable, edit a Compose, add a volume or mount, create a database or a scheduled backup, start, stop or redeploy something on Dokploy; or when a keel command fails with an error kind such as keel_managed, drift or ci_failed — even if they do not name keel. Never use the Dokploy web UI, curl or another client instead.
+description: Operate releases and Dokploy with the keel CLI safely — create, promote and deploy versions through the keel server after CI passes, roll back, freeze scopes, read versions, changes, deploys, status and redacted logs, and change anything else on Dokploy (env, Compose, mounts, databases, backups, start/stop) only through expiring plans a person approves one by one. Use when the user wants to deploy, ship, promote or roll back a version, freeze deploys, or see what a deploy would change; asks what runs where, whether a service is up, for logs, or why a deploy failed or waits for CI; wants to change, add or remove an env variable, edit a Compose, add a volume or mount, create a database or a scheduled backup, start, stop or redeploy something on Dokploy; prepare a repo for keel or install agent skills; or when a keel command fails with an error kind such as keel_managed, locked, unauthorized, drift or ci_failed — even if they do not name keel. Never use the Dokploy web UI, curl or another client instead.
 metadata:
-  version: "0.1.0"
+  version: "0.2.0"
   owner: fundathyon
 ---
 
@@ -11,11 +11,12 @@ metadata:
 `keel` is one binary with two halves:
 
 - **keel versions and deploys** go through the keel server: `create-version`,
-  `versions`, `deploy`, `rollback`, `scopes`, `deploys`, `status`, `logs`. The
+  `versions`, `deploy`, `promote`, `rollback`, `lock`/`unlock`, `scopes`,
+  `deploys`, `changes`, `status`, `logs`. The
   server queues a deploy and only touches Dokploy after the repository's
   GitHub Action reports that CI passed for that tag.
 - **Direct Dokploy operation** uses the person's local Dokploy API key: redacted
-  reads (`get …`, `api`, `compose diff`) and changes only through plans —
+  reads (`get …`, `env diff`, `api`, `compose diff`) and changes only through plans —
   `plan <kind>` describes the change, a person approves it, `apply` runs that
   exact plan once.
 
@@ -31,16 +32,18 @@ Every error kind and what to do: [references/errors.md](references/errors.md).
    Show the plan summary and its target first (step 3 of the Dokploy workflow).
    A yes to an earlier plan, to another service or to "do everything" is not a
    yes to this one. One plan, one approval, one apply.
-2. **Ask before `create-version`, `deploy` and `rollback`.** They publish a tag
-   or change what is running; none of them is a plan, so your question is the
-   only review. Say the version, the scope and what runs there now, and wait.
-   `rollback -y` skips keel's own confirmation, so it needs the person's yes
-   in the chat first.
+2. **Ask before `create-version`, `deploy`, `promote`, `rollback`, `lock` and
+   `unlock`.** They publish a tag, change what is running or who may deploy;
+   none of them is a plan, so your question is the only review. Say the
+   version, the scope and what runs there now (`keel changes` shows the
+   commits), and wait. `-y` skips keel's own confirmation, so it needs the
+   person's yes in the chat first.
 3. **Application versions go through keel, not Dokploy.** If a Dokploy service
    is a keel scope, deploy it with `keel deploy -s <scope> -v <version>` and
    undo with `keel rollback`. Never work around `keel_managed` (for example by
    changing the tag variable or using `--not-keel-managed` to skip a check you
-   could not run).
+   could not run), and never work around `locked`: a locked scope was frozen
+   by a person on purpose; only they decide to `keel unlock` it.
 4. **Secret values never go on the command line and never pass through you.**
    No `--set KEY=value` (it does not exist on purpose), no secrets in
    arguments, no `cat` of env files, instance files or plan files. See
@@ -51,8 +54,11 @@ Every error kind and what to do: [references/errors.md](references/errors.md).
 6. **One change at a time.** Plan, approve, apply, verify; then the next. No
    loops over services or scopes.
 7. **Agents pass flags; prompts are for people.** Without a terminal keel does
-   not ask: always pass `-s` and `-v` (or `-r`), `-y` for an approved rollback,
-   `--org` and `--api-url` for `login`. Add `--json` whenever you parse output.
+   not ask and fails with `missing_input` (32): always pass `-s` and `-v` (or
+   `-r`), `-y` for an approved rollback or promote, `-m` for `lock`, `--org`
+   and `--api-url` for `login`. Add `--json` whenever you parse output.
+   Never pass a personal token (`--token`) yourself: the person runs
+   `keel login` in their own terminal.
 8. **Report what happened, not what you expected.** A queued deploy is not a
    deployed one until keel says `deployed`; an applied plan is not a working
    service until you read its deployments and logs.
@@ -70,8 +76,14 @@ keel context --json      # keel org, repo and scopes; Dokploy instance and why i
 
 | The person wants… | Use |
 | --- | --- |
-| A new version, deploying it, promoting it to production | `keel create-version`, `keel deploy` |
-| To undo a deploy of a version | `keel rollback` |
+| A new version, deploying it | `keel create-version`, `keel deploy` |
+| What a deploy would bring (commits, PRs) | `keel changes -s <scope> [-v <tag>]` |
+| Promote what staging runs to production | `keel promote --from stg --to prod` |
+| To undo a deploy of a version | `keel rollback` (or `--rollback-on-failure` on deploy/promote) |
+| Freeze or unfreeze deploys of a scope | `keel lock -s <scope> -m <reason>`, `keel unlock -s <scope>` |
+| Compare env variables of two services (names only) | `keel env diff <svcA> <svcB>` |
+| Prepare a repo for keel, or audit it | `keel init`, `keel init --check` |
+| Install these skills in a repo | `keel skills add keel-cli` |
 | What runs where, is it up, what CI says | `keel status`, `keel scopes`, `keel versions` |
 | Deploy history of the repo, why one failed | `keel deploys`, `keel deploys <id> --log` |
 | Logs of a scope | `keel logs -s <scope>` |
@@ -110,11 +122,21 @@ lists Dokploy's own deployments of a service, including any made outside keel.
 5. `--wait` follows the deploy: `waiting_ci → ci_passed → deploying →
    deployed`. It exits 0 on `deployed` and 28 (`ci_failed`) on `ci_failed`,
    `deploy_failed` or `expired`. CI can take minutes; that is normal.
-6. To deploy an existing version to another scope (promotion), ask, then:
+6. To move what one scope runs to another (promotion), show what changes,
+   ask, then:
 
    ```sh
-   keel deploy -s prod -v v1.4.0 --wait --json
+   keel changes -s prod -v v1.4.0 --json          # commits and PRs prod would get
+   keel promote --from stg --to prod -y --rollback-on-failure --json
    ```
+
+   `promote` deploys the exact tag and commit the source scope runs; it
+   refuses (`refused`) when the source has nothing deployed or the target
+   already runs it (`--force` redeploys it). `--rollback-on-failure` (also on
+   `deploy`) waits and, if Dokploy fails (`deploy_failed`), deploys again what
+   the scope ran before; it still exits 28 and the error's `details` carry
+   both `deploy` and `rollback`. Report both. To deploy a specific version
+   instead: `keel deploy -s prod -v v1.4.0 --wait --json`.
 
    Prefer `-v` (exact) for production. `-r` takes the highest version whose CI
    passed. Avoid `-l` (highest tag whatever its CI) outside staging: without a
@@ -130,8 +152,15 @@ lists Dokploy's own deployments of a service, including any made outside keel.
 3. Run it: `keel rollback -s prod -y --json` (or `--to v1.3.2`). It refuses
    while another deploy of that scope is in progress. A second rollback undoes
    the first.
-4. `rollback` has no `--wait`: follow it with `keel deploys -s prod -n 1 --json`
-   until the status is final, then check the logs.
+4. Add `--wait` to follow it to a final state, then check the logs.
+
+## Workflow: freeze deploys
+
+During an incident or a release freeze a person may lock a scope:
+`keel lock -s prod -m "incidente 4521"`. keel then refuses every deploy,
+promote and rollback to it with `locked` (31); `keel scopes` and
+`keel status` show who locked it, when and why. Lock or unlock only when the
+person asks; on `locked`, report the reason and stop.
 
 ## Workflow: diagnose a failed or stuck deploy
 
@@ -309,7 +338,7 @@ Branch on `kind`, not on the message:
 
 | kind | exit | What to do |
 | --- | --- | --- |
-| `error` | 1 | Report the message. "Sin terminal interactiva hay que indicar …" means a flag is missing: add it |
+| `error` | 1 | Report the message |
 | `config` | 2 | Missing login, org or Dokploy key: point to Setup; never ask for a key in the chat |
 | `target_unmapped` / `target_ambiguous` / `target_unknown` | 3 | Show the instances or candidates and ask |
 | `service_not_found` | 4 | `keel get services <filter>` and propose the closest names |
@@ -325,8 +354,11 @@ Branch on `kind`, not on the message:
 | `keel_managed` | 25 | Use `keel deploy -s <details.scope> -v …` / `keel rollback`; never change the tag variable |
 | `keel_unreachable` | 26 | Report it; `keel doctor`. `--not-keel-managed` only if the person confirms it is not a scope |
 | `git_state` | 27 | Report why the version cannot be created; fixing git is the person's call |
-| `ci_failed` | 28 | The deploy ended `ci_failed`, `deploy_failed` or `expired`: diagnose (above) |
+| `ci_failed` | 28 | The deploy ended `ci_failed`, `deploy_failed` or `expired`: diagnose (above). With `--rollback-on-failure`, `details.rollback` says whether the rollback worked |
+| `unauthorized` | 29 | keel rejected the personal token or requires one: the person creates one in the admin («Tokens de API») and runs `keel login --token` themselves |
 | `cancelled` | 30 | Someone said no, or waiting stopped; the deploy may still be running: `keel deploys <id>` |
+| `locked` | 31 | The scope is frozen: report the reason; only the person decides to `keel unlock` |
+| `missing_input` | 32 | A flag is missing and there is no terminal to ask: add it (ask the person for its value if needed) |
 
 Details and examples: [references/errors.md](references/errors.md).
 
@@ -355,12 +387,24 @@ install -m 755 "$asset" ~/.local/bin/keel
 Downloading and installing a binary is the person's decision: offer these
 commands, do not run them unasked.
 
-Connect a keel organization (non-interactive form):
+Connect a keel organization (the person runs it; it asks for the personal
+token without echo, or reads `KEEL_TOKEN`):
 
 ```sh
 keel login --org github.com:<org> --api-url https://keel.example.com/api
 keel use github.com:<org>          # switch the active org (~/.keel/current)
 ```
+
+When the server sets `KEEL_API_AUTH=required`, every keel command needs that
+token; deploys record who asked for them (`requestedBy`).
+
+Prepare a repo: `keel init` writes `.github/workflows/keel-release.yml` and
+checks that the repo is linked in keel and has the `DEPLOY_API_TOKEN` secret
+and `KEEL_API_URL` variable; `keel init --check --json` only audits. It never
+writes secrets: setting them is the person's step.
+
+Install these skills elsewhere: `keel skills add keel-cli` (this repo, for
+Claude Code, Codex and Copilot), `-g` for the user, `keel skills update`.
 
 Dokploy access is optional (without it `get`, `plan`, `apply` and `backup`
 fail with `config`). One owner-only file per instance in

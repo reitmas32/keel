@@ -15,10 +15,7 @@ structured and may be absent.
 
 ### `error` (1)
 
-Anything without a more specific kind. The common one for agents:
-"Sin terminal interactiva hay que indicar --org" (or `-s`, `-v`…) — keel
-wanted to ask and there is no terminal. Add the flag; ask the person for its
-value if the conversation does not give it.
+Anything without a more specific kind. Report the message.
 
 ### `config` (2)
 
@@ -135,6 +132,17 @@ keel versions --json          # the CI run link for ci_failed
 keel logs -s <scope> --since 15m
 ```
 
+With `--rollback-on-failure`, `details.deploy` is the failed deploy and
+`details.rollback` the redeploy of the previous version (`deployed` when it
+worked). The scope runs the old version again; the new one still failed.
+
+### `unauthorized` (29)
+
+keel rejected the personal token (revoked, mistyped) or the server requires
+one (`KEEL_API_AUTH=required`) and none was sent. The person creates a token
+in the keel admin, «Tokens de API», and runs `keel login --token` (or
+exports `KEEL_TOKEN`) in their own terminal. Never ask them to paste it.
+
 ### `cancelled` (30)
 
 A person answered no to a confirmation, or waiting was interrupted. After an
@@ -145,3 +153,15 @@ interrupted `--wait` the deploy keeps going on the server: check
 
 `keel doctor` exits 0 when everything answers, 10 when the network fails and
 2 when configuration or a key is missing.
+
+### `locked` (31)
+
+The scope was frozen with `keel lock`; the message says who, when and why.
+Report it and stop. Unlocking is the person's decision (`keel unlock -s
+<scope>`), never a workaround.
+
+### `missing_input` (32)
+
+keel needed a value it would ask at a terminal and there is none: `-s`,
+`-v`/`-r`/`-l`, `-y`, `-m`, `--org`… Add the flag; ask the person for its
+value if the conversation does not give it.

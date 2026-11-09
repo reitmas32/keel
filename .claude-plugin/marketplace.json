@@ -36,8 +36,8 @@
     {
       "name": "keel-cli",
       "source": "./plugins/keel-cli",
-      "description": "Use the keel CLI safely: create versions and deploy them through keel once CI passes, roll back, read deploys, status and redacted logs, and change Dokploy only through reviewed plans a person approves — never secrets on the command line.",
-      "version": "0.1.0",
+      "description": "Use the keel CLI safely: create, promote and deploy versions through keel once CI passes, roll back automatically on failure, freeze scopes, read deploys, changes, status and redacted logs, and change Dokploy only through reviewed plans a person approves — never secrets on the command line.",
+      "version": "0.2.0",
       "category": "deployment",
       "keywords": ["keel", "deploy", "rollback", "dokploy", "ci", "logs", "env", "compose"]
     }

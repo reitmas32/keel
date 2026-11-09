@@ -160,6 +160,17 @@ La versión actual es la del último deploy exitoso. El nombre en Dokploy (`proy
 
 `keel rollback -s <scope>` vuelve a desplegar la versión anterior que llegó a `deployed` en ese scope, saltándose las que fallaron, con el mismo commit con el que se desplegó. Con `--to` eliges una versión anterior concreta, que debe haberse desplegado ahí antes. Pide confirmación (o `-y` sin terminal interactiva) y no arranca si hay un deploy en curso en ese scope. Un segundo `rollback` deshace el primero: la versión anterior pasa a ser la que se reemplazó.
 
+### Tokens, locks, promote y más
+
+- `keel login --token keel_pat_…` guarda un token personal (créalo en el admin, en «Tokens de API»). `KEEL_TOKEN` lo reemplaza. Con `KEEL_API_AUTH=required` en el servidor, la API solo acepta peticiones con token, y cada deploy guarda quién lo pidió.
+- `keel lock -s prod -m "incidente"` congela un scope: keel rechaza sus deploys (exit 31) hasta `keel unlock -s prod`.
+- `keel promote --from stg --to prod` despliega en `prod` la versión que corre en `stg`.
+- `keel deploy … --rollback-on-failure` (también en `promote`) espera el deploy y, si falla, vuelve a la versión anterior.
+- `keel changes -s prod [-v v1.4.0]` lista los commits y PRs entre lo desplegado y una versión.
+- `keel env diff staging/api production/api` compara los nombres de las variables de dos servicios de Dokploy sin mostrar valores.
+- `keel init` escribe el workflow de release y revisa que el repo esté vinculado y tenga sus secrets; `keel init --check` solo audita.
+- `keel skills add keel-cli` instala el skill para Claude Code, Codex y Copilot en el repo (`-g` para tu usuario).
+
 ## Skills para agentes
 
 El repo también es un marketplace de plugins para Claude Code, Codex y Copilot. El skill `keel-cli` le enseña a un agente a usar esta CLI con seguridad: desplegar y hacer rollback solo con keel, leer estado y logs redactados, y cambiar Dokploy con planes que aprueba una persona.
