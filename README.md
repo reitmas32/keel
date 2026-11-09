@@ -146,6 +146,22 @@ La versión actual es la del último deploy exitoso. El nombre en Dokploy (`proy
 
 `keel rollback -s <scope>` vuelve a desplegar la versión anterior que llegó a `deployed` en ese scope, saltándose las que fallaron, con el mismo commit con el que se desplegó. Con `--to` eliges una versión anterior concreta, que debe haberse desplegado ahí antes. Pide confirmación (o `-y` sin terminal interactiva) y no arranca si hay un deploy en curso en ese scope. Un segundo `rollback` deshace el primero: la versión anterior pasa a ser la que se reemplazó.
 
+## Skills para agentes
+
+El repo también es un marketplace de plugins para Claude Code, Codex y Copilot. El skill `keel-cli` le enseña a un agente a usar esta CLI con seguridad: desplegar y hacer rollback solo con keel, leer estado y logs redactados, y cambiar Dokploy con planes que aprueba una persona.
+
+```bash
+claude plugin marketplace add reitmas32/keel
+claude plugin install keel-cli@keel
+```
+
+Los plugins viven en [`plugins/`](plugins/README.md) y el catálogo en [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json). Para validarlos:
+
+```bash
+python3 plugins/scripts/validate.py
+python3 -m unittest discover -s plugins/tests
+```
+
 ## Levantar una instancia del servidor en Dokploy
 
 La API, el admin y el worker corren en **una sola imagen** (`getfoundathyon/keel-api`) y en un solo contenedor: comparten la base SQLite del volumen `/data`. Levanta una instancia por organización (p.ej. `keel.jalo…` y `keel.konectus…`).
