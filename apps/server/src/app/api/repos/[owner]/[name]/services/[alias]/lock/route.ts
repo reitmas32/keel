@@ -7,10 +7,10 @@ type Params = { params: Promise<{ owner: string; name: string; alias: string }> 
 
 export async function PUT(request: Request, { params }: Params) {
   const { owner, name, alias } = await params;
-  return handlers.lockService(getContext(), request, owner, name, alias);
+  return handlers.lockService(await getContext(), request, owner, name, alias);
 }
 
 export async function DELETE(request: Request, { params }: Params) {
   const { owner, name, alias } = await params;
-  return handlers.unlockService(getContext(), request, owner, name, alias);
+  return handlers.unlockService(await getContext(), request, owner, name, alias);
 }

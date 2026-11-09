@@ -7,9 +7,9 @@ import { API_TOKEN_PREFIX, hashToken } from "./tokens";
 
 const bearer = (token: string) => apiRequest("", { headers: { authorization: `Bearer ${token}` } });
 
-const statusOf = (fn: () => unknown) => {
+const statusOf = async (fn: () => Promise<unknown>) => {
   try {
-    fn();
+    await fn();
   } catch (error) {
     if (error instanceof ApiError) return error.status;
     throw error;
@@ -18,61 +18,61 @@ const statusOf = (fn: () => unknown) => {
 };
 
 describe("createApiToken", () => {
-  it("returns a keel_pat_ token once and stores only its hash", () => {
-    const { store, clock } = createTestContext();
-    const { record, token } = createApiToken(store, "  rafa  ", clock.now());
+  it("returns a keel_pat_ token once and stores only its hash", async () => {
+    const { store, clock } = await createTestContext();
+    const { record, token } = await createApiToken(store, "  rafa  ", clock.now());
     expect(token).toMatch(new RegExp(`^${API_TOKEN_PREFIX}[A-Za-z0-9_-]{32}$`));
     expect(record).toMatchObject({ name: "rafa", lastUsedAt: null });
-    expect(store.getApiTokenByHash(hashToken(token))?.id).toBe(record.id);
-    expect(JSON.stringify(store.listApiTokens())).not.toContain(token);
+    expect((await store.getApiTokenByHash(hashToken(token)))?.id).toBe(record.id);
+    expect(JSON.stringify(await store.listApiTokens())).not.toContain(token);
   });
 
-  it("rejects an empty or repeated name", () => {
-    const { store, clock } = createTestContext();
-    createApiToken(store, "rafa", clock.now());
-    expect(statusOf(() => createApiToken(store, " ", clock.now()))).toBe(400);
-    expect(statusOf(() => createApiToken(store, "rafa", clock.now()))).toBe(409);
+  it("rejects an empty or repeated name", async () => {
+    const { store, clock } = await createTestContext();
+    await createApiToken(store, "rafa", clock.now());
+    expect(await statusOf(() => createApiToken(store, " ", clock.now()))).toBe(400);
+    expect(await statusOf(() => createApiToken(store, "rafa", clock.now()))).toBe(409);
   });
 });
 
 describe("authenticate", () => {
-  it("resolves the token's name and touches last_used_at at most once a minute", () => {
-    const { ctx, store, clock } = createTestContext();
-    const { record, token } = createApiToken(store, "rafa", clock.now());
-    expect(authenticate(ctx, bearer(token))).toEqual({ name: "rafa" });
-    const first = store.listApiTokens()[0]?.lastUsedAt;
+  it("resolves the token's name and touches last_used_at at most once a minute", async () => {
+    const { ctx, store, clock } = await createTestContext();
+    const { record, token } = await createApiToken(store, "rafa", clock.now());
+    expect(await authenticate(ctx, bearer(token))).toEqual({ name: "rafa" });
+    const first = (await store.listApiTokens())[0]?.lastUsedAt;
     expect(first).toBe(clock.now().toISOString());
 
     clock.advanceMinutes(0.5);
-    authenticate(ctx, bearer(token));
-    expect(store.getApiTokenByName("rafa")?.lastUsedAt).toBe(first);
+    await authenticate(ctx, bearer(token));
+    expect((await store.getApiTokenByName("rafa"))?.lastUsedAt).toBe(first);
 
     clock.advanceMinutes(1);
-    authenticate(ctx, bearer(token));
-    expect(store.getApiTokenByName("rafa")?.lastUsedAt).toBe(clock.now().toISOString());
+    await authenticate(ctx, bearer(token));
+    expect((await store.getApiTokenByName("rafa"))?.lastUsedAt).toBe(clock.now().toISOString());
 
-    store.deleteApiToken(record.id);
-    expect(statusOf(() => authenticate(ctx, bearer(token)))).toBe(401);
+    await store.deleteApiToken(record.id);
+    expect(await statusOf(() => authenticate(ctx, bearer(token)))).toBe(401);
   });
 
-  it("rejects an invalid token even when auth is optional", () => {
-    const { ctx } = createTestContext();
-    expect(statusOf(() => authenticate(ctx, bearer("keel_pat_nope")))).toBe(401);
+  it("rejects an invalid token even when auth is optional", async () => {
+    const { ctx } = await createTestContext();
+    expect(await statusOf(() => authenticate(ctx, bearer("keel_pat_nope")))).toBe(401);
     const basic = apiRequest("", { headers: { authorization: "Basic abc" } });
-    expect(statusOf(() => authenticate(ctx, basic))).toBe(401);
+    expect(await statusOf(() => authenticate(ctx, basic))).toBe(401);
   });
 
-  it("allows no token only when auth is optional", () => {
-    const { ctx, env } = createTestContext();
-    expect(authenticate(ctx, apiRequest())).toEqual({ name: null });
+  it("allows no token only when auth is optional", async () => {
+    const { ctx, env } = await createTestContext();
+    expect(await authenticate(ctx, apiRequest())).toEqual({ name: null });
     env.KEEL_API_AUTH = "required";
-    expect(() => authenticate(ctx, apiRequest())).toThrow(/Tokens de API.*keel login --token/);
+    await expect(authenticate(ctx, apiRequest())).rejects.toThrow(/Tokens de API.*keel login --token/);
   });
 });
 
 describe("API routes with tokens", () => {
   it("returns 401 on every token route when auth is required, but not on /ci-result", async () => {
-    const { ctx, env, ciToken } = createTestContext();
+    const { ctx, env, ciToken } = await createTestContext();
     env.KEEL_API_AUTH = "required";
     const responses = await Promise.all([
       handlers.listServices(ctx, apiRequest(), "konectus-io", "app"),
@@ -107,8 +107,8 @@ describe("API routes with tokens", () => {
   });
 
   it("records the token name as requestedBy on POST /deploys", async () => {
-    const { ctx, store, clock } = createTestContext();
-    const { token } = createApiToken(store, "rafa", clock.now());
+    const { ctx, store, clock } = await createTestContext();
+    const { token } = await createApiToken(store, "rafa", clock.now());
     const body = { repo: "konectus-io/app", tag: "v1.0.0", sha: SHA, service: "api-prod" };
     const withToken = await handlers.createDeploy(
       ctx,
@@ -127,8 +127,8 @@ describe("API routes with tokens", () => {
 
 describe("GET /whoami", () => {
   it("returns the token name and the auth mode", async () => {
-    const { ctx, env, store, clock } = createTestContext();
-    const { token } = createApiToken(store, "rafa", clock.now());
+    const { ctx, env, store, clock } = await createTestContext();
+    const { token } = await createApiToken(store, "rafa", clock.now());
     expect(await (await handlers.whoami(ctx, apiRequest())).json()).toEqual({ name: null, auth: "optional" });
     expect(await (await handlers.whoami(ctx, bearer(token))).json()).toEqual({ name: "rafa", auth: "optional" });
 

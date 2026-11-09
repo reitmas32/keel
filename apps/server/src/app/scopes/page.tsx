@@ -7,17 +7,20 @@ import { CreateScopeForm } from "./components";
 
 export default async function ScopesPage() {
   await requireAdmin();
-  const { store } = getContext();
-  const scopes = store.listScopes().map((scope) => {
-    const services = store.listServices(scope.id);
-    const [last] = store.listDeploys({ repo: scope.repo }, { limit: 1, newestFirst: true });
-    return {
-      ...scope,
-      services: services.length,
-      locked: services.filter((s) => store.getServiceLock(s.id)).length,
-      last,
-    };
-  });
+  const { store } = await getContext();
+  const scopes = await Promise.all(
+    (await store.listScopes()).map(async (scope) => {
+      const services = await store.listServices(scope.id);
+      const [last] = await store.listDeploys({ repo: scope.repo }, { limit: 1, newestFirst: true });
+      const locks = await Promise.all(services.map((s) => store.getServiceLock(s.id)));
+      return {
+        ...scope,
+        services: services.length,
+        locked: locks.filter(Boolean).length,
+        last,
+      };
+    }),
+  );
 
   return (
     <Page crumbs={[{ label: "Scopes" }]}>

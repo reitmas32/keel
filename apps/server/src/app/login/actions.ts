@@ -12,7 +12,7 @@ export interface LoginState {
 
 export async function login(_state: LoginState, form: FormData): Promise<LoginState> {
   const password = String(form.get("password") ?? "");
-  if (!checkPassword(password, getContext().env.KEEL_ADMIN_PASSWORD)) {
+  if (!checkPassword(password, (await getContext()).env.KEEL_ADMIN_PASSWORD)) {
     // Slows down password guessing without keeping any state.
     await sleep(750);
     return { error: "Contraseña incorrecta." };

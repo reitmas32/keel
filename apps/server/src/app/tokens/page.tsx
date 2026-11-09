@@ -10,8 +10,8 @@ import { CreateApiTokenForm } from "./components";
 
 export default async function TokensPage() {
   await requireAdmin();
-  const { store, env } = getContext();
-  const tokens = store.listApiTokens();
+  const { store, env } = await getContext();
+  const tokens = await store.listApiTokens();
   const required = env.KEEL_API_AUTH === "required";
 
   return (

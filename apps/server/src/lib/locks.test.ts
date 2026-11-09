@@ -12,8 +12,8 @@ const lock = (reason: unknown, headers: Record<string, string> = {}) =>
 
 describe("service locks", () => {
   it("locks with the token name, replaces the reason, and unlocks", async () => {
-    const { ctx, store, clock } = createTestContext();
-    const { token } = createApiToken(store, "rafa", clock.now());
+    const { ctx, store, clock } = await createTestContext();
+    const { token } = await createApiToken(store, "rafa", clock.now());
     const auth = { authorization: `Bearer ${token}` };
 
     const locked = await handlers.lockService(ctx, lock(" migración de DB ", auth), "konectus-io", "app", "api-prod");
@@ -42,7 +42,7 @@ describe("service locks", () => {
   });
 
   it("validates the reason and 404s an unknown repo or alias", async () => {
-    const { ctx } = createTestContext();
+    const { ctx } = await createTestContext();
     expect((await handlers.lockService(ctx, lock(""), "konectus-io", "app", "api-prod")).status).toBe(400);
     expect((await handlers.lockService(ctx, lock("x".repeat(501)), "konectus-io", "app", "api-prod")).status).toBe(400);
     const noRepo = await handlers.lockService(ctx, lock("x"), "other", "repo", "api-prod");
@@ -54,9 +54,9 @@ describe("service locks", () => {
   });
 
   it("refuses new deploys with 423 but lets in-flight deploys finish", async () => {
-    const { ctx, store, worker, dokploy, clock, service, ciToken } = createTestContext();
-    const inFlight = requestDeploy(store, deployReq, clock.now());
-    store.lockService({ serviceId: service.id, reason: "congelado por release", lockedBy: "rafa" }, clock.now());
+    const { ctx, store, worker, dokploy, clock, service, ciToken } = await createTestContext();
+    const inFlight = await requestDeploy(store, deployReq, clock.now());
+    await store.lockService({ serviceId: service.id, reason: "congelado por release", lockedBy: "rafa" }, clock.now());
 
     const refused = await handlers.createDeploy(
       ctx,
@@ -67,25 +67,25 @@ describe("service locks", () => {
       "El servicio api-prod está bloqueado: congelado por release (por rafa, 26/10/26, 12:00 UTC). Desbloquéalo con `keel unlock -s api-prod`.",
     );
 
-    store.lockService({ serviceId: service.id, reason: "x", lockedBy: null }, clock.now());
-    expect(() => requestDeploy(store, deployReq, clock.now())).toThrow(/\(por alguien, /);
+    await store.lockService({ serviceId: service.id, reason: "x", lockedBy: null }, clock.now());
+    await expect(requestDeploy(store, deployReq, clock.now())).rejects.toThrow(/\(por alguien, /);
     try {
-      requestDeploy(store, deployReq, clock.now());
+      await requestDeploy(store, deployReq, clock.now());
     } catch (error) {
       expect((error as ApiError).status).toBe(423);
     }
 
-    recordCiResult(store, { ...deployReq, status: "success" }, ciToken, clock.now());
+    await recordCiResult(store, { ...deployReq, status: "success" }, ciToken, clock.now());
     await worker.tick();
     dokploy.status = "done";
     await worker.tick();
-    expect(store.getDeploy(inFlight.id)?.status).toBe("deployed");
+    expect((await store.getDeploy(inFlight.id))?.status).toBe("deployed");
   });
 
-  it("is removed with its service", () => {
-    const { store, clock, service } = createTestContext();
-    store.lockService({ serviceId: service.id, reason: "x", lockedBy: null }, clock.now());
-    store.deleteService(service.id);
-    expect(store.getServiceLock(service.id)).toBeUndefined();
+  it("is removed with its service", async () => {
+    const { store, clock, service } = await createTestContext();
+    await store.lockService({ serviceId: service.id, reason: "x", lockedBy: null }, clock.now());
+    await store.deleteService(service.id);
+    expect(await store.getServiceLock(service.id)).toBeUndefined();
   });
 });

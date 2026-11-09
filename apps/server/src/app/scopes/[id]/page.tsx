@@ -13,15 +13,18 @@ const none = <span className="muted">—</span>;
 
 export default async function ScopePage({ params }: { params: Promise<{ id: string }> }) {
   await requireAdmin();
-  const { store } = getContext();
-  const scope = store.getScope((await params).id);
+  const { store } = await getContext();
+  const scope = await store.getScope((await params).id);
   if (!scope) notFound();
 
-  const services = store
-    .listServices(scope.id)
-    .map((service) => ({ ...service, lock: store.getServiceLock(service.id) }));
-  const deploys = store.listDeploys({ repo: scope.repo }, { limit: 20, newestFirst: true });
-  const versions = store.listVersions(scope.repo, { limit: 20 });
+  const services = await Promise.all(
+    (await store.listServices(scope.id)).map(async (service) => ({
+      ...service,
+      lock: await store.getServiceLock(service.id),
+    })),
+  );
+  const deploys = await store.listDeploys({ repo: scope.repo }, { limit: 20, newestFirst: true });
+  const versions = await store.listVersions(scope.repo, { limit: 20 });
   const h = await headers();
   const apiUrl = `${h.get("x-forwarded-proto") ?? "http"}://${h.get("host")}/api`;
 

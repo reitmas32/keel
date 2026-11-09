@@ -3,6 +3,6 @@ import { handlers } from "@/lib/handlers";
 
 export const dynamic = "force-dynamic";
 
-export function GET(request: Request) {
-  return handlers.whoami(getContext(), request);
+export async function GET(request: Request) {
+  return handlers.whoami(await getContext(), request);
 }

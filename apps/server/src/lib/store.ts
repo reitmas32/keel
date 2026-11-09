@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import {
   type CiResultRequest,
   canTransition,
@@ -9,6 +8,7 @@ import {
   type Version,
   type VersionCiStatus,
 } from "@keel/shared";
+import type { Db, Row } from "./db";
 
 export interface Scope {
   id: string;
@@ -60,8 +60,6 @@ export interface ServiceLockRecord {
   lockedBy: string | null;
   createdAt: string;
 }
-
-type Row = Record<string, unknown>;
 
 const toScope = (r: Row): Scope => ({
   id: r.id as string,
@@ -128,55 +126,90 @@ const toVersion = (r: Row): Version => ({
 /** `owner/name`, lowercased, so lookups ignore GitHub's case-insensitivity. */
 export const normalizeRepo = (repo: string) => repo.trim().toLowerCase();
 
+/**
+ * All of keel's persistence. Every method is async so the same Store runs on SQLite or Postgres (see db.ts).
+ * State changes that several replicas could race on (deploy transitions, claiming a deploy, queuing one)
+ * are conditional updates or row-locked transactions, so they stay correct with more than one server on Postgres.
+ */
 export class Store {
-  constructor(private readonly db: DatabaseSync) {}
+  constructor(private readonly db: Db) {}
+
+  /** Runs `fn` in one transaction, with a Store bound to it. */
+  transaction<T>(fn: (tx: Store) => Promise<T>): Promise<T> {
+    return this.db.transaction((tx) => fn(new Store(tx)));
+  }
+
+  /**
+   * Inside a transaction, makes everyone else who locks the same row wait until this one commits. On Postgres it is a
+   * row lock (`FOR NO KEY UPDATE`, which doesn't block inserts that reference the row); SQLite needs nothing, since
+   * its transactions already run one at a time.
+   */
+  private async lockRow(table: "scopes" | "services", id: string): Promise<void> {
+    if (this.db.dialect === "postgres")
+      await this.db.get(`SELECT id FROM ${table} WHERE id = ? FOR NO KEY UPDATE`, [id]);
+  }
+
+  /**
+   * Inside a transaction, serializes the work on one repo's deploys: queuing a deploy and applying a CI result take
+   * this lock, so a deploy can't be queued as `waiting_ci` right after its CI result was applied and stay stuck.
+   */
+  lockScope(scopeId: string): Promise<void> {
+    return this.lockRow("scopes", scopeId);
+  }
+
+  /** Insertion order among deploys created in the same millisecond: SQLite's rowid, Postgres's `seq` column. */
+  private get deployInsertOrder() {
+    return this.db.dialect === "postgres" ? "seq" : "rowid";
+  }
 
   // --- scopes ---
 
-  createScope(input: { name: string; repo: string; ciTokenHash: string }, now: Date): Scope {
+  async createScope(input: { name: string; repo: string; ciTokenHash: string }, now: Date): Promise<Scope> {
     const scope = { id: randomUUID(), name: input.name, repo: normalizeRepo(input.repo), createdAt: now.toISOString() };
-    this.db
-      .prepare("INSERT INTO scopes (id, name, repo, ci_token_hash, created_at) VALUES (?, ?, ?, ?, ?)")
-      .run(scope.id, scope.name, scope.repo, input.ciTokenHash, scope.createdAt);
+    await this.db.run("INSERT INTO scopes (id, name, repo, ci_token_hash, created_at) VALUES (?, ?, ?, ?, ?)", [
+      scope.id,
+      scope.name,
+      scope.repo,
+      input.ciTokenHash,
+      scope.createdAt,
+    ]);
     return scope;
   }
 
-  listScopes(): Scope[] {
-    return this.db.prepare("SELECT * FROM scopes ORDER BY name").all().map(toScope);
+  async listScopes(): Promise<Scope[]> {
+    return (await this.db.all("SELECT * FROM scopes ORDER BY name")).map(toScope);
   }
 
-  getScope(id: string): Scope | undefined {
-    const row = this.db.prepare("SELECT * FROM scopes WHERE id = ?").get(id);
+  async getScope(id: string): Promise<Scope | undefined> {
+    const row = await this.db.get("SELECT * FROM scopes WHERE id = ?", [id]);
     return row ? toScope(row) : undefined;
   }
 
-  getScopeByRepo(repo: string): Scope | undefined {
-    const row = this.db.prepare("SELECT * FROM scopes WHERE repo = ?").get(normalizeRepo(repo));
+  async getScopeByRepo(repo: string): Promise<Scope | undefined> {
+    const row = await this.db.get("SELECT * FROM scopes WHERE repo = ?", [normalizeRepo(repo)]);
     return row ? toScope(row) : undefined;
   }
 
-  getCiTokenHash(scopeId: string): string | undefined {
-    const row = this.db.prepare("SELECT ci_token_hash FROM scopes WHERE id = ?").get(scopeId);
+  async getCiTokenHash(scopeId: string): Promise<string | undefined> {
+    const row = await this.db.get("SELECT ci_token_hash FROM scopes WHERE id = ?", [scopeId]);
     return row?.ci_token_hash as string | undefined;
   }
 
-  setCiTokenHash(scopeId: string, hash: string): void {
-    this.db.prepare("UPDATE scopes SET ci_token_hash = ? WHERE id = ?").run(hash, scopeId);
+  async setCiTokenHash(scopeId: string, hash: string): Promise<void> {
+    await this.db.run("UPDATE scopes SET ci_token_hash = ? WHERE id = ?", [hash, scopeId]);
   }
 
-  deleteScope(id: string): void {
-    this.db.prepare("DELETE FROM scopes WHERE id = ?").run(id);
+  async deleteScope(id: string): Promise<void> {
+    await this.db.run("DELETE FROM scopes WHERE id = ?", [id]);
   }
 
   // --- services ---
 
-  addService(input: Omit<Service, "id" | "createdAt">, now: Date): Service {
+  async addService(input: Omit<Service, "id" | "createdAt">, now: Date): Promise<Service> {
     const service: Service = { ...input, id: randomUUID(), createdAt: now.toISOString() };
-    this.db
-      .prepare(
-        "INSERT INTO services (id, scope_id, alias, dokploy_url, kind, dokploy_id, tag_variable, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-      )
-      .run(
+    await this.db.run(
+      "INSERT INTO services (id, scope_id, alias, dokploy_url, kind, dokploy_id, tag_variable, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      [
         service.id,
         service.scopeId,
         service.alias,
@@ -185,96 +218,101 @@ export class Store {
         service.dokployId,
         service.tagVariable,
         service.createdAt,
-      );
+      ],
+    );
     return service;
   }
 
-  listServices(scopeId: string): Service[] {
-    return this.db.prepare("SELECT * FROM services WHERE scope_id = ? ORDER BY alias").all(scopeId).map(toService);
+  async listServices(scopeId: string): Promise<Service[]> {
+    return (await this.db.all("SELECT * FROM services WHERE scope_id = ? ORDER BY alias", [scopeId])).map(toService);
   }
 
-  getService(id: string): Service | undefined {
-    const row = this.db.prepare("SELECT * FROM services WHERE id = ?").get(id);
+  async getService(id: string): Promise<Service | undefined> {
+    const row = await this.db.get("SELECT * FROM services WHERE id = ?", [id]);
     return row ? toService(row) : undefined;
   }
 
-  getServiceByAlias(scopeId: string, alias: string): Service | undefined {
-    const row = this.db.prepare("SELECT * FROM services WHERE scope_id = ? AND alias = ?").get(scopeId, alias);
+  async getServiceByAlias(scopeId: string, alias: string): Promise<Service | undefined> {
+    const row = await this.db.get("SELECT * FROM services WHERE scope_id = ? AND alias = ?", [scopeId, alias]);
     return row ? toService(row) : undefined;
   }
 
-  deleteService(id: string): void {
-    this.db.prepare("DELETE FROM services WHERE id = ?").run(id);
+  async deleteService(id: string): Promise<void> {
+    await this.db.run("DELETE FROM services WHERE id = ?", [id]);
   }
 
   // --- service locks ---
 
-  getServiceLock(serviceId: string): ServiceLockRecord | undefined {
-    const row = this.db.prepare("SELECT * FROM service_locks WHERE service_id = ?").get(serviceId);
+  async getServiceLock(serviceId: string): Promise<ServiceLockRecord | undefined> {
+    const row = await this.db.get("SELECT * FROM service_locks WHERE service_id = ?", [serviceId]);
     return row ? toServiceLock(row) : undefined;
   }
 
   /** Locks a service. Locking it again replaces the reason and who locked it, keeping the original date. */
-  lockService(input: { serviceId: string; reason: string; lockedBy: string | null }, now: Date): ServiceLockRecord {
-    this.db
-      .prepare(
-        `INSERT INTO service_locks (service_id, reason, locked_by, created_at) VALUES (?, ?, ?, ?)
-         ON CONFLICT (service_id) DO UPDATE SET reason = excluded.reason, locked_by = excluded.locked_by`,
-      )
-      .run(input.serviceId, input.reason, input.lockedBy, now.toISOString());
-    return this.getServiceLock(input.serviceId) as ServiceLockRecord;
+  async lockService(
+    input: { serviceId: string; reason: string; lockedBy: string | null },
+    now: Date,
+  ): Promise<ServiceLockRecord> {
+    await this.db.run(
+      `INSERT INTO service_locks (service_id, reason, locked_by, created_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT (service_id) DO UPDATE SET reason = excluded.reason, locked_by = excluded.locked_by`,
+      [input.serviceId, input.reason, input.lockedBy, now.toISOString()],
+    );
+    return (await this.getServiceLock(input.serviceId)) as ServiceLockRecord;
   }
 
   /** Returns whether the service was locked. */
-  unlockService(serviceId: string): boolean {
-    return this.db.prepare("DELETE FROM service_locks WHERE service_id = ?").run(serviceId).changes > 0;
+  async unlockService(serviceId: string): Promise<boolean> {
+    return (await this.db.run("DELETE FROM service_locks WHERE service_id = ?", [serviceId])).changes > 0;
   }
 
   // --- API tokens ---
 
-  createApiToken(input: { name: string; tokenHash: string }, now: Date): ApiToken {
+  async createApiToken(input: { name: string; tokenHash: string }, now: Date): Promise<ApiToken> {
     const token: ApiToken = { id: randomUUID(), name: input.name, createdAt: now.toISOString(), lastUsedAt: null };
-    this.db
-      .prepare("INSERT INTO api_tokens (id, name, token_hash, created_at) VALUES (?, ?, ?, ?)")
-      .run(token.id, token.name, input.tokenHash, token.createdAt);
+    await this.db.run("INSERT INTO api_tokens (id, name, token_hash, created_at) VALUES (?, ?, ?, ?)", [
+      token.id,
+      token.name,
+      input.tokenHash,
+      token.createdAt,
+    ]);
     return token;
   }
 
-  listApiTokens(): ApiToken[] {
-    return this.db.prepare("SELECT * FROM api_tokens ORDER BY created_at DESC, name").all().map(toApiToken);
+  async listApiTokens(): Promise<ApiToken[]> {
+    return (await this.db.all("SELECT * FROM api_tokens ORDER BY created_at DESC, name")).map(toApiToken);
   }
 
-  getApiTokenByName(name: string): ApiToken | undefined {
-    const row = this.db.prepare("SELECT * FROM api_tokens WHERE name = ?").get(name);
+  async getApiTokenByName(name: string): Promise<ApiToken | undefined> {
+    const row = await this.db.get("SELECT * FROM api_tokens WHERE name = ?", [name]);
     return row ? toApiToken(row) : undefined;
   }
 
-  getApiTokenByHash(hash: string): ApiToken | undefined {
-    const row = this.db.prepare("SELECT * FROM api_tokens WHERE token_hash = ?").get(hash);
+  async getApiTokenByHash(hash: string): Promise<ApiToken | undefined> {
+    const row = await this.db.get("SELECT * FROM api_tokens WHERE token_hash = ?", [hash]);
     return row ? toApiToken(row) : undefined;
   }
 
-  touchApiToken(id: string, now: Date): void {
-    this.db.prepare("UPDATE api_tokens SET last_used_at = ? WHERE id = ?").run(now.toISOString(), id);
+  async touchApiToken(id: string, now: Date): Promise<void> {
+    await this.db.run("UPDATE api_tokens SET last_used_at = ? WHERE id = ?", [now.toISOString(), id]);
   }
 
-  deleteApiToken(id: string): void {
-    this.db.prepare("DELETE FROM api_tokens WHERE id = ?").run(id);
+  async deleteApiToken(id: string): Promise<void> {
+    await this.db.run("DELETE FROM api_tokens WHERE id = ?", [id]);
   }
 
   // --- CI results ---
 
-  upsertCiResult(result: CiResult): void {
-    this.db
-      .prepare(
-        `INSERT INTO ci_results (repo, sha, tag, status, received_at) VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT (repo, sha) DO UPDATE SET tag = excluded.tag, status = excluded.status, received_at = excluded.received_at`,
-      )
-      .run(normalizeRepo(result.repo), result.sha, result.tag, result.status, result.receivedAt);
+  async upsertCiResult(result: CiResult): Promise<void> {
+    await this.db.run(
+      `INSERT INTO ci_results (repo, sha, tag, status, received_at) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT (repo, sha) DO UPDATE SET tag = excluded.tag, status = excluded.status, received_at = excluded.received_at`,
+      [normalizeRepo(result.repo), result.sha, result.tag, result.status, result.receivedAt],
+    );
   }
 
-  getCiResult(repo: string, sha: string): CiResult | undefined {
-    const row = this.db.prepare("SELECT * FROM ci_results WHERE repo = ? AND sha = ?").get(normalizeRepo(repo), sha);
+  async getCiResult(repo: string, sha: string): Promise<CiResult | undefined> {
+    const row = await this.db.get("SELECT * FROM ci_results WHERE repo = ? AND sha = ?", [normalizeRepo(repo), sha]);
     if (!row) return undefined;
     return {
       repo: row.repo as string,
@@ -291,21 +329,19 @@ export class Store {
    * Records a version `keel create-version` just pushed, as `pending`. If keel already knows it (its CI
    * reported first), only the fields it was missing are filled in: the CI outcome is never overwritten.
    */
-  registerVersion(
+  async registerVersion(
     input: { repo: string; tag: string; sha: string; branch?: string; createdByName?: string; createdByEmail?: string },
     now: Date,
-  ): Version {
+  ): Promise<Version> {
     const repo = normalizeRepo(input.repo);
-    this.db
-      .prepare(
-        `INSERT INTO versions (repo, tag, sha, branch, created_by_name, created_by_email, created_at, ci_status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')
-         ON CONFLICT (repo, tag) DO UPDATE SET
-           branch = COALESCE(versions.branch, excluded.branch),
-           created_by_name = COALESCE(versions.created_by_name, excluded.created_by_name),
-           created_by_email = COALESCE(versions.created_by_email, excluded.created_by_email)`,
-      )
-      .run(
+    await this.db.run(
+      `INSERT INTO versions (repo, tag, sha, branch, created_by_name, created_by_email, created_at, ci_status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')
+       ON CONFLICT (repo, tag) DO UPDATE SET
+         branch = COALESCE(versions.branch, excluded.branch),
+         created_by_name = COALESCE(versions.created_by_name, excluded.created_by_name),
+         created_by_email = COALESCE(versions.created_by_email, excluded.created_by_email)`,
+      [
         repo,
         input.tag,
         input.sha,
@@ -313,66 +349,76 @@ export class Store {
         input.createdByName ?? null,
         input.createdByEmail ?? null,
         now.toISOString(),
-      );
-    return this.getVersion(repo, input.tag) as Version;
+      ],
+    );
+    return (await this.getVersion(repo, input.tag)) as Version;
   }
 
   /** Stores a version's CI outcome, creating the version if `create-version` never registered it. */
-  recordVersionCi(
+  async recordVersionCi(
     input: { repo: string; tag: string; sha: string; status: VersionCiStatus; runUrl?: string },
     now: Date,
-  ): Version {
+  ): Promise<Version> {
     const repo = normalizeRepo(input.repo);
     const ts = now.toISOString();
-    this.db
-      .prepare(
-        `INSERT INTO versions (repo, tag, sha, created_at, ci_status, ci_finished_at, run_url)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT (repo, tag) DO UPDATE SET
-           sha = excluded.sha,
-           ci_status = excluded.ci_status,
-           ci_finished_at = excluded.ci_finished_at,
-           run_url = COALESCE(excluded.run_url, versions.run_url)`,
-      )
-      .run(repo, input.tag, input.sha, ts, input.status, ts, input.runUrl ?? null);
-    return this.getVersion(repo, input.tag) as Version;
+    await this.db.run(
+      `INSERT INTO versions (repo, tag, sha, created_at, ci_status, ci_finished_at, run_url)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (repo, tag) DO UPDATE SET
+         sha = excluded.sha,
+         ci_status = excluded.ci_status,
+         ci_finished_at = excluded.ci_finished_at,
+         run_url = COALESCE(excluded.run_url, versions.run_url)`,
+      [repo, input.tag, input.sha, ts, input.status, ts, input.runUrl ?? null],
+    );
+    return (await this.getVersion(repo, input.tag)) as Version;
   }
 
-  getVersion(repo: string, tag: string): Version | undefined {
-    const row = this.db.prepare("SELECT * FROM versions WHERE repo = ? AND tag = ?").get(normalizeRepo(repo), tag);
+  async getVersion(repo: string, tag: string): Promise<Version | undefined> {
+    const row = await this.db.get("SELECT * FROM versions WHERE repo = ? AND tag = ?", [normalizeRepo(repo), tag]);
     return row ? toVersion(row) : undefined;
   }
 
   /** Newest first. */
-  listVersions(repo: string, { limit = 20, status }: { limit?: number; status?: VersionCiStatus } = {}): Version[] {
+  async listVersions(
+    repo: string,
+    { limit = 20, status }: { limit?: number; status?: VersionCiStatus } = {},
+  ): Promise<Version[]> {
     const params: (string | number)[] = [normalizeRepo(repo)];
     let where = "repo = ?";
     if (status) {
       where += " AND ci_status = ?";
       params.push(status);
     }
-    return this.db
-      .prepare(`SELECT * FROM versions WHERE ${where} ORDER BY created_at DESC, tag DESC LIMIT ?`)
-      .all(...params, limit)
-      .map(toVersion);
+    const rows = await this.db.all(`SELECT * FROM versions WHERE ${where} ORDER BY created_at DESC, tag DESC LIMIT ?`, [
+      ...params,
+      limit,
+    ]);
+    return rows.map(toVersion);
   }
 
-  /** Marks as `expired` the versions still `pending` that were created before `cutoff`. Returns them. */
-  expirePendingVersions(cutoff: Date, now: Date): Version[] {
-    const stale = this.db
-      .prepare("SELECT * FROM versions WHERE ci_status = 'pending' AND created_at < ?")
-      .all(cutoff.toISOString())
-      .map(toVersion);
-    const update = this.db.prepare(
-      "UPDATE versions SET ci_status = 'expired', ci_finished_at = ? WHERE repo = ? AND tag = ? AND ci_status = 'pending'",
-    );
-    for (const v of stale) update.run(now.toISOString(), v.repo, v.tag);
-    return stale;
+  /**
+   * Marks as `expired` the versions still `pending` that were created before `cutoff`. Returns the ones this call
+   * expired: with several replicas, a version another one expired first is not returned twice.
+   */
+  async expirePendingVersions(cutoff: Date, now: Date): Promise<Version[]> {
+    const stale = (
+      await this.db.all("SELECT * FROM versions WHERE ci_status = 'pending' AND created_at < ?", [cutoff.toISOString()])
+    ).map(toVersion);
+    const expired: Version[] = [];
+    for (const v of stale) {
+      const { changes } = await this.db.run(
+        "UPDATE versions SET ci_status = 'expired', ci_finished_at = ? WHERE repo = ? AND tag = ? AND ci_status = 'pending'",
+        [now.toISOString(), v.repo, v.tag],
+      );
+      if (changes === 1) expired.push(v);
+    }
+    return expired;
   }
 
   // --- deploys ---
 
-  insertDeploy(
+  async insertDeploy(
     input: {
       repo: string;
       tag: string;
@@ -383,16 +429,14 @@ export class Store {
       requestedBy?: string | null;
     },
     now: Date,
-  ): DeployRecord {
+  ): Promise<DeployRecord> {
     const id = randomUUID();
     const ts = now.toISOString();
-    this.db
-      .prepare(
-        `INSERT INTO deploys (id, repo, tag, sha, service_id, service_alias, status, error, ci_passed_at, finished_at,
-           requested_by, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
+    await this.db.run(
+      `INSERT INTO deploys (id, repo, tag, sha, service_id, service_alias, status, error, ci_passed_at, finished_at,
+         requested_by, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
         id,
         normalizeRepo(input.repo),
         input.tag,
@@ -407,20 +451,21 @@ export class Store {
         input.requestedBy ?? null,
         ts,
         ts,
-      );
-    return this.getDeploy(id) as DeployRecord;
+      ],
+    );
+    return (await this.getDeploy(id)) as DeployRecord;
   }
 
-  getDeploy(id: string): DeployRecord | undefined {
-    const row = this.db.prepare("SELECT * FROM deploys WHERE id = ?").get(id);
+  async getDeploy(id: string): Promise<DeployRecord | undefined> {
+    const row = await this.db.get("SELECT * FROM deploys WHERE id = ?", [id]);
     return row ? toDeploy(row) : undefined;
   }
 
   /** Oldest first by default (queue order); pass `newestFirst` for history views. */
-  listDeploys(
+  async listDeploys(
     filter: { status?: DeployStatus; repo?: string; sha?: string; serviceId?: string } = {},
     { limit = 100, newestFirst = false }: { limit?: number; newestFirst?: boolean } = {},
-  ) {
+  ): Promise<DeployRecord[]> {
     const conditions: [string, string | undefined][] = [
       ["status = ?", filter.status],
       ["repo = ?", filter.repo && normalizeRepo(filter.repo)],
@@ -430,37 +475,39 @@ export class Store {
     const active = conditions.filter((c): c is [string, string] => Boolean(c[1]));
     const where = active.map(([sql]) => sql);
     const params = active.map(([, value]) => value);
-    const sql = `SELECT * FROM deploys ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at ${newestFirst ? "DESC" : "ASC"} LIMIT ?`;
-    return this.db
-      .prepare(sql)
-      .all(...params, limit)
-      .map(toDeploy);
+    const direction = newestFirst ? "DESC" : "ASC";
+    const sql = `SELECT * FROM deploys ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at ${direction}, ${this.deployInsertOrder} ${direction} LIMIT ?`;
+    return (await this.db.all(sql, [...params, limit])).map(toDeploy);
   }
 
   /** Deploys of a repo whose id starts with `prefix`, like git's short commit hashes. */
-  findDeploysByPrefix(repo: string, prefix: string): DeployRecord[] {
-    return this.db
-      .prepare("SELECT * FROM deploys WHERE repo = ? AND id LIKE ? ORDER BY created_at DESC LIMIT 10")
-      .all(normalizeRepo(repo), `${prefix.replace(/[%_]/g, "")}%`)
-      .map(toDeploy);
+  async findDeploysByPrefix(repo: string, prefix: string): Promise<DeployRecord[]> {
+    // Without LIKE's wildcards (and Postgres's default escape character) the prefix matches literally in both engines.
+    const rows = await this.db.all(
+      `SELECT * FROM deploys WHERE repo = ? AND id LIKE ? ORDER BY created_at DESC, ${this.deployInsertOrder} DESC LIMIT 10`,
+      [normalizeRepo(repo), `${prefix.replace(/[%_\\]/g, "")}%`],
+    );
+    return rows.map(toDeploy);
   }
 
-  /** Moves a deploy to `to` only if the state machine allows it; returns the updated record or undefined. */
-  transition(
+  /**
+   * Moves a deploy to `to` only if the state machine allows it; returns the updated record or undefined.
+   * The UPDATE only matches while the deploy is still in the state it was read in, so when two callers race
+   * (two replicas, or the worker and a CI result), exactly one wins and the other gets undefined.
+   */
+  async transition(
     id: string,
     to: DeployStatus,
     now: Date,
     extra: { error?: string; deployStartedAt?: Date } = {},
-  ): DeployRecord | undefined {
-    const current = this.getDeploy(id);
+  ): Promise<DeployRecord | undefined> {
+    const current = await this.getDeploy(id);
     if (!current || !canTransition(current.status, to)) return undefined;
-    const result = this.db
-      .prepare(
-        `UPDATE deploys SET status = ?, error = ?, deploy_started_at = COALESCE(?, deploy_started_at),
-           ci_passed_at = COALESCE(?, ci_passed_at), finished_at = COALESCE(?, finished_at), updated_at = ?
-         WHERE id = ? AND status = ?`,
-      )
-      .run(
+    const result = await this.db.run(
+      `UPDATE deploys SET status = ?, error = ?, deploy_started_at = COALESCE(?, deploy_started_at),
+         ci_passed_at = COALESCE(?, ci_passed_at), finished_at = COALESCE(?, finished_at), updated_at = ?
+       WHERE id = ? AND status = ?`,
+      [
         to,
         extra.error ?? null,
         extra.deployStartedAt?.toISOString() ?? null,
@@ -469,7 +516,22 @@ export class Store {
         now.toISOString(),
         id,
         current.status,
-      );
+      ],
+    );
     return result.changes === 1 ? this.getDeploy(id) : undefined;
+  }
+
+  /**
+   * Claims a `ci_passed` deploy for the worker: moves it to `deploying` unless its service already has a deploy
+   * `deploying`. Returns the claimed record, or undefined when someone else got there first. Runs in a transaction
+   * with the service row locked, so replicas claiming deploys of the same service take turns and only one runs.
+   */
+  async claimDeploy(id: string, serviceId: string, now: Date): Promise<DeployRecord | undefined> {
+    return this.transaction(async (tx) => {
+      await tx.lockRow("services", serviceId);
+      const [busy] = await tx.listDeploys({ serviceId, status: "deploying" }, { limit: 1 });
+      if (busy) return undefined;
+      return tx.transition(id, "deploying", now, { deployStartedAt: now });
+    });
   }
 }

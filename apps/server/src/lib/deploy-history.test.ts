@@ -10,18 +10,18 @@ const get = (query = "") => apiRequest(query && `?${query}`);
 
 describe("deploy milestones", () => {
   it("records when the CI passed, when Dokploy started and when it finished", async () => {
-    const { store, worker, dokploy, clock, ciToken } = createTestContext();
-    const { id } = requestDeploy(store, deployReq, clock.now());
-    expect(store.getDeploy(id)).toMatchObject({ ciPassedAt: null, deployStartedAt: null, finishedAt: null });
+    const { store, worker, dokploy, clock, ciToken } = await createTestContext();
+    const { id } = await requestDeploy(store, deployReq, clock.now());
+    expect(await store.getDeploy(id)).toMatchObject({ ciPassedAt: null, deployStartedAt: null, finishedAt: null });
 
     clock.advanceMinutes(3);
-    recordCiResult(store, ciReq, ciToken, clock.now());
+    await recordCiResult(store, ciReq, ciToken, clock.now());
     await worker.tick();
     clock.advanceMinutes(2);
     dokploy.status = "done";
     await worker.tick();
 
-    expect(store.getDeploy(id)).toMatchObject({
+    expect(await store.getDeploy(id)).toMatchObject({
       status: "deployed",
       createdAt: "2026-10-26T12:00:00.000Z",
       ciPassedAt: "2026-10-26T12:03:00.000Z",
@@ -30,43 +30,43 @@ describe("deploy milestones", () => {
     });
   });
 
-  it("stamps both dates at creation when the CI result was already there", () => {
-    const passed = createTestContext();
-    recordCiResult(passed.store, ciReq, passed.ciToken, passed.clock.now());
-    const a = requestDeploy(passed.store, deployReq, passed.clock.now());
+  it("stamps both dates at creation when the CI result was already there", async () => {
+    const passed = await createTestContext();
+    await recordCiResult(passed.store, ciReq, passed.ciToken, passed.clock.now());
+    const a = await requestDeploy(passed.store, deployReq, passed.clock.now());
     expect(a.ciPassedAt).toBe(a.createdAt);
     expect(a.finishedAt).toBeNull();
 
-    const failed = createTestContext();
-    recordCiResult(failed.store, { ...ciReq, status: "failure" }, failed.ciToken, failed.clock.now());
-    const b = requestDeploy(failed.store, deployReq, failed.clock.now());
+    const failed = await createTestContext();
+    await recordCiResult(failed.store, { ...ciReq, status: "failure" }, failed.ciToken, failed.clock.now());
+    const b = await requestDeploy(failed.store, deployReq, failed.clock.now());
     expect(b).toMatchObject({ status: "ci_failed", ciPassedAt: null, finishedAt: b.createdAt });
   });
 
   it("marks expiry as the finish", async () => {
-    const { store, worker, clock } = createTestContext();
-    const { id } = requestDeploy(store, deployReq, clock.now());
+    const { store, worker, clock } = await createTestContext();
+    const { id } = await requestDeploy(store, deployReq, clock.now());
     clock.advanceMinutes(61);
     await worker.tick();
-    expect(store.getDeploy(id)).toMatchObject({ status: "expired", finishedAt: "2026-10-26T13:01:00.000Z" });
+    expect(await store.getDeploy(id)).toMatchObject({ status: "expired", finishedAt: "2026-10-26T13:01:00.000Z" });
   });
 });
 
 describe("GET /api/repos/:owner/:name/deploys", () => {
   it("lists newest first, filters by service and honours the limit", async () => {
-    const { ctx, store, clock, scope } = createTestContext();
+    const { ctx, store, clock, scope } = await createTestContext();
     const { addService } = await import("./scopes");
-    addService(
+    await addService(
       store,
       scope,
       { alias: "worker", dokployUrl: "https://dokploy.example.com/dashboard/project/p/services/application/w1" },
       clock.now(),
     );
-    requestDeploy(store, deployReq, clock.now());
+    await requestDeploy(store, deployReq, clock.now());
     clock.advanceMinutes(1);
-    requestDeploy(store, { ...deployReq, tag: "v1.1.0", sha: "b".repeat(40) }, clock.now());
+    await requestDeploy(store, { ...deployReq, tag: "v1.1.0", sha: "b".repeat(40) }, clock.now());
     clock.advanceMinutes(1);
-    requestDeploy(store, { ...deployReq, service: "worker" }, clock.now());
+    await requestDeploy(store, { ...deployReq, service: "worker" }, clock.now());
 
     const all = (await (await handlers.listRepoDeploys(ctx, get(), "Konectus-IO", "app")).json()) as {
       deploys: Deploy[];
@@ -85,7 +85,7 @@ describe("GET /api/repos/:owner/:name/deploys", () => {
   });
 
   it("rejects unknown repos and services and bad limits", async () => {
-    const { ctx } = createTestContext();
+    const { ctx } = await createTestContext();
     expect((await handlers.listRepoDeploys(ctx, get(), "other", "repo")).status).toBe(404);
     const unknown = await handlers.listRepoDeploys(ctx, get("service=nope"), "konectus-io", "app");
     expect(unknown.status).toBe(404);
@@ -97,8 +97,8 @@ describe("GET /api/repos/:owner/:name/deploys", () => {
 
 describe("GET /api/repos/:owner/:name/deploys/:id", () => {
   it("finds a deploy by a unique id prefix and adds the service details", async () => {
-    const { ctx, store, clock } = createTestContext();
-    const { id } = requestDeploy(store, deployReq, clock.now());
+    const { ctx, store, clock } = await createTestContext();
+    const { id } = await requestDeploy(store, deployReq, clock.now());
 
     const response = await handlers.getRepoDeploy(ctx, get(), "konectus-io", "app", id.slice(0, 8).toUpperCase());
     const detail = (await response.json()) as DeployDetail;
@@ -106,15 +106,14 @@ describe("GET /api/repos/:owner/:name/deploys/:id", () => {
   });
 
   it("asks for more characters when the prefix is short or ambiguous", async () => {
-    const { ctx, store, clock } = createTestContext();
-    const a = requestDeploy(store, deployReq, clock.now());
-    const b = requestDeploy(store, { ...deployReq, sha: "b".repeat(40), tag: "v2" }, clock.now());
+    const { ctx, db, store, clock } = await createTestContext();
+    const a = await requestDeploy(store, deployReq, clock.now());
+    const b = await requestDeploy(store, { ...deployReq, sha: "b".repeat(40), tag: "v2" }, clock.now());
 
     expect((await handlers.getRepoDeploy(ctx, get(), "konectus-io", "app", "abc")).status).toBe(400);
     // Force a shared prefix: ids are random UUIDs, so rewrite them to collide.
-    const db = (store as unknown as { db: { prepare(sql: string): { run(...a: string[]): void } } }).db;
-    db.prepare("UPDATE deploys SET id = ? WHERE id = ?").run(`abcd1111-${a.id.slice(9)}`, a.id);
-    db.prepare("UPDATE deploys SET id = ? WHERE id = ?").run(`abcd2222-${b.id.slice(9)}`, b.id);
+    await db.run("UPDATE deploys SET id = ? WHERE id = ?", [`abcd1111-${a.id.slice(9)}`, a.id]);
+    await db.run("UPDATE deploys SET id = ? WHERE id = ?", [`abcd2222-${b.id.slice(9)}`, b.id]);
     const ambiguous = await handlers.getRepoDeploy(ctx, get(), "konectus-io", "app", "abcd");
     expect(ambiguous.status).toBe(409);
     expect((await ambiguous.json()).error).toMatch(/abcd1111.*abcd2222|abcd2222.*abcd1111/);
@@ -122,10 +121,10 @@ describe("GET /api/repos/:owner/:name/deploys/:id", () => {
   });
 
   it("does not leak deploys of other repos", async () => {
-    const { ctx, store, clock } = createTestContext();
+    const { ctx, store, clock } = await createTestContext();
     const { createScope } = await import("./scopes");
-    createScope(store, { name: "other", repoUrl: "konectus-io/other" }, clock.now());
-    const { id } = requestDeploy(store, deployReq, clock.now());
+    await createScope(store, { name: "other", repoUrl: "konectus-io/other" }, clock.now());
+    const { id } = await requestDeploy(store, deployReq, clock.now());
     expect((await handlers.getRepoDeploy(ctx, get(), "konectus-io", "other", id)).status).toBe(404);
   });
 });

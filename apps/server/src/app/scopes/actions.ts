@@ -35,9 +35,9 @@ async function attempt(fn: () => FormState | Promise<FormState>): Promise<FormSt
 }
 
 export async function createScopeAction(_state: FormState, form: FormData): Promise<FormState> {
-  return attempt(() => {
-    const { store, now } = getContext();
-    const { scope, ciToken } = createScope(
+  return attempt(async () => {
+    const { store, now } = await getContext();
+    const { scope, ciToken } = await createScope(
       store,
       { name: field(form, "name"), repoUrl: field(form, "repoUrl") },
       now(),
@@ -48,11 +48,11 @@ export async function createScopeAction(_state: FormState, form: FormData): Prom
 }
 
 export async function addServiceAction(scopeId: string, _state: FormState, form: FormData): Promise<FormState> {
-  return attempt(() => {
-    const { store, now } = getContext();
-    const scope = store.getScope(scopeId);
+  return attempt(async () => {
+    const { store, now } = await getContext();
+    const scope = await store.getScope(scopeId);
     if (!scope) throw new ApiError(404, "Scope no encontrado.");
-    addService(
+    await addService(
       store,
       scope,
       { alias: field(form, "alias"), dokployUrl: field(form, "dokployUrl"), tagVariable: field(form, "tagVariable") },
@@ -64,7 +64,7 @@ export async function addServiceAction(scopeId: string, _state: FormState, form:
 }
 
 export async function rotateTokenAction(scopeId: string, _state: FormState): Promise<FormState> {
-  return attempt(() => ({ token: rotateCiToken(getContext().store, scopeId) }));
+  return attempt(async () => ({ token: await rotateCiToken((await getContext()).store, scopeId) }));
 }
 
 export async function lockServiceAction(
@@ -73,13 +73,13 @@ export async function lockServiceAction(
   _state: FormState,
   form: FormData,
 ): Promise<FormState> {
-  return attempt(() => {
-    const { store, now } = getContext();
-    const service = store.getService(serviceId);
+  return attempt(async () => {
+    const { store, now } = await getContext();
+    const service = await store.getService(serviceId);
     if (service?.scopeId !== scopeId) throw new ApiError(404, "Servicio no encontrado.");
     const parsed = lockServiceRequestSchema.safeParse({ reason: field(form, "reason") });
     if (!parsed.success) throw new ApiError(400, `Escribe el motivo del bloqueo (1 a ${LOCK_REASON_MAX} caracteres).`);
-    store.lockService({ serviceId, reason: parsed.data.reason, lockedBy: ADMIN_NAME }, now());
+    await store.lockService({ serviceId, reason: parsed.data.reason, lockedBy: ADMIN_NAME }, now());
     revalidatePath(`/scopes/${scopeId}`);
     return { ok: true };
   });
@@ -88,22 +88,24 @@ export async function lockServiceAction(
 export async function unlockServiceAction(form: FormData): Promise<void> {
   await requireAdmin();
   const scopeId = field(form, "scopeId");
-  const service = getContext().store.getService(field(form, "serviceId"));
-  if (service?.scopeId === scopeId) getContext().store.unlockService(service.id);
+  const { store } = await getContext();
+  const service = await store.getService(field(form, "serviceId"));
+  if (service?.scopeId === scopeId) await store.unlockService(service.id);
   revalidatePath(`/scopes/${scopeId}`);
 }
 
 export async function deleteServiceAction(form: FormData): Promise<void> {
   await requireAdmin();
   const scopeId = field(form, "scopeId");
-  const service = getContext().store.getService(field(form, "serviceId"));
-  if (service?.scopeId === scopeId) getContext().store.deleteService(service.id);
+  const { store } = await getContext();
+  const service = await store.getService(field(form, "serviceId"));
+  if (service?.scopeId === scopeId) await store.deleteService(service.id);
   revalidatePath(`/scopes/${scopeId}`);
 }
 
 export async function deleteScopeAction(form: FormData): Promise<void> {
   await requireAdmin();
-  getContext().store.deleteScope(field(form, "scopeId"));
+  await (await getContext()).store.deleteScope(field(form, "scopeId"));
   revalidatePath("/scopes");
   redirect("/scopes");
 }

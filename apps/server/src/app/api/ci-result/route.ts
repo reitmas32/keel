@@ -3,6 +3,6 @@ import { handlers } from "@/lib/handlers";
 
 export const dynamic = "force-dynamic";
 
-export function POST(request: Request) {
-  return handlers.ciResult(getContext(), request);
+export async function POST(request: Request) {
+  return handlers.ciResult(await getContext(), request);
 }
