@@ -154,8 +154,13 @@ export async function handle(fn: () => Promise<Response> | Response): Promise<Re
   try {
     return await fn();
   } catch (error) {
-    if (error instanceof ApiError) return Response.json({ error: error.message }, { status: error.status });
-    if (error instanceof DokployError) return Response.json({ error: error.message }, { status: 502 });
+    // By name as well as class: Next can bundle these modules into separate chunks, each with its own class.
+    if (error instanceof ApiError || (error instanceof Error && error.name === "ApiError")) {
+      return Response.json({ error: error.message }, { status: (error as ApiError).status });
+    }
+    if (error instanceof DokployError || (error instanceof Error && error.name === "DokployError")) {
+      return Response.json({ error: error.message }, { status: 502 });
+    }
     console.error("[keel] error no controlado", error);
     return Response.json({ error: "Error interno." }, { status: 500 });
   }
