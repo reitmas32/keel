@@ -123,6 +123,25 @@ pub fn ask(message: &str, placeholder: &str) -> Result<String> {
     Ok(value.trim().to_owned())
 }
 
+/// Asks for a non-empty line of text, offering `default` (Enter accepts it).
+pub fn ask_default(message: &str, default: &str) -> Result<String> {
+    let mut input = dialoguer::Input::<String>::new().with_prompt(message);
+    if !default.is_empty() {
+        input = input.default(default.to_owned());
+    }
+    let value = input
+        .validate_with(|v: &String| -> std::result::Result<(), &str> {
+            if v.trim().is_empty() {
+                Err("Requerido")
+            } else {
+                Ok(())
+            }
+        })
+        .interact_text()
+        .map_err(|_| cancelled())?;
+    Ok(value.trim().to_owned())
+}
+
 /// A choice among options shown as `label  (hint)`; returns the index.
 pub fn select(
     message: &str,

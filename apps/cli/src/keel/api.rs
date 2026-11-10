@@ -619,6 +619,205 @@ impl KeelApi {
     }
 }
 
+// ------------------------------------------------------------- linking repos
+
+/// The CI token of an app (`ciToken`). keel shows it only once, so it lives in
+/// memory only: no `Serialize`, and `Debug` never prints it.
+#[derive(Clone, PartialEq, Eq, Deserialize)]
+#[serde(transparent)]
+pub struct CiToken(String);
+
+impl CiToken {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// The value, for the one place that needs it (stdin of `gh secret set`).
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for CiToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CiToken(***)")
+    }
+}
+
+/// An app of keel: a GitHub repo linked to its Dokploy scopes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct App {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    pub repo: String,
+    #[serde(default)]
+    pub created_at: Option<String>,
+}
+
+/// `GET /repos/<repo>`: the app and its scopes (same items as `GET …/scopes`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinkedRepo {
+    pub app: App,
+    #[serde(default)]
+    pub scopes: Vec<Value>,
+}
+
+impl LinkedRepo {
+    pub fn aliases(&self) -> Vec<String> {
+        self.scopes
+            .iter()
+            .filter_map(|s| s["alias"].as_str().map(str::to_owned))
+            .collect()
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatedApp {
+    pub app: App,
+    pub ci_token: CiToken,
+}
+
+/// Which app and scope a Dokploy service already belongs to.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServiceLink {
+    pub repo: String,
+    pub scope: String,
+}
+
+/// An application or compose of the Dokploy keel deploys to.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DokployService {
+    /// `application` or `compose`.
+    pub kind: String,
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub app_name: Option<String>,
+    #[serde(default)]
+    pub project: String,
+    #[serde(default)]
+    pub environment: String,
+    #[serde(default)]
+    pub dashboard_url: Option<String>,
+    #[serde(default)]
+    pub linked: Option<ServiceLink>,
+    /// Any registry Dokploy pulls the image with, when the server says so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry: Option<Value>,
+}
+
+impl DokployService {
+    /// `Shop / production / web`
+    pub fn path(&self) -> String {
+        format!("{} / {} / {}", self.project, self.environment, self.name)
+    }
+}
+
+/// What an old server (v0.7.0) answers to the routes that link repos.
+pub const LINK_UNSUPPORTED: &str = "Tu servidor de keel no puede vincular repos desde la CLI (actualízalo a v0.8.0 o usa el admin).";
+
+/// An unsupported route becomes [`LINK_UNSUPPORTED`]; other errors pass through.
+pub fn link_unsupported(error: anyhow::Error) -> anyhow::Error {
+    if !is_unsupported(&error) {
+        return error;
+    }
+    let details = error
+        .chain()
+        .find_map(|e| e.downcast_ref::<Failure>())
+        .and_then(|f| f.details.clone())
+        .unwrap_or_default();
+    fail_with(Kind::KeelUnreachable, LINK_UNSUPPORTED, details)
+}
+
+/// The HTTP status of a keel error, if it came from the API.
+pub fn http_status(error: &anyhow::Error) -> Option<u16> {
+    error
+        .chain()
+        .find_map(|e| e.downcast_ref::<Failure>())
+        .and_then(|f| f.details.as_ref())
+        .and_then(|d| d["http_status"].as_u64())
+        .and_then(|s| u16::try_from(s).ok())
+}
+
+/// Whether the error is one of keel's own `{error}` answers.
+pub fn from_keel(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .find_map(|e| e.downcast_ref::<Failure>())
+        .and_then(|f| f.details.as_ref())
+        .is_some_and(|d| d["from_keel"] == true)
+}
+
+impl KeelApi {
+    /// The app linked to `repo`, `None` when keel says it isn't linked. A server
+    /// without the route fails with [`is_unsupported`] (callers may fall back).
+    pub async fn get_repo(&self, repo: &str) -> Result<Option<LinkedRepo>> {
+        let path = format!("/repos/{repo}");
+        match self.request_value(reqwest::Method::GET, &path, None).await {
+            Ok(body) => Ok(Some(parse(body, &path)?)),
+            Err(error) if http_status(&error) == Some(404) && from_keel(&error) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Links `repo` as a new app (admin). The CI token comes back only here.
+    pub async fn create_app(&self, repo: &str, name: Option<&str>) -> Result<CreatedApp> {
+        let mut body = serde_json::json!({ "repo": repo });
+        if let Some(name) = name {
+            body["name"] = Value::from(name);
+        }
+        let value = self
+            .request_value(reqwest::Method::POST, "/apps", Some(body))
+            .await
+            .map_err(link_unsupported)?;
+        parse(value, "/apps")
+    }
+
+    /// A new CI token for the app (maintainer); the previous one stops working.
+    pub async fn rotate_ci_token(&self, repo: &str) -> Result<CiToken> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Body {
+            ci_token: CiToken,
+        }
+        let path = format!("/repos/{repo}/ci-token");
+        let value = self
+            .request_value(reqwest::Method::POST, &path, None)
+            .await
+            .map_err(link_unsupported)?;
+        Ok(parse::<Body>(value, &path)?.ci_token)
+    }
+
+    /// Adds a scope to the app (maintainer); answers the new scope item.
+    pub async fn create_scope(&self, repo: &str, body: Value) -> Result<Value> {
+        self.request_value(
+            reqwest::Method::POST,
+            &format!("/repos/{repo}/scopes"),
+            Some(body),
+        )
+        .await
+        .map_err(link_unsupported)
+    }
+
+    /// Every application and compose of the org's Dokploy (maintainer).
+    pub async fn dokploy_services(&self) -> Result<Vec<DokployService>> {
+        #[derive(Deserialize)]
+        struct Body {
+            services: Vec<DokployService>,
+        }
+        let value = self
+            .request_value(reqwest::Method::GET, "/dokploy/services", None)
+            .await
+            .map_err(link_unsupported)?;
+        Ok(parse::<Body>(value, "/dokploy/services")?.services)
+    }
+}
+
 /// A keel answer as `T`.
 fn parse<T: DeserializeOwned>(value: Value, path: &str) -> Result<T> {
     serde_json::from_value(value).map_err(|error| {

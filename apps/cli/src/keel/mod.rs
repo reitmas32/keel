@@ -5,6 +5,7 @@ pub mod api;
 pub mod commands;
 pub mod config;
 pub mod git;
+pub mod github;
 pub mod init;
 pub mod managed;
 pub mod ops;
