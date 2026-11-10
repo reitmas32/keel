@@ -1,10 +1,19 @@
 import {
+  type AppInfo,
+  type CreateAppResponse,
   ciResultRequestSchema,
+  createAppRequestSchema,
   createDeployRequestSchema,
   type Deploy,
   type DeployDetail,
+  type DokployService,
+  type DokployServicesResponse,
+  linkScopeRequestSchema,
   lockScopeRequestSchema,
+  type RepoResponse,
+  type RotateCiTokenResponse,
   registerVersionRequestSchema,
+  roleAtLeast,
   type ScopeLock,
   type ScopeLockInfo,
   type ScopeSummary,
@@ -16,11 +25,20 @@ import {
 import type { z } from "zod";
 import { actorOf, baseRole, CI_ACTOR, type Principal, requireRoleOn } from "./access";
 import { authenticate, type Caller } from "./api-auth";
+import {
+  addScope,
+  assertScopeAliasFree,
+  createApp,
+  normalizeScopeAlias,
+  parseGithubRepoUrl,
+  resolveDokployService,
+  rotateCiToken,
+} from "./apps";
 import type { AppContext } from "./context";
 import { recordCiResult, registerVersion, requestDeploy } from "./deploys";
 import { DokployError } from "./dokploy";
 import { ApiError } from "./errors";
-import type { Target } from "./roles";
+import { type Target, tokenRole } from "./roles";
 import { type App, type DeployRecord, normalizeRepo, type Scope, type ScopeLockRecord } from "./store";
 import { bearerToken } from "./tokens";
 
@@ -68,6 +86,45 @@ async function findScope(ctx: AppContext, app: App, alias: string): Promise<Scop
     );
   }
   return scope;
+}
+
+const toAppInfo = ({ id, name, repo, createdAt }: App): AppInfo => ({ id, name, repo, createdAt });
+
+/** A scope as `GET …/scopes` lists it: with its Dokploy name, current and last deploy, and lock. */
+async function scopeSummary(ctx: AppContext, s: Scope): Promise<ScopeSummary> {
+  const [current] = await ctx.store.listDeploys({ scopeId: s.id, status: "deployed" }, { limit: 1, newestFirst: true });
+  const [last] = await ctx.store.listDeploys({ scopeId: s.id }, { limit: 1, newestFirst: true });
+  const lock = await ctx.store.getScopeLock(s.id);
+  return {
+    alias: s.alias,
+    kind: s.kind,
+    tagVariable: s.tagVariable,
+    dokployId: s.dokployId,
+    dokployUrl: s.dokployUrl,
+    dokployName: (await ctx.dokploy.describe({ kind: s.kind, id: s.dokployId, tagVariable: s.tagVariable })) ?? null,
+    current: current ? toPublic(current) : null,
+    last: last ? toPublic(last) : null,
+    lock: lock ? toLockInfo(lock) : null,
+  };
+}
+
+const scopeSummaries = async (ctx: AppContext, app: App) =>
+  Promise.all((await ctx.store.listScopes(app.id)).map((s) => scopeSummary(ctx, s)));
+
+/**
+ * Seeing Dokploy's services is for whoever can link them: maintainer as base role, or through any grant (both
+ * capped by the token). Anonymous calls never can: their role is at most deployer.
+ */
+function requireDokployReader(caller: Caller): void {
+  const base = caller.member ? baseRole(caller) : caller.anonymousRole;
+  const byGrant =
+    caller.member !== null && caller.grants.some((g) => roleAtLeast(tokenRole(g.role, caller.maxRole), "maintainer"));
+  if (!roleAtLeast(base, "maintainer") && !byGrant) {
+    throw new ApiError(
+      403,
+      `Tu rol (${base ?? "none"}) no permite ver los servicios de Dokploy en keel. Pide a un admin de keel que te dé acceso.`,
+    );
+  }
 }
 
 /**
@@ -199,29 +256,97 @@ export const handlers = {
     authed(ctx, request, async (caller) => {
       requireRoleOn(caller, "viewer", "ver scopes", { repo: repoOf(owner, name) });
       const app = await findApp(ctx, owner, name);
-      const scopes: ScopeSummary[] = await Promise.all(
-        (await ctx.store.listScopes(app.id)).map(async (s) => {
-          const [current] = await ctx.store.listDeploys(
-            { scopeId: s.id, status: "deployed" },
-            { limit: 1, newestFirst: true },
-          );
-          const [last] = await ctx.store.listDeploys({ scopeId: s.id }, { limit: 1, newestFirst: true });
-          const lock = await ctx.store.getScopeLock(s.id);
-          return {
-            alias: s.alias,
-            kind: s.kind,
-            tagVariable: s.tagVariable,
-            dokployId: s.dokployId,
-            dokployUrl: s.dokployUrl,
-            dokployName:
-              (await ctx.dokploy.describe({ kind: s.kind, id: s.dokployId, tagVariable: s.tagVariable })) ?? null,
-            current: current ? toPublic(current) : null,
-            last: last ? toPublic(last) : null,
-            lock: lock ? toLockInfo(lock) : null,
-          };
-        }),
-      );
+      const scopes = await scopeSummaries(ctx, app);
       return Response.json({ repo: app.repo, scopes, services: scopes });
+    }),
+
+  /** `GET /repos/:owner/:name`: the app linked to the repo, with its scopes. */
+  getRepo: (ctx: AppContext, request: Request, owner: string, name: string) =>
+    authed(ctx, request, async (caller) => {
+      requireRoleOn(caller, "viewer", "ver la app", { repo: repoOf(owner, name) });
+      const app = await findApp(ctx, owner, name);
+      const body: RepoResponse = { app: toAppInfo(app), scopes: await scopeSummaries(ctx, app) };
+      return Response.json(body);
+    }),
+
+  /** `POST /apps`: links a repo. Needs admin on that repo; the CI token is returned here and never again. */
+  createApp: (ctx: AppContext, request: Request) =>
+    authed(ctx, request, async (caller) => {
+      const body = await parseBody(request, createAppRequestSchema);
+      const repo = parseGithubRepoUrl(body.repo);
+      if (!repo) throw new ApiError(400, `URL de repo de GitHub inválida: ${body.repo}`);
+      requireRoleOn(caller, "admin", "crear apps", { repo });
+      const { app, ciToken } = await createApp(ctx.store, { name: body.name ?? "", repoUrl: repo }, ctx.now());
+      await audit(ctx, caller, "app.create", { repo: app.repo }, { name: app.name });
+      const response: CreateAppResponse = { app: toAppInfo(app), ciToken };
+      return Response.json(response, { status: 201 });
+    }),
+
+  /** `POST /repos/:owner/:name/ci-token`: a new CI token, shown once; the previous one stops working. */
+  rotateCiToken: (ctx: AppContext, request: Request, owner: string, name: string) =>
+    authed(ctx, request, async (caller) => {
+      const target = { repo: repoOf(owner, name) };
+      requireRoleOn(caller, "maintainer", "rotar el token de CI", target);
+      const app = await findApp(ctx, owner, name);
+      const ciToken = await rotateCiToken(ctx.store, app.id);
+      await audit(ctx, caller, "ci_token.rotate", { repo: app.repo }, {});
+      const body: RotateCiTokenResponse = { ciToken };
+      return Response.json(body);
+    }),
+
+  /**
+   * `POST /repos/:owner/:name/scopes`: links a Dokploy service, by its dashboard URL (as in the admin) or by
+   * `kind` + `dokployId`, which Dokploy must confirm.
+   */
+  linkScope: (ctx: AppContext, request: Request, owner: string, name: string) =>
+    authed(ctx, request, async (caller) => {
+      const body = await parseBody(request, linkScopeRequestSchema);
+      const alias = normalizeScopeAlias(body.alias);
+      const target = { repo: repoOf(owner, name), scope: alias };
+      requireRoleOn(caller, "maintainer", "vincular scopes", target);
+      const app = await findApp(ctx, owner, name);
+      await assertScopeAliasFree(ctx.store, app, alias);
+      const dokployUrl =
+        body.dokployUrl ??
+        (await resolveDokployService(ctx.dokploy, body.kind as "application" | "compose", body.dokployId as string));
+      const scope = await addScope(
+        ctx.store,
+        app,
+        { alias, dokployUrl, ...(body.tagVariable !== undefined && { tagVariable: body.tagVariable }) },
+        ctx.now(),
+      );
+      await audit(
+        ctx,
+        caller,
+        "scope.link",
+        { repo: app.repo, scope: scope.alias },
+        { kind: scope.kind, dokployId: scope.dokployId, tagVariable: scope.tagVariable },
+      );
+      return Response.json(await scopeSummary(ctx, scope), { status: 201 });
+    }),
+
+  /** `GET /dokploy/services`: Dokploy's applications and composes, and which keel scope points at each. */
+  listDokployServices: (ctx: AppContext, request: Request) =>
+    authed(ctx, request, async (caller) => {
+      requireDokployReader(caller);
+      const found = await ctx.dokploy.listServices();
+      const linked = new Map<string, { repo: string; scope: string }>();
+      for (const s of await ctx.store.listAllScopes()) {
+        const key = `${s.kind}:${s.dokployId}`;
+        if (!linked.has(key)) linked.set(key, { repo: s.repo, scope: s.alias });
+      }
+      const services: DokployService[] = found.map((s) => ({
+        kind: s.kind,
+        id: s.id,
+        name: s.name,
+        ...(s.appName && { appName: s.appName }),
+        project: s.project,
+        environment: s.environment,
+        dashboardUrl: s.dashboardUrl,
+        linked: linked.get(`${s.kind}:${s.id}`) ?? null,
+      }));
+      const body: DokployServicesResponse = { services };
+      return Response.json(body);
     }),
 
   lockScope: (ctx: AppContext, request: Request, owner: string, name: string, alias: string) =>
