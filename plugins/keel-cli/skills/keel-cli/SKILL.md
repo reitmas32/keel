@@ -2,7 +2,7 @@
 name: keel-cli
 description: Operate releases and Dokploy with the keel CLI safely — create, promote and deploy versions through the keel server after CI passes, roll back, freeze scopes, read versions, changes, deploys, status and redacted logs, and change anything else on Dokploy (env, Compose, mounts, databases, backups, start/stop) only through expiring plans a person approves one by one. Use when the user wants to deploy, ship, promote or roll back a version, freeze deploys, or see what a deploy would change; asks what runs where, whether a service is up, for logs, or why a deploy failed or waits for CI; wants to change, add or remove an env variable, edit a Compose, add a volume or mount, create a database or a scheduled backup, start, stop or redeploy something on Dokploy; prepare a repo for keel or install agent skills; or when a keel command fails with an error kind such as keel_managed, locked, unauthorized, drift or ci_failed — even if they do not name keel. Never use the Dokploy web UI, curl or another client instead.
 metadata:
-  version: "0.3.0"
+  version: "0.4.0"
   owner: fundathyon
 ---
 
@@ -421,12 +421,19 @@ keel use github.com:<org>          # switch the active org (~/.keel/current)
 When the server sets `KEEL_API_AUTH=required`, every keel command needs that
 token; deploys record who asked for them (`requestedBy`).
 
-Prepare a repo: `keel init` writes `.github/workflows/keel-release.yml` and
-checks that the repo is an app in keel (if not: create the app in the keel
-admin, `<origin>/apps`, and keep the CI token it shows), that the app has
-scopes, and that the repo has the `DEPLOY_API_TOKEN` secret (the app's CI
-token) and `KEEL_API_URL` variable; `keel init --check --json` only audits. It never
-writes secrets: setting them is the person's step.
+Link a repo to keel: `keel init` does it end to end and can be re-run safely.
+It creates the app in keel (admin role), links scopes (`--scope prod=<dokploy
+id or url>`, repeatable; at a terminal it offers Dokploy's services), stores
+the app's CI token as the `DEPLOY_API_TOKEN` secret through `gh` (by stdin —
+the token never reaches the terminal, the conversation or the JSON), sets the
+`KEEL_API_URL` variable, writes `.github/workflows/keel-release.yml`, and with
+`--pr` opens a PR from branch `keel/init`. Without a terminal it needs `-y` to
+create the app. `--rotate-token` replaces the CI token and the secret in one
+step (confirm with the person first: it invalidates the token the CI uses).
+It stops before creating anything if `gh` is missing or logged out; never use
+`--no-github --show-token` for someone (that prints the token). `keel init
+--check --json` only audits. Report its ▲ warnings: an API host GitHub can't
+reach (VPN, `.internal`) means deploys wait for a CI result that never comes.
 
 Install these skills elsewhere: `keel skills add keel-cli` (this repo, for
 Claude Code, Codex and Copilot), `-g` for the user, `keel skills update`.

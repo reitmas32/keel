@@ -198,7 +198,7 @@ En Dokploy: **Project → Create Service → Compose**. Ponle de nombre `keel` (
 ```yaml
 services:
   keel:
-    image: docker.io/getfoundathyon/keel-api:v0.7.0
+    image: docker.io/getfoundathyon/keel-api:v0.8.0
     restart: unless-stopped
     environment:
       DOKPLOY_URL: ${DOKPLOY_URL:?URL de tu Dokploy, p.ej. https://dokploy.konectus.internal}
@@ -224,7 +224,7 @@ volumes:
 
 El archivo del repo trae además, comentado, un servicio `postgres` de ejemplo.
 
-- Usa una versión fija (`:v0.7.0`) en lugar de `:latest`, así un redeploy no cambia de versión sin que lo decidas. Para actualizar keel, cambia la tag y redespliega.
+- Usa una versión fija (`:v0.8.0`) en lugar de `:latest`, así un redeploy no cambia de versión sin que lo decidas. Para actualizar keel, cambia la tag y redespliega.
 - `keel-data` es un volumen con nombre: la base (apps, scopes, tokens de CI e historial) sobrevive a redeploys y actualizaciones de la imagen.
 - `expose` solo abre el puerto 3000 dentro de la red de Docker; el acceso desde fuera lo da el dominio del paso 3. No publiques el puerto con `ports`.
 
@@ -317,6 +317,27 @@ Para arrancar:
 ## Vincular un repo
 
 Vincular un repo es crear una **app** en keel y agregarle sus **scopes**: los destinos de deploy (`prod`, `stg`…), cada uno apuntando a un servicio de Dokploy (un Application o un Compose).
+
+### Desde la CLI (recomendado)
+
+Desde la carpeta del repo, con [`gh`](https://cli.github.com) instalado y con sesión:
+
+```bash
+keel init --scope prod=<id-o-url-de-dokploy> --scope stg=<id-o-url> --pr
+```
+
+`keel init` hace todo y se puede repetir sin duplicar nada:
+
+1. crea la app en keel (necesita rol `admin`; sin terminal, pasa `-y`);
+2. agrega los scopes (en una terminal, sin `--scope`, te deja elegir entre los servicios de Dokploy);
+3. guarda el token de CI de la app como secret `DEPLOY_API_TOKEN` del repo con `gh`, por stdin: nunca se imprime;
+4. define la variable `KEEL_API_URL`;
+5. escribe `.github/workflows/keel-release.yml` y, con `--pr`, abre un PR desde la rama `keel/init`;
+6. revisa todo y avisa si GitHub no puede llegar a tu keel (p. ej. un dominio `.internal` detrás de VPN).
+
+`--rotate-token` cambia el token de CI de una app que ya existe y reemplaza el secret en el mismo paso. Sin `gh`, `keel init` se detiene antes de crear nada: el token solo se muestra una vez y no tendría dónde guardarse. `keel init --check` solo revisa.
+
+### Desde el admin
 
 1. Entra al admin (`https://<dominio>/`) como admin.
 2. En **Apps → Nueva app**: pega la URL del repo de GitHub. Copia el token de CI que aparece (solo se muestra una vez).
