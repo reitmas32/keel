@@ -182,14 +182,45 @@ pub enum Command {
         #[arg(short = 's', long = "scope", alias = "service", value_name = "SCOPE")]
         scope: Option<String>,
     },
-    /// Prepara el repo para keel: workflow de release, app en keel y secrets de GitHub.
+    /// Prepara el repo para keel: app en keel, scopes, secret y variable de GitHub y
+    /// workflow de release. Se puede repetir: lo que ya está se salta.
+    #[command(
+        after_help = "Ejemplos:\n  keel init -y --scope prod=<id-de-compose> --scope stg=<url-de-dokploy>\n  keel init --rotate-token\n  keel init --pr\n  keel init --check"
+    )]
     Init {
-        /// Solo revisa; sale con código 2 si falta algo.
-        #[arg(long)]
+        /// Solo revisa (no crea ni cambia nada); sale con código 2 si falta algo.
+        #[arg(
+            long,
+            conflicts_with_all = ["yes", "rotate_token", "scope", "tag_variable", "no_github", "show_token", "pr"]
+        )]
         check: bool,
         /// Reemplaza el workflow aunque esté adaptado.
         #[arg(long)]
         force: bool,
+        /// No pregunta antes de crear la app o rotar su token.
+        #[arg(short = 'y', long)]
+        yes: bool,
+        /// Rota el token de CI de una app existente y reemplaza el secret DEPLOY_API_TOKEN
+        /// en el mismo paso (el CI con el token anterior deja de poder reportar).
+        #[arg(long)]
+        rotate_token: bool,
+        /// Agrega un scope: alias=<id-de-dokploy|url-de-dokploy>. Se puede repetir; un
+        /// alias que ya existe se salta.
+        #[arg(long = "scope", value_name = "ALIAS=ID|URL", value_parser = crate::keel::init::parse_scope_arg)]
+        scope: Vec<crate::keel::init::ScopeArg>,
+        /// Variable del tag de un compose: alias=VARIABLE (DOCKER_TAG por defecto).
+        #[arg(long = "tag-variable", value_name = "ALIAS=VARIABLE", value_parser = crate::keel::init::parse_tag_variable)]
+        tag_variable: Vec<crate::keel::init::TagVariableArg>,
+        /// Se salta GitHub (secret, variable y PR). Para crear la app o rotar su token
+        /// exige --show-token.
+        #[arg(long, conflicts_with = "pr")]
+        no_github: bool,
+        /// Con --no-github, muestra el token de CI una sola vez en la terminal.
+        #[arg(long, requires = "no_github")]
+        show_token: bool,
+        /// Abre un PR con el workflow desde la rama keel/init.
+        #[arg(long)]
+        pr: bool,
     },
     /// Skills para agentes (Claude Code, Codex, Copilot) publicados en el repo de keel.
     Skills {
@@ -447,7 +478,33 @@ pub async fn run(cli: Cli) -> Result<()> {
         Command::Changes { scope, version } => ops::changes(&ctx, scope, version).await,
         Command::Lock { scope, message } => ops::lock(&ctx, scope, message).await,
         Command::Unlock { scope } => ops::unlock(&ctx, scope).await,
-        Command::Init { check, force } => crate::keel::init::init(&ctx, check, force).await,
+        Command::Init {
+            check,
+            force,
+            yes,
+            rotate_token,
+            scope,
+            tag_variable,
+            no_github,
+            show_token,
+            pr,
+        } => {
+            crate::keel::init::init(
+                &ctx,
+                crate::keel::init::InitArgs {
+                    check,
+                    force,
+                    yes,
+                    rotate_token,
+                    scopes: scope,
+                    tag_variables: tag_variable,
+                    no_github,
+                    show_token,
+                    pr,
+                },
+            )
+            .await
+        }
         Command::Skills { command, scope } => {
             let action = match command {
                 None | Some(SkillsCommand::List) => skills::SkillsAction::List,
@@ -819,6 +876,25 @@ mod tests {
         assert!(parse(&["lock", "-s", "prod", "-m", "incidente"]).is_ok());
         assert!(parse(&["unlock", "-s", "prod"]).is_ok());
         assert!(parse(&["init", "--check", "--json"]).is_ok());
+        assert!(
+            parse(&[
+                "init",
+                "-y",
+                "--scope",
+                "prod=cmp1",
+                "--scope",
+                "stg=https://dokploy.acme.dev/x",
+                "--tag-variable",
+                "prod=IMAGE_TAG",
+                "--pr"
+            ])
+            .is_ok()
+        );
+        assert!(parse(&["init", "--scope", "prod"]).is_err());
+        assert!(parse(&["init", "--check", "--rotate-token"]).is_err());
+        assert!(parse(&["init", "--show-token"]).is_err());
+        assert!(parse(&["init", "--no-github", "--show-token", "--rotate-token"]).is_ok());
+        assert!(parse(&["init", "--no-github", "--pr"]).is_err());
         assert!(parse(&["skills"]).is_ok());
         assert!(parse(&["skills", "add", "keel-cli", "-g", "--agent", "claude"]).is_ok());
         assert!(parse(&["skills", "add"]).is_err());

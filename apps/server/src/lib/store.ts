@@ -333,6 +333,14 @@ export class Store {
     return (await this.db.all("SELECT * FROM scopes WHERE app_id = ? ORDER BY alias", [appId])).map(toScope);
   }
 
+  /** Every scope of every app, with its app's repo, by repo and alias. */
+  async listAllScopes(): Promise<(Scope & { repo: string })[]> {
+    const rows = await this.db.all(
+      "SELECT scopes.*, apps.repo AS repo FROM scopes JOIN apps ON apps.id = scopes.app_id ORDER BY apps.repo, scopes.alias",
+    );
+    return rows.map((r) => ({ ...toScope(r), repo: r.repo as string }));
+  }
+
   async getScope(id: string): Promise<Scope | undefined> {
     const row = await this.db.get("SELECT * FROM scopes WHERE id = ?", [id]);
     return row ? toScope(row) : undefined;

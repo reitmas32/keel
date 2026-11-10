@@ -172,3 +172,93 @@ export const scopeSummarySchema = z.object({
   lock: scopeLockInfoSchema.nullable().optional(),
 });
 export type ScopeSummary = z.infer<typeof scopeSummarySchema>;
+
+// --- Linking repos (`keel init`) ---
+
+export const SCOPE_KINDS = ["application", "compose"] as const;
+export type ScopeKind = (typeof SCOPE_KINDS)[number];
+
+/** An app: a GitHub repo linked to keel. */
+export const appSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  /** `owner/name`, lowercase. */
+  repo: z.string(),
+  createdAt: z.string(),
+});
+export type AppInfo = z.infer<typeof appSchema>;
+
+/** `GET /repos/:owner/:name`: the app linked to the repo and its scopes (the same items as `GET …/scopes`). */
+export const repoResponseSchema = z.object({
+  app: appSchema,
+  scopes: z.array(scopeSummarySchema),
+});
+export type RepoResponse = z.infer<typeof repoResponseSchema>;
+
+/** `POST /apps`. `repo` is `owner/name` or a GitHub URL (`https://github.com/o/r(.git)`, `git@github.com:o/r.git`). */
+export const createAppRequestSchema = z.object({
+  repo: z.string().trim().min(1),
+  /** Defaults to the repo. */
+  name: z.string().max(200).optional(),
+});
+export type CreateAppRequest = z.infer<typeof createAppRequestSchema>;
+
+/** `POST /apps` response. `ciToken` is the plaintext CI token: this is the only time keel returns it. */
+export const createAppResponseSchema = z.object({ app: appSchema, ciToken: z.string() });
+export type CreateAppResponse = z.infer<typeof createAppResponseSchema>;
+
+/** `POST /repos/:owner/:name/ci-token` response: the new CI token, shown once. The previous one stops working. */
+export const rotateCiTokenResponseSchema = z.object({ ciToken: z.string() });
+export type RotateCiTokenResponse = z.infer<typeof rotateCiTokenResponseSchema>;
+
+/**
+ * `POST /repos/:owner/:name/scopes`: links a Dokploy service as a scope. The service comes either as `dokployUrl`
+ * (its dashboard URL, as in the admin) or as `kind` + `dokployId`, never both. `tagVariable` only applies to a
+ * Compose (default `DOCKER_TAG`).
+ */
+export const linkScopeRequestSchema = z
+  .object({
+    alias: z.string().trim().min(1),
+    dokployUrl: z.string().trim().min(1).optional(),
+    kind: z.enum(SCOPE_KINDS).optional(),
+    dokployId: z
+      .string()
+      .trim()
+      .regex(/^[A-Za-z0-9_-]+$/, "id de servicio de Dokploy inválido")
+      .optional(),
+    tagVariable: z.string().optional(),
+  })
+  .superRefine((body, ctx) => {
+    const byId = body.kind !== undefined || body.dokployId !== undefined;
+    if (body.dokployUrl !== undefined && byId) {
+      ctx.addIssue({ code: "custom", path: ["dokployUrl"], message: "manda dokployUrl o kind + dokployId, no ambos" });
+    } else if (body.dokployUrl === undefined && !byId) {
+      ctx.addIssue({ code: "custom", path: ["dokployUrl"], message: "falta dokployUrl (o kind + dokployId)" });
+    } else if (byId && body.kind === undefined) {
+      ctx.addIssue({ code: "custom", path: ["kind"], message: "falta kind (application o compose)" });
+    } else if (byId && body.dokployId === undefined) {
+      ctx.addIssue({ code: "custom", path: ["dokployId"], message: "falta el id del servicio de Dokploy" });
+    }
+  });
+export type LinkScopeRequest = z.infer<typeof linkScopeRequestSchema>;
+
+/** A Dokploy application or compose as `GET /dokploy/services` lists it. */
+export const dokployServiceSchema = z.object({
+  kind: z.enum(SCOPE_KINDS),
+  id: z.string(),
+  name: z.string(),
+  /** Dokploy's internal app name (the container/stack name), when it has one. */
+  appName: z.string().optional(),
+  project: z.string(),
+  /** Null on Dokploy versions without environments. */
+  environment: z.string().nullable(),
+  /** The service in the Dokploy dashboard; what `POST …/scopes` takes as `dokployUrl`. */
+  dashboardUrl: z.string(),
+  /** The keel scope already pointing at it, if any. */
+  linked: z.object({ repo: z.string(), scope: z.string() }).nullable(),
+});
+export type DokployService = z.infer<typeof dokployServiceSchema>;
+
+/** `GET /dokploy/services` response. */
+export const dokployServicesResponseSchema = z.object({ services: z.array(dokployServiceSchema) });
+export type DokployServicesResponse = z.infer<typeof dokployServicesResponseSchema>;

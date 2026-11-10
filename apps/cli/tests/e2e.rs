@@ -1157,3 +1157,459 @@ async fn init_and_skills() {
     assert!(out.status.success());
     assert!(!w.repo.join(".claude/skills/keel-cli").exists());
 }
+
+// ------------------------------------------------------------------ keel init
+
+/// What the fake keel knows about acme/app.
+#[derive(Default)]
+struct LinkState {
+    linked: bool,
+    scopes: Vec<Value>,
+    tokens: u32,
+}
+
+/// A keel v0.8.0 with the routes that link repos, holding its state in memory.
+/// `create_status` overrides what `POST /apps` answers (e.g. 403).
+async fn fake_linking_keel(linked: bool, create_status: Option<u16>) -> MockServer {
+    use std::sync::{Arc, Mutex};
+    let keel = MockServer::start().await;
+    let state = Arc::new(Mutex::new(LinkState {
+        linked,
+        ..Default::default()
+    }));
+    let app = json!({"id": "app_1", "name": "app", "repo": "acme/app", "createdAt": "2026-11-10T10:00:00Z"});
+    let s = state.clone();
+    let a = app.clone();
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/app"))
+        .respond_with(move |_: &Request| {
+            let s = s.lock().unwrap();
+            if s.linked {
+                ResponseTemplate::new(200).set_body_json(json!({"app": a, "scopes": s.scopes}))
+            } else {
+                ResponseTemplate::new(404)
+                    .set_body_json(json!({"error": "acme/app no está vinculado"}))
+            }
+        })
+        .mount(&keel)
+        .await;
+    let s = state.clone();
+    Mock::given(method("POST"))
+        .and(path("/apps"))
+        .respond_with(move |_: &Request| {
+            if let Some(status) = create_status {
+                return ResponseTemplate::new(status)
+                    .set_body_json(json!({"error": "Tu rol (maintainer) no permite crear apps."}));
+            }
+            let mut s = s.lock().unwrap();
+            if s.linked {
+                return ResponseTemplate::new(409).set_body_json(json!({"error": "ya existe"}));
+            }
+            s.linked = true;
+            s.tokens += 1;
+            ResponseTemplate::new(201)
+                .set_body_json(json!({"app": app, "ciToken": format!("keel_ci_tok{}", s.tokens)}))
+        })
+        .mount(&keel)
+        .await;
+    let s = state.clone();
+    Mock::given(method("POST"))
+        .and(path("/repos/acme/app/ci-token"))
+        .respond_with(move |_: &Request| {
+            let mut s = s.lock().unwrap();
+            s.tokens += 1;
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"ciToken": format!("keel_ci_tok{}", s.tokens)}))
+        })
+        .mount(&keel)
+        .await;
+    let s = state.clone();
+    Mock::given(method("POST"))
+        .and(path("/repos/acme/app/scopes"))
+        .respond_with(move |req: &Request| {
+            let body: Value = serde_json::from_slice(&req.body).unwrap();
+            let mut s = s.lock().unwrap();
+            if s.scopes.iter().any(|x| x["alias"] == body["alias"]) {
+                return ResponseTemplate::new(409).set_body_json(json!({"error": "ya existe"}));
+            }
+            let item = json!({
+                "alias": body["alias"], "kind": body["kind"], "dokployId": body["dokployId"],
+                "tagVariable": body["tagVariable"], "current": null, "last": null
+            });
+            s.scopes.push(item.clone());
+            ResponseTemplate::new(201).set_body_json(item)
+        })
+        .mount(&keel)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/dokploy/services"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"services": [
+            {"kind": "compose", "id": "cmp1", "name": "web", "appName": "shop-web", "project": "Shop",
+             "environment": "production", "dashboardUrl": "https://dokploy.acme.dev/compose/cmp1", "linked": null},
+            {"kind": "application", "id": "app1", "name": "api", "project": "Shop",
+             "environment": "staging", "dashboardUrl": "https://dokploy.acme.dev/application/app1", "linked": null},
+        ]})))
+        .mount(&keel)
+        .await;
+    keel
+}
+
+async fn requests_to(keel: &MockServer, verb: &str, route: &str) -> Vec<Request> {
+    keel.received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.method.as_str() == verb && r.url.path() == route)
+        .collect()
+}
+
+/// A fake `gh` (a shell script) that records its args in args.log, the stdin
+/// of `secret set` in stdin.log, and keeps the secret and variable as files.
+#[cfg(unix)]
+struct FakeGh {
+    dir: PathBuf,
+    script: PathBuf,
+}
+
+#[cfg(unix)]
+impl FakeGh {
+    fn new(w: &World) -> Self {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = w.home.parent().unwrap().join("fake-gh");
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("gh");
+        std::fs::write(
+            &script,
+            r#"#!/bin/sh
+dir="$KEEL_FAKE_GH_DIR"
+printf '%s\n' "$*" >> "$dir/args.log"
+case "$1" in
+  --version) echo "gh version 2.0.0 (fake)"; exit 0 ;;
+  auth) exit 0 ;;
+  secret)
+    case "$2" in
+      set) cat >> "$dir/stdin.log"; echo >> "$dir/stdin.log"; touch "$dir/secret"; exit 0 ;;
+      list) [ -f "$dir/secret" ] && printf 'DEPLOY_API_TOKEN\t2026-11-10T00:00:00Z\n'; exit 0 ;;
+    esac ;;
+  variable)
+    case "$2" in
+      get) [ -f "$dir/variable" ] && { cat "$dir/variable"; exit 0; }
+           echo "variable KEEL_API_URL was not found" >&2; exit 1 ;;
+      set) shift 2
+           while [ $# -gt 0 ]; do
+             [ "$1" = "--body" ] && printf '%s\n' "$2" > "$dir/variable"
+             shift
+           done
+           exit 0 ;;
+    esac ;;
+  pr) echo "https://github.com/acme/app/pull/7"; exit 0 ;;
+esac
+echo "unexpected: $*" >&2
+exit 1
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        Self { dir, script }
+    }
+
+    fn env(&self) -> [(&str, &str); 2] {
+        [
+            ("KEEL_GH", self.script.to_str().unwrap()),
+            ("KEEL_FAKE_GH_DIR", self.dir.to_str().unwrap()),
+        ]
+    }
+
+    fn read(&self, file: &str) -> String {
+        std::fs::read_to_string(self.dir.join(file)).unwrap_or_default()
+    }
+}
+
+fn stdout_of(out: &Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    )
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn init_links_a_fresh_repo_and_is_idempotent() {
+    let keel = fake_linking_keel(false, None).await;
+    let w = world(&keel.uri());
+    let gh = FakeGh::new(&w);
+
+    let out = w.keel_env(
+        &w.repo,
+        &[
+            "init",
+            "-y",
+            "--scope",
+            "prod=cmp1",
+            "--tag-variable",
+            "prod=IMAGE_TAG",
+            "--scope",
+            "stg=https://dokploy.acme.dev/application/app1",
+            "--json",
+        ],
+        &gh.env(),
+    );
+    assert!(out.status.success(), "{}", stdout_of(&out));
+    assert!(!stdout_of(&out).contains("keel_ci_tok"), "the token leaked");
+    let report = json_of(&out);
+    assert_eq!(report["app"]["status"], "created");
+    assert_eq!(report["github"]["secret"], "set");
+    assert_eq!(report["github"]["variable"], "set");
+    assert_eq!(report["workflow"]["status"], "created");
+    assert_eq!(report["scopes"]["aliases"], json!(["prod", "stg"]));
+    assert_eq!(report["audit"]["ok"], true, "{report}");
+    assert_eq!(report["audit"]["keel"]["scopes_count"], 2);
+    // 127.0.0.1 can't be reached from GitHub's runners.
+    assert!(
+        report["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("ci-result"))
+    );
+    assert!(w.repo.join(".github/workflows/keel-release.yml").exists());
+    // The token went to gh's stdin and nowhere in its argv.
+    assert_eq!(gh.read("stdin.log"), "keel_ci_tok1\n");
+    let args = gh.read("args.log");
+    assert!(!args.contains("keel_ci_tok"), "{args}");
+    assert!(args.contains("secret set DEPLOY_API_TOKEN --repo acme/app"));
+    assert_eq!(gh.read("variable").trim(), keel.uri());
+    let scopes = requests_to(&keel, "POST", "/repos/acme/app/scopes").await;
+    let bodies: Vec<Value> = scopes
+        .iter()
+        .map(|r| serde_json::from_slice(&r.body).unwrap())
+        .collect();
+    assert_eq!(
+        bodies[0],
+        json!({"alias": "prod", "kind": "compose", "dokployId": "cmp1", "tagVariable": "IMAGE_TAG"})
+    );
+    assert_eq!(
+        bodies[1],
+        json!({"alias": "stg", "kind": "application", "dokployId": "app1"})
+    );
+
+    // Again: everything is already there.
+    let out = w.keel_env(
+        &w.repo,
+        &["init", "--scope", "prod=cmp1", "--json"],
+        &gh.env(),
+    );
+    assert!(out.status.success(), "{}", stdout_of(&out));
+    let report = json_of(&out);
+    assert_eq!(report["app"]["status"], "linked");
+    assert_eq!(report["github"]["secret"], "present");
+    assert_eq!(report["github"]["variable"], "present");
+    assert_eq!(report["workflow"]["status"], "up_to_date");
+    let statuses: Vec<&str> = report["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| !["repo", "gh"].contains(&s["step"].as_str().unwrap()))
+        .map(|s| s["status"].as_str().unwrap())
+        .collect();
+    assert!(statuses.iter().all(|s| *s != "done"), "{report}");
+    assert_eq!(requests_to(&keel, "POST", "/apps").await.len(), 1);
+    assert_eq!(
+        requests_to(&keel, "POST", "/repos/acme/app/scopes")
+            .await
+            .len(),
+        2
+    );
+    assert_eq!(gh.read("args.log").matches("secret set").count(), 1);
+
+    // The check passes too, and tells the scopes and the warning.
+    let out = w.keel_env(&w.repo, &["init", "--check", "--json"], &gh.env());
+    assert!(out.status.success(), "{}", stdout_of(&out));
+    let check = json_of(&out);
+    assert_eq!(check["keel"]["scopes_count"], 2);
+    assert_eq!(check["warnings"].as_array().unwrap().len(), 1);
+
+    // Rotating needs -y without a terminal, and replaces the secret.
+    let out = w.keel_env(&w.repo, &["init", "--rotate-token", "--json"], &gh.env());
+    assert_eq!(out.status.code(), Some(32), "{}", stdout_of(&out));
+    assert!(
+        requests_to(&keel, "POST", "/repos/acme/app/ci-token")
+            .await
+            .is_empty()
+    );
+    let out = w.keel_env(
+        &w.repo,
+        &["init", "--rotate-token", "-y", "--json"],
+        &gh.env(),
+    );
+    assert!(out.status.success(), "{}", stdout_of(&out));
+    assert!(!stdout_of(&out).contains("keel_ci_tok"));
+    let report = json_of(&out);
+    assert_eq!(report["app"]["status"], "rotated");
+    assert_eq!(report["github"]["secret"], "set");
+    assert_eq!(gh.read("stdin.log"), "keel_ci_tok1\nkeel_ci_tok2\n");
+    assert!(!gh.read("args.log").contains("keel_ci_tok"));
+
+    // People see one line per step.
+    let out = w.keel_env(&w.repo, &["init"], &gh.env());
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.contains("• acme/app ya está vinculado en keel (2 scope(s))"),
+        "{text}"
+    );
+    assert!(
+        text.contains("• secret DEPLOY_API_TOKEN ya existe"),
+        "{text}"
+    );
+    assert!(text.contains("Revisión (keel init --check)"), "{text}");
+}
+
+#[tokio::test]
+async fn init_without_gh_creates_nothing() {
+    let keel = fake_linking_keel(false, None).await;
+    let w = world(&keel.uri());
+    let no_gh = [("KEEL_GH", "keel-test-no-gh")];
+
+    let out = w.keel_env(&w.repo, &["init", "-y", "--json"], &no_gh);
+    assert_eq!(out.status.code(), Some(20), "{}", stdout_of(&out));
+    let error = json_of(&out);
+    assert_eq!(error["error"]["kind"], "refused");
+    assert!(
+        error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("gh auth login")
+    );
+    // --no-github without --show-token at a terminal refuses too.
+    let out = w.keel_env(&w.repo, &["init", "-y", "--no-github", "--json"], &no_gh);
+    assert_eq!(out.status.code(), Some(20), "{}", stdout_of(&out));
+    let out = w.keel_env(
+        &w.repo,
+        &["init", "-y", "--no-github", "--show-token", "--json"],
+        &no_gh,
+    );
+    assert_eq!(out.status.code(), Some(20), "{}", stdout_of(&out));
+    assert!(requests_to(&keel, "POST", "/apps").await.is_empty());
+    assert!(!w.repo.join(".github/workflows/keel-release.yml").exists());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn init_needs_admin_to_create_the_app() {
+    let keel = fake_linking_keel(false, Some(403)).await;
+    let w = world(&keel.uri());
+    let gh = FakeGh::new(&w);
+    let out = w.keel_env(&w.repo, &["init", "-y", "--json"], &gh.env());
+    assert_eq!(out.status.code(), Some(33), "{}", stdout_of(&out));
+    let error = json_of(&out);
+    assert_eq!(error["error"]["kind"], "forbidden");
+    let message = error["error"]["message"].as_str().unwrap();
+    assert!(message.contains("Tu rol (maintainer)"), "{message}");
+    assert!(
+        message.contains("crear apps requiere rol admin"),
+        "{message}"
+    );
+    assert!(!gh.read("args.log").contains("secret set"));
+}
+
+#[tokio::test]
+async fn init_on_servers_that_cannot_link() {
+    let no_gh = [("KEEL_GH", "keel-test-no-gh")];
+    // A v0.7.0 server without the app: it can't be created from the CLI.
+    let keel = MockServer::start().await;
+    let w = world(&keel.uri());
+    let out = w.keel_env(&w.repo, &["init", "-y", "--json"], &no_gh);
+    assert_eq!(out.status.code(), Some(26), "{}", stdout_of(&out));
+    let error = json_of(&out);
+    assert_eq!(error["error"]["kind"], "keel_unreachable");
+    assert!(
+        error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("actualízalo a v0.8.0 o usa el admin")
+    );
+    // With the app linked, it still checks; rotating or adding scopes is refused.
+    let keel = fake_keel().await;
+    let w = world(&keel.uri());
+    for args in [
+        &["init", "--rotate-token", "-y", "--json"][..],
+        &["init", "--scope", "prod=cmp1", "--json"][..],
+    ] {
+        let out = w.keel_env(&w.repo, args, &no_gh);
+        assert_eq!(out.status.code(), Some(26), "{}", stdout_of(&out));
+    }
+    let out = w.keel_env(&w.repo, &["init", "--json"], &no_gh);
+    assert!(out.status.success(), "{}", stdout_of(&out));
+    assert_eq!(json_of(&out)["app"]["old_server"], true);
+    assert!(
+        requests_to(&keel, "POST", "/repos/acme/app/ci-token")
+            .await
+            .is_empty()
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn init_opens_a_pr_with_the_workflow() {
+    let keel = fake_linking_keel(true, None).await;
+    let w = world(&keel.uri());
+    let gh = FakeGh::new(&w);
+    std::fs::write(gh.dir.join("secret"), "").unwrap();
+
+    let out = w.keel_env(&w.repo, &["init", "--pr", "--json"], &gh.env());
+    assert!(out.status.success(), "{}", stdout_of(&out));
+    let report = json_of(&out);
+    assert_eq!(report["pr"]["status"], "opened", "{report}");
+    assert_eq!(report["pr"]["url"], "https://github.com/acme/app/pull/7");
+    let args = gh.read("args.log");
+    assert!(
+        args.contains("pr create --repo acme/app --base main --head keel/init"),
+        "{args}"
+    );
+
+    let remote = Command::new("git")
+        .args(["ls-remote", "--heads", "origin"])
+        .current_dir(&w.repo)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+    let heads = String::from_utf8_lossy(&remote.stdout);
+    assert!(heads.contains("refs/heads/keel/init"), "{heads}");
+    // Only the workflow, on its own branch; main and the checkout are untouched.
+    git(
+        &w.repo,
+        &[
+            "fetch",
+            "--quiet",
+            "origin",
+            "keel/init:refs/remotes/origin/keel/init",
+        ],
+    );
+    let changed = Command::new("git")
+        .args([
+            "diff",
+            "--name-only",
+            "main",
+            "refs/remotes/origin/keel/init",
+        ])
+        .current_dir(&w.repo)
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&changed.stdout).trim(),
+        ".github/workflows/keel-release.yml"
+    );
+    let branch = Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(&w.repo)
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&branch.stdout).trim(), "main");
+
+    // Again: the branch is already there, so no second PR.
+    let out = w.keel_env(&w.repo, &["init", "--pr", "--json"], &gh.env());
+    assert!(out.status.success(), "{}", stdout_of(&out));
+    assert_eq!(json_of(&out)["pr"]["status"], "branch_exists");
+    assert_eq!(gh.read("args.log").matches("pr create").count(), 1);
+}

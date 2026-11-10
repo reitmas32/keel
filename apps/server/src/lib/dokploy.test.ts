@@ -240,3 +240,136 @@ describe("HttpDokployClient — describe", () => {
     expect(await down.describe(compose)).toBeUndefined();
   });
 });
+
+describe("HttpDokployClient — services", () => {
+  it("finds an Application and builds its dashboard URL from its project and environment", async () => {
+    const calls: Call[] = [];
+    const client = new HttpDokployClient(
+      "https://d.example.com/",
+      "k",
+      fakeFetch(
+        {
+          "application.one": {
+            applicationId: "app1",
+            name: "web",
+            appName: "dev-web-a1b2",
+            environmentId: "env1",
+            environment: { environmentId: "env1", name: "staging", projectId: "proj1", project: { name: "DEV" } },
+          },
+        },
+        calls,
+      ),
+    );
+    const service = await client.findService("application", "app1");
+    expect(service).toEqual({
+      kind: "application",
+      id: "app1",
+      name: "web",
+      appName: "dev-web-a1b2",
+      project: "DEV",
+      environment: "staging",
+      dashboardUrl: "https://d.example.com/dashboard/project/proj1/environment/env1/services/application/app1",
+    });
+    expect(parseDokployServiceUrl(service?.dashboardUrl ?? "")).toEqual({ kind: "application", id: "app1" });
+    expect(calls[0]?.url).toBe("/api/application.one?applicationId=app1");
+  });
+
+  it("finds a Compose on a Dokploy without environments", async () => {
+    const client = new HttpDokployClient(
+      "https://d",
+      "k",
+      fakeFetch({ "compose.one": { composeId: "cmp1", name: "api", projectId: "p9", project: { name: "PROD" } } }, []),
+    );
+    expect(await client.findService("compose", "cmp1")).toMatchObject({
+      project: "PROD",
+      environment: null,
+      appName: null,
+      dashboardUrl: "https://d/dashboard/project/p9/services/compose/cmp1",
+    });
+  });
+
+  it("returns undefined for a service Dokploy doesn't have, and throws on other errors", async () => {
+    const missing = new HttpDokployClient("https://d", "k", fakeFetch({}, []));
+    expect(await missing.findService("compose", "nope")).toBeUndefined();
+
+    const failing = new HttpDokployClient(
+      "https://d",
+      "k",
+      (async () => new Response("boom", { status: 500 })) as unknown as typeof fetch,
+    );
+    await expect(failing.findService("compose", "cmp1")).rejects.toMatchObject({ name: "DokployError", status: 500 });
+  });
+
+  it("lists the applications and composes of every project and environment from project.all", async () => {
+    const calls: Call[] = [];
+    const client = new HttpDokployClient(
+      "https://d",
+      "k",
+      fakeFetch(
+        {
+          "project.all": [
+            {
+              projectId: "p1",
+              name: "DEV",
+              environments: [
+                {
+                  environmentId: "e1",
+                  name: "production",
+                  applications: [{ applicationId: "a1", name: "web", appName: "dev-web" }],
+                  compose: [{ composeId: "c1", name: "api", appName: "dev-api" }],
+                },
+                { environmentId: "e2", name: "staging", applications: [], compose: [{ composeId: "c2", name: "w" }] },
+              ],
+            },
+            { projectId: "p2", name: "OLD", applications: [{ applicationId: "a2", name: "legacy" }] },
+          ],
+        },
+        calls,
+      ),
+    );
+    expect(await client.listServices()).toEqual([
+      {
+        kind: "application",
+        id: "a1",
+        name: "web",
+        appName: "dev-web",
+        project: "DEV",
+        environment: "production",
+        dashboardUrl: "https://d/dashboard/project/p1/environment/e1/services/application/a1",
+      },
+      {
+        kind: "compose",
+        id: "c1",
+        name: "api",
+        appName: "dev-api",
+        project: "DEV",
+        environment: "production",
+        dashboardUrl: "https://d/dashboard/project/p1/environment/e1/services/compose/c1",
+      },
+      {
+        kind: "compose",
+        id: "c2",
+        name: "w",
+        appName: null,
+        project: "DEV",
+        environment: "staging",
+        dashboardUrl: "https://d/dashboard/project/p1/environment/e2/services/compose/c2",
+      },
+      {
+        kind: "application",
+        id: "a2",
+        name: "legacy",
+        appName: null,
+        project: "OLD",
+        environment: null,
+        dashboardUrl: "https://d/dashboard/project/p2/services/application/a2",
+      },
+    ]);
+    expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual(["GET /api/project.all"]);
+  });
+
+  it("surfaces a failing project.all as DokployError", async () => {
+    const client = new HttpDokployClient("https://d", "k", fakeFetch({}, []));
+    await expect(client.listServices()).rejects.toBeInstanceOf(DokployError);
+  });
+});

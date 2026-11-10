@@ -4,7 +4,13 @@ import { addScope, createApp } from "./apps";
 import type { AppContext } from "./context";
 import type { Db } from "./db";
 import { openSqliteDb } from "./db-sqlite";
-import type { DokployClient, DokployDeploymentStatus, DokployTarget } from "./dokploy";
+import {
+  type DokployClient,
+  type DokployDeploymentStatus,
+  DokployError,
+  type DokployServiceInfo,
+  type DokployTarget,
+} from "./dokploy";
 import type { Env } from "./env";
 import { type Member, Store } from "./store";
 import { DeployWorker } from "./worker";
@@ -69,6 +75,39 @@ export class FakeDokploy implements DokployClient {
 
   async describe(target: DokployTarget) {
     return this.names.get(target.id);
+  }
+
+  /** What `findService` and `listServices` see; `servicesError` makes both fail like an unreachable Dokploy. */
+  services: DokployServiceInfo[] = [
+    {
+      kind: "application",
+      id: "app123",
+      name: "app",
+      appName: "dev-app-x1",
+      project: "DEV",
+      environment: "production",
+      dashboardUrl: "https://dokploy.example.com/dashboard/project/p1/environment/e1/services/application/app123",
+    },
+    {
+      kind: "compose",
+      id: "cmp456",
+      name: "worker",
+      appName: null,
+      project: "DEV",
+      environment: "staging",
+      dashboardUrl: "https://dokploy.example.com/dashboard/project/p1/environment/e2/services/compose/cmp456",
+    },
+  ];
+  servicesError: string | undefined;
+
+  async findService(kind: DokployTarget["kind"], id: string) {
+    if (this.servicesError) throw new DokployError(this.servicesError);
+    return this.services.find((s) => s.kind === kind && s.id === id);
+  }
+
+  async listServices() {
+    if (this.servicesError) throw new DokployError(this.servicesError);
+    return this.services;
   }
 }
 

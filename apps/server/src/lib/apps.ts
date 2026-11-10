@@ -1,6 +1,6 @@
-import { DEFAULT_TAG_VARIABLE, parseDokployServiceUrl } from "./dokploy";
+import { DEFAULT_TAG_VARIABLE, type DokployClient, parseDokployServiceUrl } from "./dokploy";
 import { ApiError } from "./errors";
-import type { App, Scope, Store } from "./store";
+import type { App, Scope, ScopeKind, Store } from "./store";
 import { generateCiToken } from "./tokens";
 
 /** Accepts `https://github.com/o/r(.git)`, `git@github.com:o/r.git` or `o/r` and returns `o/r`. */
@@ -33,16 +33,39 @@ export async function rotateCiToken(store: Store, appId: string): Promise<string
 const ALIAS_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
+/** Lowercases and validates a scope alias; throws the 400 the admin shows. */
+export function normalizeScopeAlias(input: string): string {
+  const alias = input.trim().toLowerCase();
+  if (!ALIAS_PATTERN.test(alias)) {
+    throw new ApiError(400, "El alias solo puede tener minúsculas, números y guiones (p.ej. api-prod).");
+  }
+  return alias;
+}
+
+/** Throws the 409 when `app` already has a scope with that (normalized) alias. */
+export async function assertScopeAliasFree(store: Store, app: App, alias: string): Promise<void> {
+  if (await store.getScopeByAlias(app.id, alias)) {
+    throw new ApiError(409, `Ya existe un scope con alias ${alias} en ${app.repo}.`);
+  }
+}
+
+/**
+ * The dashboard URL of the Dokploy service `kind`/`id`, checking that it exists: for a scope given by id instead of
+ * by URL, so it is stored like one linked from the admin.
+ */
+export async function resolveDokployService(dokploy: DokployClient, kind: ScopeKind, id: string): Promise<string> {
+  const service = await dokploy.findService(kind, id);
+  if (!service) throw new ApiError(404, `El servicio de Dokploy ${id} no existe.`);
+  return service.dashboardUrl;
+}
+
 export async function addScope(
   store: Store,
   app: App,
   input: { alias: string; dokployUrl: string; tagVariable?: string },
   now: Date,
 ): Promise<Scope> {
-  const alias = input.alias.trim().toLowerCase();
-  if (!ALIAS_PATTERN.test(alias)) {
-    throw new ApiError(400, "El alias solo puede tener minúsculas, números y guiones (p.ej. api-prod).");
-  }
+  const alias = normalizeScopeAlias(input.alias);
   const parsed = parseDokployServiceUrl(input.dokployUrl);
   if (!parsed) {
     throw new ApiError(
@@ -58,9 +81,7 @@ export async function addScope(
       throw new ApiError(400, `Variable de tag inválida: ${tagVariable}. Usa un nombre de variable como DOCKER_TAG.`);
     }
   }
-  if (await store.getScopeByAlias(app.id, alias)) {
-    throw new ApiError(409, `Ya existe un scope con alias ${alias} en ${app.repo}.`);
-  }
+  await assertScopeAliasFree(store, app, alias);
   return store.addScope(
     {
       appId: app.id,
