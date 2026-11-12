@@ -141,32 +141,32 @@ fn redacted(text: &str, token: &CiToken) -> String {
     }
 }
 
-/// `gh secret set DEPLOY_API_TOKEN --repo <repo>` with the token on stdin:
-/// never in argv (visible in `ps`), logs, output or errors.
-pub fn set_secret(gh: &dyn Gh, repo: &str, token: &CiToken) -> Result<()> {
-    let args = ["secret", "set", SECRET, "--repo", repo];
+/// `gh secret set <name> --repo <repo>` (`DEPLOY_API_TOKEN` by default) with
+/// the token on stdin: never in argv (visible in `ps`), logs, output or errors.
+pub fn set_secret(gh: &dyn Gh, repo: &str, name: &str, token: &CiToken) -> Result<()> {
+    let args = ["secret", "set", name, "--repo", repo];
     match gh.run(&args, Some(token.expose())) {
         Some(o) if o.ok => Ok(()),
         Some(o) => Err(fail(
             Kind::Error,
             format!(
-                "`gh secret set {SECRET} --repo {repo}` falló: {}. El token nuevo no quedó guardado: vuelve a correr `keel init --rotate-token` cuando gh funcione.",
+                "`gh secret set {name} --repo {repo}` falló: {}. El token nuevo no quedó guardado: vuelve a correr `keel init --rotate-token` cuando gh funcione.",
                 redacted(&o.stderr, token)
             ),
         )),
         None => Err(fail(
             Kind::Error,
             format!(
-                "No se pudo ejecutar gh para guardar {SECRET}. Vuelve a correr `keel init --rotate-token` cuando gh funcione."
+                "No se pudo ejecutar gh para guardar {name}. Vuelve a correr `keel init --rotate-token` cuando gh funcione."
             ),
         )),
     }
 }
 
 /// Whether the repo has the secret; `None` when gh can't list them.
-pub fn has_secret(gh: &dyn Gh, repo: &str) -> Option<bool> {
+pub fn has_secret(gh: &dyn Gh, repo: &str, name: &str) -> Option<bool> {
     gh.ok(&["secret", "list", "--repo", repo])
-        .map(|out| gh_names(&out).iter().any(|n| n == SECRET))
+        .map(|out| gh_names(&out).iter().any(|n| n == name))
 }
 
 /// The repo's `KEEL_API_URL`, `None` when it doesn't have it.
@@ -406,7 +406,7 @@ mod tests {
     fn the_token_only_goes_through_stdin() {
         let token = CiToken::new("keel_ci_s3cr3t");
         let gh = FakeGh::ok();
-        set_secret(&gh, "acme/app", &token).unwrap();
+        set_secret(&gh, "acme/app", SECRET, &token).unwrap();
         let calls = gh.calls.borrow();
         assert_eq!(calls.len(), 1);
         let (args, stdin) = &calls[0];
@@ -429,7 +429,8 @@ mod tests {
                 stderr: "bad value keel_ci_s3cr3t".into(),
             })
         });
-        let error = set_secret(&gh, "acme/app", &token).unwrap_err();
+        let error = set_secret(&gh, "acme/app", "KEEL_CI_TOKEN", &token).unwrap_err();
+        assert!(error.to_string().contains("gh secret set KEEL_CI_TOKEN"));
         let (report, _) = crate::failure::report(&error);
         assert!(!report.to_string().contains("s3cr3t"), "{report}");
         assert!(error.to_string().contains("***"));

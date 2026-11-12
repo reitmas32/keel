@@ -330,12 +330,14 @@ keel init --scope prod=<id-o-url-de-dokploy> --scope stg=<id-o-url> --pr
 
 1. crea la app en keel (necesita rol `admin`; sin terminal, pasa `-y`);
 2. agrega los scopes (en una terminal, sin `--scope`, te deja elegir entre los servicios de Dokploy);
-3. guarda el token de CI de la app como secret `DEPLOY_API_TOKEN` del repo con `gh`, por stdin: nunca se imprime;
-4. define la variable `KEEL_API_URL`;
-5. escribe `.github/workflows/keel-release.yml` y, con `--pr`, abre un PR desde la rama `keel/init`;
+3. guarda el token de CI de la app como secret `DEPLOY_API_TOKEN` del repo con `gh`, por stdin: nunca se imprime (`--secret <NOMBRE>` usa otro secret; en una terminal te pregunta si guardarlo o mostrarlo una vez);
+4. define la variable `KEEL_API_URL` con la URL que alcanzan los runners de GitHub: `--ci-api-url <url>`, o la de `keel login --ci-api-url <url>` para toda la org (p. ej. un gateway público delante de un keel interno), o la URL de la API. Si el repo ya la tiene, la respeta: solo `--ci-api-url` la cambia;
+5. escribe `.github/workflows/keel-release.yml` y, con `--pr`, abre un PR desde la rama `keel/init`. Si el repo ya tiene un workflow de release que notifica a keel (llama a `/ci-result` o tiene un job `notify-keel`), no lo crea; `--workflow` lo crea igual;
 6. revisa todo y avisa si GitHub no puede llegar a tu keel (p. ej. un dominio `.internal` detrás de VPN).
 
 `--rotate-token` cambia el token de CI de una app que ya existe y reemplaza el secret en el mismo paso. Sin `gh`, `keel init` se detiene antes de crear nada: el token solo se muestra una vez y no tendría dónde guardarse. `keel init --check` solo revisa.
+
+Crear la app y rotar su token desde la CLI necesita un servidor de keel v0.8.0 o posterior; con uno anterior, `keel init` solo revisa y la app se crea en el admin.
 
 ### Desde el admin
 

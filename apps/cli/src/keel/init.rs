@@ -6,7 +6,11 @@
 //! 3. the app in keel (created, or its token rotated with `--rotate-token`),
 //!    and the `DEPLOY_API_TOKEN` secret right away, through gh's stdin;
 //! 4. scopes (`--scope alias=<id|url>`, or picked at a terminal);
-//! 5. the `KEEL_API_URL` variable; 6. the workflow (and `--pr`);
+//! 5. the `KEEL_API_URL` variable: `--ci-api-url`, else the org's `ciApiUrl`,
+//!    else the API URL; a value the repo already has is kept unless the flag
+//!    says otherwise (it is often a public gateway in front of an internal keel);
+//! 6. the workflow (and `--pr`): `keel-release.yml`, unless the repo already
+//!    has a release workflow that reports to keel (`--workflow` writes it anyway);
 //! 7. final checks and the same audit as `--check`.
 
 use crate::dokploy::print_json;
@@ -39,12 +43,87 @@ pub enum FileState {
     Customized,
 }
 
-pub fn workflow_state(root: &Path) -> FileState {
+/// The template with the CI token read from `secrets.<secret>`.
+pub fn workflow_template(secret: &str) -> String {
+    if secret == SECRET {
+        return WORKFLOW.to_owned();
+    }
+    WORKFLOW
+        .replace(
+            &format!("Secrets   → {SECRET} "),
+            &format!("Secrets   → {secret} "),
+        )
+        .replace(&format!("secrets.{SECRET}"), &format!("secrets.{secret}"))
+}
+
+pub fn workflow_state(root: &Path, template: &str) -> FileState {
     match std::fs::read_to_string(root.join(WORKFLOW_PATH)) {
         Err(_) => FileState::Missing,
-        Ok(content) if content == WORKFLOW => FileState::Same,
+        Ok(content) if content == template => FileState::Same,
         Ok(_) => FileState::Customized,
     }
+}
+
+/// A workflow other than `keel-release.yml` that already reports to keel,
+/// like a `main.yml` with a `notify-keel` job.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReleaseWorkflow {
+    pub path: String,
+    /// It reads the CI token from `secrets.<the secret keel init uses>`.
+    pub uses_secret: bool,
+    /// It reads `vars.KEEL_API_URL`.
+    pub uses_variable: bool,
+}
+
+static NOTIFY_JOB: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?m)^\s+notify-keel\s*:").unwrap());
+
+/// The workflows in `.github/workflows` (besides `keel-release.yml`) that call
+/// keel's `/ci-result` or have a `notify-keel` job, sorted by path.
+pub fn release_workflows(root: &Path, secret: &str) -> Vec<ReleaseWorkflow> {
+    let Ok(entries) = std::fs::read_dir(root.join(".github/workflows")) else {
+        return Vec::new();
+    };
+    let mut found: Vec<ReleaseWorkflow> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let path = format!(".github/workflows/{name}");
+            if path == WORKFLOW_PATH || !(name.ends_with(".yml") || name.ends_with(".yaml")) {
+                return None;
+            }
+            let content = std::fs::read_to_string(entry.path()).ok()?;
+            (content.contains("/ci-result") || NOTIFY_JOB.is_match(&content)).then(|| {
+                ReleaseWorkflow {
+                    uses_secret: content.contains(&format!("secrets.{secret}")),
+                    uses_variable: content.contains(&format!("vars.{VARIABLE}")),
+                    path,
+                }
+            })
+        })
+        .collect();
+    found.sort_by(|a, b| a.path.cmp(&b.path));
+    found
+}
+
+/// What a release workflow keel didn't write is missing to report to keel.
+pub fn release_workflow_warnings(found: &[ReleaseWorkflow], secret: &str) -> Vec<String> {
+    let mut warnings = Vec::new();
+    for w in found {
+        if !w.uses_secret {
+            warnings.push(format!(
+                "{} no lee secrets.{secret}: revisa con qué secret manda el token de CI a keel (o pasa --secret <NOMBRE>).",
+                w.path
+            ));
+        }
+        if !w.uses_variable {
+            warnings.push(format!(
+                "{} no lee vars.{VARIABLE}: revisa a qué URL de keel reporta el CI.",
+                w.path
+            ));
+        }
+    }
+    warnings
 }
 
 /// Where apps are created in keel's admin: same origin as the API, `/apps`.
@@ -111,6 +190,22 @@ pub fn parse_scope_arg(input: &str) -> Result<ScopeArg, String> {
         alias: alias.to_owned(),
         target,
     })
+}
+
+/// `--secret KEEL_CI_TOKEN`: the GitHub secret that holds the CI token.
+pub fn parse_secret_name(input: &str) -> Result<String, String> {
+    let name = input.trim();
+    if !ENV_NAME.is_match(name) || name.to_ascii_uppercase().starts_with("GITHUB_") {
+        return Err(format!(
+            "nombre de secret inválido: «{input}» (letras, números y «_», sin empezar por GITHUB_)"
+        ));
+    }
+    Ok(name.to_owned())
+}
+
+/// `--ci-api-url`: the API URL GitHub's runners reach (`KEEL_API_URL`).
+pub fn parse_ci_api_url(input: &str) -> Result<String, String> {
+    config::normalize_api_url(input).map_err(|e| e.to_string())
 }
 
 /// `--tag-variable prod=IMAGE_TAG`, for composes.
@@ -453,6 +548,49 @@ pub struct InitArgs {
     pub no_github: bool,
     pub show_token: bool,
     pub pr: bool,
+    /// The GitHub secret for the CI token (`DEPLOY_API_TOKEN` by default).
+    pub secret: String,
+    /// `--ci-api-url`: the value `KEEL_API_URL` must have.
+    pub ci_api_url: Option<String>,
+    /// `--workflow`: write `keel-release.yml` even if another workflow reports to keel.
+    pub workflow: bool,
+}
+
+/// What `KEEL_API_URL` ends up as.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VariablePlan {
+    /// It already has the value.
+    Keep(String),
+    /// It is set; `previous` is what it had.
+    Set {
+        value: String,
+        previous: Option<String>,
+    },
+}
+
+/// `--ci-api-url` replaces whatever the repo has; without it a value the repo
+/// already has stays (it may be a gateway keel can't know about), and a
+/// missing one gets the org's `ciApiUrl`, else its API URL.
+pub fn plan_variable(
+    current: Option<&str>,
+    flag: Option<&str>,
+    org_ci: Option<&str>,
+    api_url: &str,
+) -> VariablePlan {
+    match (flag, current) {
+        (Some(wanted), Some(current)) if wanted == current => {
+            VariablePlan::Keep(current.to_owned())
+        }
+        (Some(wanted), previous) => VariablePlan::Set {
+            value: wanted.to_owned(),
+            previous: previous.map(str::to_owned),
+        },
+        (None, Some(current)) => VariablePlan::Keep(current.to_owned()),
+        (None, None) => VariablePlan::Set {
+            value: org_ci.unwrap_or(api_url).to_owned(),
+            previous: None,
+        },
+    }
 }
 
 /// Adds what a 403 means for `keel init`, keeping the kind `forbidden`.
@@ -497,8 +635,17 @@ pub async fn init(ctx: &Ctx, args: InitArgs) -> Result<()> {
     let root = Path::new(&root);
     let origin = git::origin(root)?;
     if args.check {
-        return check(ctx, root, &origin.slug()).await;
+        return check(
+            ctx,
+            root,
+            &origin.slug(),
+            &args.secret,
+            args.ci_api_url.as_deref(),
+        )
+        .await;
     }
+    let secret = args.secret.as_str();
+    let template = workflow_template(secret);
     check_tag_variables(&args.scopes, &args.tag_variables)?;
     let terminal = ui::interactive() && !ctx.json;
     let mut steps = Steps::new(ctx);
@@ -586,6 +733,24 @@ pub async fn init(ctx: &Ctx, args: InitArgs) -> Result<()> {
             "No se creó nada: con --no-github el token de CI no tiene dónde guardarse. Pasa también --show-token en una terminal interactiva (sin --json) para verlo una sola vez, o quita --no-github.",
         ),
     })?;
+
+    // At a terminal (without -y) the person picks where the fresh token goes.
+    let mut plan = plan;
+    if plan.secret == SecretAction::Set && terminal && !args.yes {
+        let options = vec![
+            (
+                format!("Guardarlo como secret {secret} de {repo} (por stdin de gh)"),
+                Some("recomendado".to_owned()),
+            ),
+            (
+                "Mostrarlo una sola vez aquí, sin guardarlo en GitHub".to_owned(),
+                None,
+            ),
+        ];
+        if ui::select("¿Qué hago con el token de CI?", &options, 0)? == 1 {
+            plan.secret = SecretAction::Print;
+        }
+    }
 
     // The --scope flags are resolved before creating anything, so a typo costs nothing.
     let pending: Vec<&ScopeArg> = args
@@ -676,34 +841,34 @@ pub async fn init(ctx: &Ctx, args: InitArgs) -> Result<()> {
     // The fresh token goes to GitHub right away: it is never shown again.
     let secret_status = match (plan.secret, &token) {
         (SecretAction::Set, Some(token)) => {
-            github::set_secret(&gh, &repo, token)?;
+            github::set_secret(&gh, &repo, secret, token)?;
             steps.done(
                 "secret",
-                format!("secret {SECRET} guardado en {repo} (por stdin de gh)"),
+                format!("secret {secret} guardado en {repo} (por stdin de gh)"),
             );
             "set"
         }
         (SecretAction::Print, Some(token)) => {
             println!(
-                "\n  Token de CI (se muestra una sola vez; guárdalo como secret {SECRET} de {repo}):\n\n  {}\n",
+                "\n  Token de CI (se muestra una sola vez; guárdalo como secret {secret} de {repo}):\n\n  {}\n",
                 token.expose()
             );
             steps.done(
                 "secret",
-                format!("token de CI mostrado una vez: guárdalo como secret {SECRET}"),
+                format!("token de CI mostrado una vez: guárdalo como secret {secret}"),
             );
             "printed"
         }
-        (SecretAction::Verify, _) => match github::has_secret(&gh, &repo) {
+        (SecretAction::Verify, _) => match github::has_secret(&gh, &repo, secret) {
             Some(true) => {
-                steps.skipped("secret", format!("secret {SECRET} ya existe en {repo}"));
+                steps.skipped("secret", format!("secret {secret} ya existe en {repo}"));
                 "present"
             }
             Some(false) => {
                 steps.warn(
                     "secret",
                     format!(
-                        "falta el secret {SECRET} en {repo}: `keel init --rotate-token` crea un token nuevo y lo guarda."
+                        "falta el secret {secret} en {repo}: `keel init --rotate-token` crea un token nuevo y lo guarda."
                     ),
                 );
                 "missing"
@@ -711,7 +876,7 @@ pub async fn init(ctx: &Ctx, args: InitArgs) -> Result<()> {
             None => {
                 steps.warn(
                     "secret",
-                    format!("gh no pudo listar los secrets de {repo}: revisa {SECRET} a mano."),
+                    format!("gh no pudo listar los secrets de {repo}: revisa {secret} a mano."),
                 );
                 "unknown"
             }
@@ -771,23 +936,52 @@ pub async fn init(ctx: &Ctx, args: InitArgs) -> Result<()> {
         );
     }
 
-    // 5. The variable the workflow reads.
+    // 5. The variable the workflow reads: the URL GitHub's runners reach.
     let api_url = target.org.api_url.clone();
+    let org_ci = target.org.ci_api_url.clone();
+    let mut ci_url = args
+        .ci_api_url
+        .clone()
+        .or_else(|| org_ci.clone())
+        .unwrap_or_else(|| api_url.clone());
     let variable_status = if gh_ready {
-        match github::variable(&gh, &repo) {
-            Some(value) if value == api_url => {
-                steps.skipped("variable", format!("variable {VARIABLE} = {api_url}"));
+        let current = github::variable(&gh, &repo);
+        match plan_variable(
+            current.as_deref(),
+            args.ci_api_url.as_deref(),
+            org_ci.as_deref(),
+            &api_url,
+        ) {
+            VariablePlan::Keep(value) => {
+                let note = if args.ci_api_url.is_some() {
+                    ""
+                } else {
+                    " (se respeta; --ci-api-url la cambia)"
+                };
+                steps.skipped("variable", format!("variable {VARIABLE} = {value}{note}"));
+                if args.ci_api_url.is_none()
+                    && let Some(org_ci) = org_ci.as_deref().filter(|o| *o != value)
+                {
+                    steps.warn(
+                        "variable",
+                        format!(
+                            "{VARIABLE} de {repo} es {value}, pero la org dice que los runners usan {org_ci}: `keel init --ci-api-url {org_ci}` la cambia."
+                        ),
+                    );
+                }
+                ci_url = value;
                 "present"
             }
-            current => {
-                github::set_variable(&gh, &repo, &api_url)?;
+            VariablePlan::Set { value, previous } => {
+                github::set_variable(&gh, &repo, &value)?;
                 steps.done(
                     "variable",
-                    match current {
-                        Some(old) => format!("variable {VARIABLE} = {api_url} (antes {old})"),
-                        None => format!("variable {VARIABLE} = {api_url}"),
+                    match previous {
+                        Some(old) => format!("variable {VARIABLE} = {value} (antes {old})"),
+                        None => format!("variable {VARIABLE} = {value}"),
                     },
                 );
+                ci_url = value;
                 "set"
             }
         }
@@ -796,7 +990,16 @@ pub async fn init(ctx: &Ctx, args: InitArgs) -> Result<()> {
     };
 
     // 6. The workflow.
-    let workflow = write_workflow(ctx, root, args.force, &steps)?;
+    let external = release_workflows(root, secret);
+    let workflow = write_workflow(
+        ctx,
+        root,
+        args.force,
+        args.workflow,
+        &template,
+        &external,
+        &steps,
+    )?;
     let status = workflow["status"].as_str().unwrap_or_default();
     match status {
         "created" => steps.done(
@@ -807,15 +1010,30 @@ pub async fn init(ctx: &Ctx, args: InitArgs) -> Result<()> {
             "workflow",
             format!("{WORKFLOW_PATH} reemplazado por la plantilla"),
         ),
+        "external" => {
+            let paths: Vec<&str> = external.iter().map(|w| w.path.as_str()).collect();
+            steps.skipped(
+                "workflow",
+                format!(
+                    "{} ya notifica a keel: no se crea {WORKFLOW_PATH} (--workflow lo crea igual)",
+                    paths.join(", ")
+                ),
+            );
+            for warning in release_workflow_warnings(&external, secret) {
+                steps.warn("workflow", warning);
+            }
+        }
         _ => steps.skipped("workflow", format!("{WORKFLOW_PATH} igual a la plantilla")),
     }
     let mut pr = Value::Null;
-    if gh_ready && (args.pr || terminal) {
-        pr = workflow_pr(&gh, root, &repo, args.pr, terminal, &mut steps)?;
+    if gh_ready && status != "external" && (args.pr || terminal) {
+        pr = workflow_pr(&gh, root, &repo, &template, args.pr, terminal, &mut steps)?;
+    } else if args.pr && status == "external" {
+        steps.skipped("pr", "sin PR: el repo ya tiene su workflow de release");
     }
 
     // 7. Final checks.
-    let reach = reachability(&api_url).await;
+    let reach = reachability(&ci_url).await;
     if let Some(warning) = &reach {
         steps.warn("reachability", warning.clone());
     }
@@ -833,12 +1051,13 @@ pub async fn init(ctx: &Ctx, args: InitArgs) -> Result<()> {
         steps.warn("registry", REGISTRY_HINT);
     }
     let org = Ok(target.org.clone());
-    let audit = audit(root, &repo, &org, &gh, reach).await;
+    let audit = audit(root, &repo, &org, &gh, reach, secret, &ci_url).await;
     let report = json!({
         "ok": audit["ok"], "repo": repo, "steps": steps.items, "warnings": steps.warnings,
         "app": {"status": app_status, "old_server": old_server},
         "scopes": {"aliases": aliases, "created": created_scopes},
-        "github": {"gh": gh_state.as_ref().map(GhState::name), "secret": secret_status, "variable": variable_status},
+        "github": {"gh": gh_state.as_ref().map(GhState::name), "secret": secret_status, "secret_name": secret,
+                   "variable": variable_status, "variable_value": ci_url},
         "workflow": workflow, "pr": pr, "audit": audit,
     });
     if ctx.json {
@@ -928,25 +1147,38 @@ async fn pick_scopes(
     }
 }
 
-/// Writes the template unless the file is customized (then `--force`).
-fn write_workflow(ctx: &Ctx, root: &Path, force: bool, steps: &Steps) -> Result<Value> {
+/// Writes the template unless the file is customized (then `--force`), or
+/// the repo already has a release workflow that reports to keel (then `--workflow`).
+fn write_workflow(
+    ctx: &Ctx,
+    root: &Path,
+    force: bool,
+    explicit: bool,
+    template: &str,
+    external: &[ReleaseWorkflow],
+    steps: &Steps,
+) -> Result<Value> {
     let path = root.join(WORKFLOW_PATH);
     let mut workflow = json!({"path": WORKFLOW_PATH});
-    match workflow_state(root) {
+    match workflow_state(root, template) {
+        FileState::Missing if !external.is_empty() && !explicit => {
+            workflow["status"] = json!("external");
+            workflow["external"] = json!(external.iter().map(|w| &w.path).collect::<Vec<_>>());
+        }
         FileState::Missing => {
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            std::fs::write(&path, WORKFLOW)?;
+            std::fs::write(&path, template)?;
             workflow["status"] = json!("created");
         }
         FileState::Same => workflow["status"] = json!("up_to_date"),
         FileState::Customized if force => {
-            std::fs::write(&path, WORKFLOW)?;
+            std::fs::write(&path, template)?;
             workflow["status"] = json!("replaced");
         }
         FileState::Customized => {
-            let diff = workflow_diff(root)?;
+            let diff = workflow_diff(root, template)?;
             workflow["status"] = json!("customized");
             workflow["diff"] = json!(diff);
             if !ctx.json {
@@ -964,9 +1196,9 @@ fn write_workflow(ctx: &Ctx, root: &Path, force: bool, steps: &Steps) -> Result<
     Ok(workflow)
 }
 
-fn workflow_diff(root: &Path) -> Result<String> {
+fn workflow_diff(root: &Path, template: &str) -> Result<String> {
     let current = std::fs::read_to_string(root.join(WORKFLOW_PATH))?;
-    Ok(similar::TextDiff::from_lines(current.as_str(), WORKFLOW)
+    Ok(similar::TextDiff::from_lines(current.as_str(), template)
         .unified_diff()
         .header(WORKFLOW_PATH, "plantilla de keel")
         .to_string())
@@ -977,6 +1209,7 @@ fn workflow_pr(
     gh: &dyn Gh,
     root: &Path,
     repo: &str,
+    template: &str,
     asked: bool,
     terminal: bool,
     steps: &mut Steps,
@@ -991,14 +1224,14 @@ fn workflow_pr(
         Err(error) if asked => return Err(error),
         Err(_) => return Ok(Value::Null),
     };
-    if on_base.as_deref().map(str::trim) == Some(WORKFLOW.trim()) {
+    if on_base.as_deref().map(str::trim) == Some(template.trim()) {
         steps.skipped("pr", format!("el workflow ya está en {base}"));
         return Ok(json!({"status": "on_base", "base": base}));
     }
     if !asked && !(terminal && ui::confirm("¿Abrir un PR con el workflow?")?) {
         return Ok(Value::Null);
     }
-    match github::open_pr(gh, root, repo, &base, WORKFLOW_PATH, WORKFLOW)? {
+    match github::open_pr(gh, root, repo, &base, WORKFLOW_PATH, template)? {
         PrOutcome::Opened(url) => {
             steps.done(
                 "pr",
@@ -1022,14 +1255,33 @@ fn workflow_pr(
 // ------------------------------------------------------------------ the audit
 
 /// `keel init --check`: read-only; exit 2 when something is missing.
-async fn check(ctx: &Ctx, root: &Path, repo: &str) -> Result<()> {
+async fn check(
+    ctx: &Ctx,
+    root: &Path,
+    repo: &str,
+    secret: &str,
+    ci_api_url: Option<&str>,
+) -> Result<()> {
     let org = config::active_org(&ctx.home, ctx.org.as_deref());
     let gh = SystemGh::new(root);
-    let reach = match &org {
-        Ok(org) => reachability(&org.api_url).await,
-        Err(_) => None,
+    // What the runners use: the repo's variable, else what init would set.
+    let ci_url = github::variable(&gh, repo)
+        .or_else(|| ci_api_url.map(str::to_owned))
+        .or_else(|| {
+            org.as_ref()
+                .ok()
+                .map(|o| o.ci_api_url.clone().unwrap_or_else(|| o.api_url.clone()))
+        })
+        .unwrap_or_default();
+    let reach = match ci_url.as_str() {
+        "" => None,
+        url => reachability(url).await,
     };
-    let report = audit(root, repo, &org, &gh, reach).await;
+    let expected = ci_api_url
+        .map(str::to_owned)
+        .or_else(|| org.as_ref().ok().and_then(|o| o.ci_api_url.clone()))
+        .unwrap_or_default();
+    let report = audit(root, repo, &org, &gh, reach, secret, &expected).await;
     let problems = report["problems"].as_array().map_or(0, Vec::len);
     if problems > 0 {
         if !ctx.json {
@@ -1054,21 +1306,35 @@ async fn audit(
     org: &Result<config::OrgConfig>,
     gh: &dyn Gh,
     reach: Option<String>,
+    secret: &str,
+    // The `KEEL_API_URL` asked for (`--ci-api-url` or the org's `ciApiUrl`);
+    // empty when nothing says which URL the runners should use.
+    expected_url: &str,
 ) -> Value {
     let mut problems: Vec<String> = Vec::new();
     let mut warnings: Vec<String> = reach.into_iter().collect();
 
-    // The workflow.
+    // The workflow: keel's template, or the repo's own release workflow.
+    let template = workflow_template(secret);
     let mut workflow = json!({"path": WORKFLOW_PATH});
-    match workflow_state(root) {
+    match workflow_state(root, &template) {
         FileState::Missing => {
-            workflow["status"] = json!("missing");
-            problems.push(format!("Falta {WORKFLOW_PATH}: créalo con `keel init`."));
+            let external = release_workflows(root, secret);
+            if external.is_empty() {
+                workflow["status"] = json!("missing");
+                problems.push(format!(
+                    "Falta un workflow de release que notifique a keel: `keel init` crea {WORKFLOW_PATH}."
+                ));
+            } else {
+                workflow["status"] = json!("external");
+                workflow["external"] = json!(external.iter().map(|w| &w.path).collect::<Vec<_>>());
+                warnings.extend(release_workflow_warnings(&external, secret));
+            }
         }
         FileState::Same => workflow["status"] = json!("up_to_date"),
         FileState::Customized => {
             workflow["status"] = json!("customized");
-            if let Ok(diff) = workflow_diff(root) {
+            if let Ok(diff) = workflow_diff(root, &template) {
                 workflow["diff"] = json!(diff);
             }
         }
@@ -1104,29 +1370,31 @@ async fn audit(
     };
 
     // The secret and the variable the workflow reads (names and the URL only).
-    let github = match github::has_secret(gh, repo) {
+    let github = match github::has_secret(gh, repo, secret) {
         Some(has_token) => {
             if !has_token {
                 problems.push(format!(
-                    "Falta el secret {SECRET} en {repo}: `keel init --rotate-token` crea un token nuevo y lo guarda."
+                    "Falta el secret {secret} en {repo}: `keel init --rotate-token` crea un token nuevo y lo guarda."
                 ));
             }
-            let api = org.as_ref().ok().map(|o| o.api_url.clone());
             let value = github::variable(gh, repo);
             let has_url = value.is_some();
-            match (&value, &api) {
-                (None, _) => problems.push(format!(
+            match &value {
+                None => problems.push(format!(
                     "Falta la variable {VARIABLE} en {repo} (si no está a nivel organización): `keel init` la crea."
                 )),
-                (Some(v), Some(api)) if v != api => warnings.push(format!(
-                    "La variable {VARIABLE} de {repo} es {v}, pero la API de la org es {api}: `keel init` la corrige."
+                Some(v) if !expected_url.is_empty() && v != expected_url => warnings.push(format!(
+                    "La variable {VARIABLE} de {repo} es {v}, pero los runners deberían usar {expected_url}: `keel init --ci-api-url {expected_url}` la cambia."
                 )),
                 _ => {}
             }
-            json!({"checked": true, SECRET: has_token, VARIABLE: has_url, "KEEL_API_URL_value": value})
+            // The secret's check stays under the DEPLOY_API_TOKEN key too, for scripts
+            // that read the report from before --secret.
+            json!({"checked": true, "secret_name": secret, "secret": has_token, SECRET: has_token,
+                   VARIABLE: has_url, "KEEL_API_URL_value": value})
         }
-        None => json!({"checked": false,
-            "note": "gh no está disponible o no tiene acceso: revisa a mano el secret DEPLOY_API_TOKEN y la variable KEEL_API_URL"}),
+        None => json!({"checked": false, "secret_name": secret,
+            "note": format!("gh no está disponible o no tiene acceso: revisa a mano el secret {secret} y la variable {VARIABLE}")}),
     };
 
     json!({
@@ -1159,7 +1427,21 @@ fn print_audit(report: &Value, warnings: bool) {
             "{} {WORKFLOW_PATH} adaptado (distinto de la plantilla)",
             c.green("✔")
         ),
-        _ => format!("{} falta {WORKFLOW_PATH}", c.red("✖")),
+        "external" => format!(
+            "{} workflow de release propio: {}",
+            c.green("✔"),
+            report["workflow"]["external"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        _ => format!(
+            "{} falta un workflow de release ({WORKFLOW_PATH})",
+            c.red("✖")
+        ),
     };
     println!("{line}");
     match report["keel"]["linked"].as_bool() {
@@ -1181,7 +1463,11 @@ fn print_audit(report: &Value, warnings: bool) {
                 c.red("✖")
             }
         };
-        println!("{} secret {SECRET}", mark(&report["github"][SECRET]));
+        println!(
+            "{} secret {}",
+            mark(&report["github"]["secret"]),
+            report["github"]["secret_name"].as_str().unwrap_or(SECRET)
+        );
         println!("{} variable {VARIABLE}", mark(&report["github"][VARIABLE]));
     } else {
         println!(
@@ -1228,12 +1514,14 @@ mod tests {
     #[test]
     fn detects_the_workflow_state() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(workflow_state(dir.path()), FileState::Missing);
+        assert_eq!(workflow_state(dir.path(), WORKFLOW), FileState::Missing);
         std::fs::create_dir_all(dir.path().join(".github/workflows")).unwrap();
         std::fs::write(dir.path().join(WORKFLOW_PATH), WORKFLOW).unwrap();
-        assert_eq!(workflow_state(dir.path()), FileState::Same);
+        assert_eq!(workflow_state(dir.path(), WORKFLOW), FileState::Same);
+        let custom = workflow_template("KEEL_CI_TOKEN");
+        assert_eq!(workflow_state(dir.path(), &custom), FileState::Customized);
         std::fs::write(dir.path().join(WORKFLOW_PATH), "x").unwrap();
-        assert_eq!(workflow_state(dir.path()), FileState::Customized);
+        assert_eq!(workflow_state(dir.path(), WORKFLOW), FileState::Customized);
     }
 
     #[test]
@@ -1469,5 +1757,113 @@ mod tests {
         assert!(shows_registry(&[
             json!({"alias": "prod", "registryId": "r1"})
         ]));
+    }
+
+    #[test]
+    fn renders_the_template_with_another_secret() {
+        assert_eq!(workflow_template(SECRET), WORKFLOW);
+        let custom = workflow_template("KEEL_CI_TOKEN");
+        assert!(custom.contains("${{ secrets.KEEL_CI_TOKEN }}"));
+        assert!(!custom.contains("secrets.DEPLOY_API_TOKEN"));
+        // The env var the steps read keeps its name.
+        assert!(custom.contains("DEPLOY_API_TOKEN: ${{ secrets.KEEL_CI_TOKEN }}"));
+        assert_eq!(
+            parse_secret_name(" KEEL_CI_TOKEN ").unwrap(),
+            "KEEL_CI_TOKEN"
+        );
+        for bad in ["", "1TOKEN", "MY-TOKEN", "GITHUB_TOKEN", "a b"] {
+            assert!(parse_secret_name(bad).is_err(), "{bad}");
+        }
+        assert_eq!(
+            parse_ci_api_url("gateway.acme.dev/keel/api/").unwrap(),
+            "https://gateway.acme.dev/keel/api"
+        );
+    }
+
+    #[test]
+    fn finds_release_workflows_that_already_report_to_keel() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(release_workflows(dir.path(), SECRET).is_empty());
+        let workflows = dir.path().join(".github/workflows");
+        std::fs::create_dir_all(&workflows).unwrap();
+        std::fs::write(
+            workflows.join("lint.yml"),
+            "jobs:\n  lint:\n    runs-on: x\n",
+        )
+        .unwrap();
+        std::fs::write(
+            workflows.join("main.yml"),
+            "jobs:\n  build: {}\n  notify-keel:\n    env:\n      URL: ${{ vars.KEEL_API_URL }}\n      T: ${{ secrets.DEPLOY_API_TOKEN }}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            workflows.join("release.yaml"),
+            "steps:\n  - run: curl -X POST \"$URL/ci-result\" -H \"Authorization: Bearer ${{ secrets.OTHER }}\"\n",
+        )
+        .unwrap();
+        // keel's own workflow is not "another" one.
+        std::fs::write(workflows.join("keel-release.yml"), WORKFLOW).unwrap();
+        let found = release_workflows(dir.path(), SECRET);
+        assert_eq!(
+            found,
+            [
+                ReleaseWorkflow {
+                    path: ".github/workflows/main.yml".into(),
+                    uses_secret: true,
+                    uses_variable: true
+                },
+                ReleaseWorkflow {
+                    path: ".github/workflows/release.yaml".into(),
+                    uses_secret: false,
+                    uses_variable: false
+                },
+            ]
+        );
+        let warnings = release_workflow_warnings(&found, SECRET);
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(warnings[0].contains("release.yaml no lee secrets.DEPLOY_API_TOKEN"));
+        assert!(release_workflow_warnings(&found[..1], SECRET).is_empty());
+    }
+
+    #[test]
+    fn plans_the_api_url_variable() {
+        let internal = "http://keel.acme.internal/api";
+        let gateway = "https://gateway.acme.dev/keel/api";
+        // A value the repo already has is never "corrected" to the internal URL.
+        assert_eq!(
+            plan_variable(Some(gateway), None, None, internal),
+            VariablePlan::Keep(gateway.into())
+        );
+        assert_eq!(
+            plan_variable(Some(gateway), None, Some("https://other.dev/api"), internal),
+            VariablePlan::Keep(gateway.into())
+        );
+        // Missing: the org's ciApiUrl, else the API URL.
+        assert_eq!(
+            plan_variable(None, None, Some(gateway), internal),
+            VariablePlan::Set {
+                value: gateway.into(),
+                previous: None
+            }
+        );
+        assert_eq!(
+            plan_variable(None, None, None, internal),
+            VariablePlan::Set {
+                value: internal.into(),
+                previous: None
+            }
+        );
+        // --ci-api-url wins.
+        assert_eq!(
+            plan_variable(Some(internal), Some(gateway), None, internal),
+            VariablePlan::Set {
+                value: gateway.into(),
+                previous: Some(internal.into())
+            }
+        );
+        assert_eq!(
+            plan_variable(Some(gateway), Some(gateway), None, internal),
+            VariablePlan::Keep(gateway.into())
+        );
     }
 }

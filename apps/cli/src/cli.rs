@@ -51,6 +51,11 @@ pub enum Command {
         /// sin él se pregunta en una terminal. KEEL_TOKEN lo reemplaza al usarlo.
         #[arg(long)]
         token: Option<String>,
+        /// URL de la API de keel que usan los runners de GitHub (la variable KEEL_API_URL
+        /// que pone keel init), si no es --api-url: p. ej. un gateway público delante de
+        /// un keel interno. Vacío la borra.
+        #[arg(long, value_name = "URL")]
+        ci_api_url: Option<String>,
     },
     /// Selecciona la organización activa.
     Use {
@@ -185,13 +190,13 @@ pub enum Command {
     /// Prepara el repo para keel: app en keel, scopes, secret y variable de GitHub y
     /// workflow de release. Se puede repetir: lo que ya está se salta.
     #[command(
-        after_help = "Ejemplos:\n  keel init -y --scope prod=<id-de-compose> --scope stg=<url-de-dokploy>\n  keel init --rotate-token\n  keel init --pr\n  keel init --check"
+        after_help = "Ejemplos:\n  keel init -y --scope prod=<id-de-compose> --scope stg=<url-de-dokploy>\n  keel init -y --ci-api-url https://gateway.acme.dev/keel/api --secret DEPLOY_API_TOKEN\n  keel init --rotate-token\n  keel init --pr\n  keel init --check\n\nEl token de CI solo pasa por el stdin de gh (nunca por argv ni por la salida), salvo con\n--no-github --show-token, que lo muestra una sola vez en la terminal."
     )]
     Init {
         /// Solo revisa (no crea ni cambia nada); sale con código 2 si falta algo.
         #[arg(
             long,
-            conflicts_with_all = ["yes", "rotate_token", "scope", "tag_variable", "no_github", "show_token", "pr"]
+            conflicts_with_all = ["yes", "rotate_token", "scope", "tag_variable", "no_github", "show_token", "pr", "workflow"]
         )]
         check: bool,
         /// Reemplaza el workflow aunque esté adaptado.
@@ -221,6 +226,19 @@ pub enum Command {
         /// Abre un PR con el workflow desde la rama keel/init.
         #[arg(long)]
         pr: bool,
+        /// Secret de GitHub donde se guarda el token de CI.
+        #[arg(long, value_name = "NOMBRE", default_value = "DEPLOY_API_TOKEN", value_parser = crate::keel::init::parse_secret_name)]
+        secret: String,
+        /// Valor de la variable KEEL_API_URL: la URL de la API de keel que alcanzan los
+        /// runners de GitHub (p. ej. un gateway público). Reemplaza la que tenga el repo;
+        /// sin ella se respeta la existente y, si falta, se usa la de `keel login
+        /// --ci-api-url` o la URL de la API.
+        #[arg(long, value_name = "URL", value_parser = crate::keel::init::parse_ci_api_url)]
+        ci_api_url: Option<String>,
+        /// Crea .github/workflows/keel-release.yml aunque el repo ya tenga un workflow de
+        /// release que notifica a keel (p. ej. main.yml con un job notify-keel).
+        #[arg(long)]
+        workflow: bool,
     },
     /// Skills para agentes (Claude Code, Codex, Copilot) publicados en el repo de keel.
     Skills {
@@ -419,7 +437,11 @@ pub async fn run(cli: Cli) -> Result<()> {
     let state = || paths::state_dir(cli.state_dir.clone());
     let config = || paths::load_config(config_arg.clone());
     match cli.command {
-        Command::Login { api_url, token } => kc::login(&ctx, cli.org.clone(), api_url, token).await,
+        Command::Login {
+            api_url,
+            token,
+            ci_api_url,
+        } => kc::login(&ctx, cli.org.clone(), api_url, token, ci_api_url).await,
         Command::Use { org } => kc::use_org(&ctx, org),
         Command::CreateVersion {
             version,
@@ -488,6 +510,9 @@ pub async fn run(cli: Cli) -> Result<()> {
             no_github,
             show_token,
             pr,
+            secret,
+            ci_api_url,
+            workflow,
         } => {
             crate::keel::init::init(
                 &ctx,
@@ -501,6 +526,9 @@ pub async fn run(cli: Cli) -> Result<()> {
                     no_github,
                     show_token,
                     pr,
+                    secret,
+                    ci_api_url,
+                    workflow,
                 },
             )
             .await
@@ -895,6 +923,19 @@ mod tests {
         assert!(parse(&["init", "--show-token"]).is_err());
         assert!(parse(&["init", "--no-github", "--show-token", "--rotate-token"]).is_ok());
         assert!(parse(&["init", "--no-github", "--pr"]).is_err());
+        assert!(parse(&["init", "--check", "--secret", "KEEL_CI_TOKEN"]).is_ok());
+        assert!(parse(&["init", "--check", "--workflow"]).is_err());
+        assert!(parse(&["init", "--secret", "GITHUB_TOKEN"]).is_err());
+        assert!(
+            parse(&[
+                "init",
+                "--ci-api-url",
+                "gateway.acme.dev/keel/api",
+                "--workflow"
+            ])
+            .is_ok()
+        );
+        assert!(parse(&["login", "--ci-api-url", "https://gateway.acme.dev/keel/api"]).is_ok());
         assert!(parse(&["skills"]).is_ok());
         assert!(parse(&["skills", "add", "keel-cli", "-g", "--agent", "claude"]).is_ok());
         assert!(parse(&["skills", "add"]).is_err());

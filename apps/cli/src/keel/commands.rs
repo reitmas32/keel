@@ -120,6 +120,7 @@ pub async fn login(
     org: Option<String>,
     api_url: Option<String>,
     token: Option<String>,
+    ci_api_url: Option<String>,
 ) -> Result<()> {
     let org = match org {
         Some(org) => org,
@@ -139,7 +140,14 @@ pub async fn login(
         None => return Err(need_terminal("--api-url")),
     };
     let api_url = config::normalize_api_url(&api_url)?;
-    let previous = config::read_org(&ctx.home, &org)?.and_then(|o| o.token);
+    let saved_before = config::read_org(&ctx.home, &org)?;
+    let previous = saved_before.as_ref().and_then(|o| o.token.clone());
+    // `--ci-api-url ""` forgets it; without the flag the saved one stays.
+    let ci_api_url = match ci_api_url {
+        Some(url) if url.trim().is_empty() => None,
+        Some(url) => Some(config::normalize_api_url(&url)?),
+        None => saved_before.and_then(|o| o.ci_api_url),
+    };
     // `--token ""` forgets it; without --token a terminal asks, and a script keeps the saved one.
     let token = match token {
         Some(token) => Some(token),
@@ -178,6 +186,7 @@ pub async fn login(
         org: org.clone(),
         api_url: api_url.clone(),
         token: token.clone(),
+        ci_api_url: ci_api_url.clone(),
     };
     config::save_org(&ctx.home, &saved)?;
     config::set_active_org(&ctx.home, &org)?;
@@ -185,11 +194,17 @@ pub async fn login(
         return print_json(&json!({
             "ok": true, "org": org, "apiUrl": api_url, "active": true,
             "token": token.is_some(), "user": user, "warning": warning,
+            "ciApiUrl": ci_api_url,
         }));
     }
     ui::success(&format!(
         "{org} guardada ({api_url}) y seleccionada como organización activa."
     ));
+    if let Some(ci) = &ci_api_url {
+        ui::info(&format!(
+            "Los runners de GitHub usan {ci} (KEEL_API_URL de los repos que prepara keel init)."
+        ));
+    }
     match (&token, &user) {
         (Some(_), Some(user)) => ui::success(&format!("Token verificado: eres {user}.")),
         (Some(_), None) => {}
