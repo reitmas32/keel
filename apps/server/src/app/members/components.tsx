@@ -3,7 +3,7 @@
 import { ROLES, type Role } from "@keel/shared";
 import { useActionState } from "react";
 import { IconPlus, IconRefresh, IconTrash } from "../icons";
-import { TokenNotice } from "../ui-client";
+import { ConfirmButton, TokenNotice } from "../ui-client";
 import {
   addGrantAction,
   changeRoleAction,
@@ -118,16 +118,18 @@ export function ResendInviteForm({ memberId, label }: { memberId: string; label:
   );
   return (
     <>
-      <form
-        action={action}
-        onSubmit={(e) => {
-          if (!confirm("Los enlaces anteriores dejarán de funcionar. ¿Generar uno nuevo?")) e.preventDefault();
-        }}
-      >
-        <button type="submit" className="btn btn-outline" disabled={pending}>
+      <form action={action}>
+        <ConfirmButton
+          variant="outline"
+          size="md"
+          disabled={pending}
+          title="¿Generar un enlace nuevo?"
+          message="Los enlaces anteriores dejarán de funcionar."
+          confirmLabel="Generar enlace"
+        >
           <IconRefresh />
           {pending ? "Generando…" : label}
-        </button>
+        </ConfirmButton>
       </form>
       <FormError error={state.error} />
       {state.inviteUrl && <InviteLink url={state.inviteUrl} />}
@@ -142,17 +144,21 @@ export function SetEnabledForm({ memberId, enabled, name }: { memberId: string; 
   );
   return (
     <>
-      <form
-        action={action}
-        onSubmit={(e) => {
-          if (!enabled && !confirm(`¿Deshabilitar a ${name}? Se cierra su sesión y sus tokens dejan de funcionar.`)) {
-            e.preventDefault();
-          }
-        }}
-      >
-        <button type="submit" className={`btn ${enabled ? "btn-outline" : "btn-destructive"}`} disabled={pending}>
-          {enabled ? "Habilitar" : "Deshabilitar"}
-        </button>
+      <form action={action}>
+        {enabled ? (
+          <button type="submit" className="btn btn-outline" disabled={pending}>
+            Habilitar
+          </button>
+        ) : (
+          <ConfirmButton
+            size="md"
+            disabled={pending}
+            title={`¿Deshabilitar a ${name}?`}
+            message="Se cierra su sesión y sus tokens dejan de funcionar."
+          >
+            Deshabilitar
+          </ConfirmButton>
+        )}
       </form>
       <FormError error={state.error} />
     </>

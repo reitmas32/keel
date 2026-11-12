@@ -4,7 +4,7 @@ import { LOCK_REASON_MAX } from "@keel/shared";
 import Link from "next/link";
 import { useActionState, useEffect, useRef } from "react";
 import { IconLock, IconPlus, IconRefresh } from "../icons";
-import { TokenNotice } from "../ui-client";
+import { ConfirmButton, TokenNotice } from "../ui-client";
 import { addScopeAction, createAppAction, type FormState, lockScopeAction, rotateTokenAction } from "./actions";
 
 const SECRET_HINT = (
@@ -118,16 +118,18 @@ export function RotateTokenForm({ appId }: { appId: string }) {
   const [state, action, pending] = useActionState<FormState, FormData>(rotateTokenAction.bind(null, appId), {});
   return (
     <>
-      <form
-        action={action}
-        onSubmit={(e) => {
-          if (!confirm("El token actual dejará de funcionar. ¿Generar uno nuevo?")) e.preventDefault();
-        }}
-      >
-        <button type="submit" className="btn btn-outline" disabled={pending}>
+      <form action={action}>
+        <ConfirmButton
+          variant="outline"
+          size="md"
+          disabled={pending}
+          title="¿Generar un nuevo token de CI?"
+          message="El token actual dejará de funcionar en cuanto se genere el nuevo. Actualiza el secret del repo después."
+          confirmLabel="Generar token"
+        >
           <IconRefresh />
           {pending ? "Generando…" : "Generar nuevo token de CI"}
-        </button>
+        </ConfirmButton>
       </form>
       <FormError error={state.error} />
       {state.token && <TokenNotice token={state.token} hint={SECRET_HINT} />}

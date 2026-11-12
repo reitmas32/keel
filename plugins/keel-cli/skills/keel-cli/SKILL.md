@@ -2,7 +2,7 @@
 name: keel-cli
 description: Operate releases and Dokploy with the keel CLI safely — create, promote and deploy versions through the keel server after CI passes, roll back, freeze scopes, read versions, changes, deploys, status and redacted logs, and change anything else on Dokploy (env, Compose, mounts, databases, backups, start/stop) only through expiring plans a person approves one by one. Use when the user wants to deploy, ship, promote or roll back a version, freeze deploys, or see what a deploy would change; asks what runs where, whether a service is up, for logs, or why a deploy failed or waits for CI; wants to change, add or remove an env variable, edit a Compose, add a volume or mount, create a database or a scheduled backup, start, stop or redeploy something on Dokploy; prepare a repo for keel or install agent skills; or when a keel command fails with an error kind such as keel_managed, locked, unauthorized, drift or ci_failed — even if they do not name keel. Never use the Dokploy web UI, curl or another client instead.
 metadata:
-  version: "0.4.0"
+  version: "0.5.0"
   owner: fundathyon
 ---
 
@@ -425,9 +425,16 @@ Link a repo to keel: `keel init` does it end to end and can be re-run safely.
 It creates the app in keel (admin role), links scopes (`--scope prod=<dokploy
 id or url>`, repeatable; at a terminal it offers Dokploy's services), stores
 the app's CI token as the `DEPLOY_API_TOKEN` secret through `gh` (by stdin —
-the token never reaches the terminal, the conversation or the JSON), sets the
-`KEEL_API_URL` variable, writes `.github/workflows/keel-release.yml`, and with
-`--pr` opens a PR from branch `keel/init`. Without a terminal it needs `-y` to
+the token never reaches the terminal, the conversation or the JSON;
+`--secret <NAME>` picks another secret), sets the `KEEL_API_URL` variable,
+writes `.github/workflows/keel-release.yml`, and with `--pr` opens a PR from
+branch `keel/init`. `KEEL_API_URL` is the URL GitHub's runners reach:
+`--ci-api-url <url>` sets it (e.g. a public gateway in front of an internal
+keel; `keel login --ci-api-url` saves one for the whole org); without the flag
+a value the repo already has is kept — never "fix" it to the internal API URL.
+A repo whose own release workflow already reports to keel (calls `/ci-result`
+or has a `notify-keel` job, e.g. `.github/workflows/main.yml`) gets no
+`keel-release.yml`; `--workflow` writes it anyway — don't, unless asked. Without a terminal it needs `-y` to
 create the app. `--rotate-token` replaces the CI token and the secret in one
 step (confirm with the person first: it invalidates the token the CI uses).
 It stops before creating anything if `gh` is missing or logged out; never use

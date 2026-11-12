@@ -1288,8 +1288,9 @@ case "$1" in
   auth) exit 0 ;;
   secret)
     case "$2" in
-      set) cat >> "$dir/stdin.log"; echo >> "$dir/stdin.log"; touch "$dir/secret"; exit 0 ;;
-      list) [ -f "$dir/secret" ] && printf 'DEPLOY_API_TOKEN\t2026-11-10T00:00:00Z\n'; exit 0 ;;
+      set) cat >> "$dir/stdin.log"; echo >> "$dir/stdin.log"
+           grep -qx "$3" "$dir/secret" 2>/dev/null || printf '%s\n' "$3" >> "$dir/secret"; exit 0 ;;
+      list) [ -f "$dir/secret" ] && sed 's/$/\t2026-11-10T00:00:00Z/' "$dir/secret"; exit 0 ;;
     esac ;;
   variable)
     case "$2" in
@@ -1612,4 +1613,156 @@ async fn init_opens_a_pr_with_the_workflow() {
     assert!(out.status.success(), "{}", stdout_of(&out));
     assert_eq!(json_of(&out)["pr"]["status"], "branch_exists");
     assert_eq!(gh.read("args.log").matches("pr create").count(), 1);
+}
+
+/// A release workflow written by hand, like the ones in payments-api or helm.
+const MAIN_WORKFLOW: &str = "name: main
+on:
+  push:
+    tags: ['v*.*.*']
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: make test
+  notify-keel:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          KEEL_API_URL: ${{ vars.KEEL_API_URL }}
+          TOKEN: ${{ secrets.KEEL_CI_TOKEN }}
+        run: curl -X POST \"$KEEL_API_URL/ci-result\" -H \"Authorization: Bearer $TOKEN\"
+";
+
+#[cfg(unix)]
+#[tokio::test]
+async fn init_keeps_the_repos_own_workflow_and_api_url() {
+    let keel = fake_linking_keel(false, None).await;
+    let w = world(&keel.uri());
+    let gh = FakeGh::new(&w);
+    let gateway = "https://gateway.acme.dev/keel/api";
+    std::fs::create_dir_all(w.repo.join(".github/workflows")).unwrap();
+    std::fs::write(w.repo.join(".github/workflows/main.yml"), MAIN_WORKFLOW).unwrap();
+    // The repo already reports to a public gateway, not to keel's internal URL.
+    std::fs::write(gh.dir.join("variable"), format!("{gateway}\n")).unwrap();
+
+    let out = w.keel_env(
+        &w.repo,
+        &["init", "-y", "--secret", "KEEL_CI_TOKEN", "--json"],
+        &gh.env(),
+    );
+    assert!(out.status.success(), "{}", stdout_of(&out));
+    assert!(!stdout_of(&out).contains("keel_ci_tok"), "the token leaked");
+    let report = json_of(&out);
+    assert_eq!(report["app"]["status"], "created");
+    assert_eq!(report["github"]["secret"], "set");
+    assert_eq!(report["github"]["secret_name"], "KEEL_CI_TOKEN");
+    assert_eq!(report["github"]["variable"], "present");
+    assert_eq!(report["github"]["variable_value"], gateway);
+    assert_eq!(report["workflow"]["status"], "external");
+    assert_eq!(
+        report["workflow"]["external"],
+        json!([".github/workflows/main.yml"])
+    );
+    assert_eq!(report["audit"]["workflow"]["status"], "external");
+    assert_eq!(report["audit"]["github"]["secret"], true, "{report}");
+    assert!(!w.repo.join(".github/workflows/keel-release.yml").exists());
+    assert_eq!(gh.read("variable").trim(), gateway);
+    assert_eq!(gh.read("stdin.log"), "keel_ci_tok1\n");
+    let args = gh.read("args.log");
+    assert!(
+        args.contains("secret set KEEL_CI_TOKEN --repo acme/app"),
+        "{args}"
+    );
+    assert!(!args.contains("keel_ci_tok"), "{args}");
+    assert!(!args.contains("variable set"), "{args}");
+
+    // --check agrees, with the same secret name.
+    let out = w.keel_env(
+        &w.repo,
+        &["init", "--check", "--secret", "KEEL_CI_TOKEN", "--json"],
+        &gh.env(),
+    );
+    // Only the scopes are missing (none were given).
+    assert_eq!(out.status.code(), Some(2), "{}", stdout_of(&out));
+    let check = json_of(&out)["error"]["details"].clone();
+    assert_eq!(check["workflow"]["status"], "external", "{check}");
+    assert_eq!(check["github"]["secret"], true);
+    let problems = check["problems"].as_array().unwrap();
+    assert_eq!(problems.len(), 1, "{check}");
+    assert!(problems[0].as_str().unwrap().contains("scopes"));
+
+    // --ci-api-url replaces the value; --workflow writes keel's template anyway.
+    let out = w.keel_env(
+        &w.repo,
+        &[
+            "init",
+            "--secret",
+            "KEEL_CI_TOKEN",
+            "--ci-api-url",
+            "gw2.acme.dev/keel/api",
+            "--workflow",
+            "--json",
+        ],
+        &gh.env(),
+    );
+    assert!(out.status.success(), "{}", stdout_of(&out));
+    let report = json_of(&out);
+    assert_eq!(report["github"]["variable"], "set");
+    assert_eq!(gh.read("variable").trim(), "https://gw2.acme.dev/keel/api");
+    assert_eq!(report["workflow"]["status"], "created");
+    let written =
+        std::fs::read_to_string(w.repo.join(".github/workflows/keel-release.yml")).unwrap();
+    assert!(written.contains("${{ secrets.KEEL_CI_TOKEN }}"));
+    // No second app and no second token.
+    assert_eq!(requests_to(&keel, "POST", "/apps").await.len(), 1);
+    assert_eq!(gh.read("args.log").matches("secret set").count(), 1);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn init_sets_the_orgs_ci_api_url() {
+    let keel = fake_linking_keel(false, None).await;
+    let w = world(&keel.uri());
+    let gh = FakeGh::new(&w);
+    let gateway = "https://gateway.acme.dev/keel/api";
+    let out = w.keel_env(
+        &w.repo,
+        &[
+            "--org",
+            "github.com:acme",
+            "login",
+            "--api-url",
+            &keel.uri(),
+            "--token",
+            "",
+            "--ci-api-url",
+            "gateway.acme.dev/keel/api",
+            "--json",
+        ],
+        &gh.env(),
+    );
+    assert!(out.status.success(), "{}", stdout_of(&out));
+    assert_eq!(json_of(&out)["ciApiUrl"], gateway);
+
+    let out = w.keel_env(&w.repo, &["init", "-y", "--json"], &gh.env());
+    assert!(out.status.success(), "{}", stdout_of(&out));
+    let report = json_of(&out);
+    assert_eq!(report["github"]["variable"], "set");
+    assert_eq!(gh.read("variable").trim(), gateway);
+    assert_eq!(report["workflow"]["status"], "created");
+    // An unrelated value set by hand later is kept, with a warning that names the org's URL.
+    std::fs::write(gh.dir.join("variable"), "https://elsewhere.dev/api\n").unwrap();
+    let out = w.keel_env(&w.repo, &["init", "--json"], &gh.env());
+    let report = json_of(&out);
+    assert_eq!(report["github"]["variable"], "present");
+    assert_eq!(gh.read("variable").trim(), "https://elsewhere.dev/api");
+    assert!(
+        report["warnings"].as_array().unwrap().iter().any(|w| w
+            .as_str()
+            .unwrap()
+            .contains("--ci-api-url https://gateway.acme.dev/keel/api")),
+        "{report}"
+    );
 }

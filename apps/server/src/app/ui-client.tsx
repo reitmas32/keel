@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useId, useRef, useState } from "react";
 import {
   IconApps,
   IconAudit,
@@ -124,25 +124,65 @@ export function TokenNotice({
   );
 }
 
-/** A submit button that asks for confirmation before a destructive form action runs. */
+/**
+ * A button that asks for confirmation before it submits the form it sits in. The question opens in an in-page
+ * `<dialog>` instead of `window.confirm()`: embedded browsers (and Chrome after "prevent this page from creating
+ * additional dialogs") make `confirm()` return false without showing anything, which turned these buttons into
+ * no-ops. The dialog lives inside the form, so its confirm button submits that form.
+ */
 export function ConfirmButton({
   message,
   children,
+  title = "¿Seguro?",
+  confirmLabel,
   variant = "destructive",
+  size = "sm",
+  disabled = false,
 }: {
-  message: string;
+  message: ReactNode;
   children: ReactNode;
+  title?: string;
+  /** The dialog's submit button; defaults to the trigger's content. */
+  confirmLabel?: ReactNode;
   variant?: "destructive" | "outline";
+  size?: "sm" | "md";
+  disabled?: boolean;
 }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const id = useId();
+  const sizeClass = size === "sm" ? " btn-sm" : "";
   return (
-    <button
-      type="submit"
-      className={`btn btn-${variant} btn-sm`}
-      onClick={(e) => {
-        if (!confirm(message)) e.preventDefault();
-      }}
-    >
-      {children}
-    </button>
+    <>
+      <button
+        type="button"
+        className={`btn btn-${variant}${sizeClass}`}
+        disabled={disabled}
+        onClick={() => dialog.current?.showModal()}
+      >
+        {children}
+      </button>
+      <dialog ref={dialog} className="dialog" aria-labelledby={`${id}-title`} aria-describedby={`${id}-message`}>
+        <div className="dialog-header">
+          <h2 className="dialog-title" id={`${id}-title`}>
+            {title}
+          </h2>
+          <p className="muted" id={`${id}-message`}>
+            {message}
+          </p>
+        </div>
+        <div className="dialog-footer">
+          <button type="button" className="btn btn-outline" onClick={() => dialog.current?.close()}>
+            Cancelar
+          </button>
+          <button
+            type="submit"
+            className={`btn ${variant === "destructive" ? "btn-destructive" : ""}`.trim()}
+            onClick={() => dialog.current?.close()}
+          >
+            {confirmLabel ?? children}
+          </button>
+        </div>
+      </dialog>
+    </>
   );
 }

@@ -27,6 +27,10 @@ pub struct OrgConfig {
     /// Personal API token (`keel_pat_…`) from the admin's «Tokens de API».
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
+    /// The API URL GitHub's runners use (the repos' `KEEL_API_URL`), when it
+    /// differs from `api_url`: e.g. a public gateway in front of an internal keel.
+    #[serde(default, rename = "ciApiUrl", skip_serializing_if = "Option::is_none")]
+    pub ci_api_url: Option<String>,
 }
 
 impl OrgConfig {
@@ -194,6 +198,7 @@ mod tests {
             org: "github.com:konectus-io".into(),
             api_url: "https://keel.example.com/api".into(),
             token: None,
+            ci_api_url: None,
         };
         save_org(home.path(), &config).unwrap();
         save_org(
@@ -202,6 +207,7 @@ mod tests {
                 org: "github.com:acme".into(),
                 api_url: "https://keel.acme.dev/api".into(),
                 token: Some("keel_pat_x".into()),
+                ci_api_url: Some("https://gateway.acme.dev/keel/api".into()),
             },
         )
         .unwrap();
