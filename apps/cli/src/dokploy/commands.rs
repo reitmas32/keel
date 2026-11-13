@@ -211,6 +211,9 @@ pub enum PlanCommand {
     EnvPatch(EnvPatchArgs),
     /// Restaura un env guardado antes de un cambio anterior (ver get env-backups).
     EnvRestore(EnvRestoreArgs),
+    /// Copia variables del env de un servicio al de otro (API keys, secretos, llaves RSA)
+    /// sin que su valor pase por la terminal: keel lo lee de Dokploy y lo escribe tal cual.
+    EnvCopy(EnvCopyArgs),
     /// Agrega un volumen, bind mount o file mount a un servicio.
     MountCreate(MountCreateArgs),
     /// Muestra de nuevo un plan pendiente: resumen, destino y token de aprobación.
@@ -370,6 +373,34 @@ pub struct EnvPatchArgs {
     #[arg(long)]
     redeploy: bool,
     /// Planea aunque no se pueda preguntar a keel si este servicio es un scope de keel.
+    #[arg(long)]
+    not_keel_managed: bool,
+}
+
+#[derive(Args)]
+pub struct EnvCopyArgs {
+    /// Instancia del servicio de destino (organización/instancia).
+    #[command(flatten)]
+    target: Target,
+    /// Servicio de origen: `nombre`, `entorno/nombre` o `proyecto/entorno/nombre`.
+    #[arg(long)]
+    from: String,
+    /// Servicio de destino.
+    #[arg(long)]
+    to: String,
+    /// Variable a copiar; `ORIGEN:DESTINO` la copia con otro nombre. Se puede repetir.
+    #[arg(long = "key", value_name = "KEY[:DESTINO]", required = true)]
+    keys: Vec<String>,
+    /// Instancia de Dokploy del origen, si no es la del destino.
+    #[arg(long = "from-target", value_name = "ORG/INSTANCIA")]
+    from_target: Option<String>,
+    /// Reemplaza una variable que el destino ya tiene con otro valor.
+    #[arg(long)]
+    overwrite: bool,
+    /// Redespliega el destino en el mismo plan.
+    #[arg(long)]
+    redeploy: bool,
+    /// Planea aunque no se pueda preguntar a keel si el destino es un scope de keel.
     #[arg(long)]
     not_keel_managed: bool,
 }
@@ -1664,6 +1695,89 @@ pub(crate) async fn create_plan(config: &Config, state: &Path, command: PlanComm
                 },
             )
         }
+        PlanCommand::EnvCopy(args) => {
+            let keys = args
+                .keys
+                .iter()
+                .map(|spec| extra::parse_copy_key(spec))
+                .collect::<Result<Vec<_>>>()?;
+            let instance = args.target.resolve(config)?;
+            let source_instance = match &args.from_target {
+                Some(t) => Target {
+                    target: Some(t.clone()),
+                }
+                .resolve(config)?,
+                None => instance,
+            };
+            let mut envs = Vec::new();
+            for (query, instance) in [(&args.from, source_instance), (&args.to, instance)] {
+                let client = DokployClient::new(instance)?;
+                let (service, detail) = resolve_detail(&client, query).await?;
+                if !service.kind.has_environment() {
+                    refuse!(
+                        Kind::Refused,
+                        "{} es un {}: Dokploy no guarda un bloque de env para él",
+                        service.label(),
+                        service.kind.label()
+                    );
+                }
+                let env = detail
+                    .get("env")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                envs.push((service, env));
+            }
+            let (dest, current) = envs.pop().expect("two services");
+            let (source, source_env) = envs.pop().expect("two services");
+            let same_instance = std::ptr::eq(source_instance, instance);
+            if same_instance && source.id == dest.id && keys.iter().any(|(from, to)| from == to) {
+                refuse!(
+                    Kind::Refused,
+                    "origen y destino son el mismo servicio: copia a otro nombre con --key ORIGEN:DESTINO"
+                );
+            }
+            let (env, mut changes) = extra::copy_env(&source_env, &current, &keys, args.overwrite)?;
+            let from_label = if same_instance {
+                source.label()
+            } else {
+                format!("{} ({})", source.label(), source_instance.label())
+            };
+            changes["copied_from"] = json!({
+                "service": from_label,
+                "keys": keys.iter().map(|(from, to)| if from == to { from.clone() } else { format!("{from} → {to}") }).collect::<Vec<_>>(),
+            });
+            changes["value_sources"] = Value::Object(
+                keys.iter()
+                    .map(|(_, to)| (to.clone(), json!(format!("copiada de {from_label}"))))
+                    .collect(),
+            );
+            let guard = keel_guard(
+                &dest,
+                Intent::Env {
+                    current: &current,
+                    next: &env,
+                },
+                args.not_keel_managed,
+            )
+            .await?;
+            keel_note = Some(guard.note);
+            (
+                instance,
+                PlannedAction::EnvSet {
+                    service_kind: dest.kind,
+                    service_id: dest.id.clone(),
+                    label: dest.label(),
+                    env_sha256: plan::content_sha256(&env),
+                    keys: env_keys(&env).into_iter().map(|line| line.key).collect(),
+                    env,
+                    base_env_sha256: plan::content_sha256(&current),
+                    key_changes: Some(changes),
+                    origin: Some("env-copy".into()),
+                    redeploy: args.redeploy,
+                },
+            )
+        }
         PlanCommand::EnvRestore(args) => {
             let instance = args.target.resolve(config)?;
             let client = DokployClient::new(instance)?;
@@ -2000,6 +2114,7 @@ pub(crate) fn plan_target(command: &PlanCommand) -> &Target {
         }
         PlanCommand::EnvPatch(a) => &a.target,
         PlanCommand::EnvRestore(a) => &a.target,
+        PlanCommand::EnvCopy(a) => &a.target,
         PlanCommand::MountCreate(a) => &a.target,
         PlanCommand::ComposeUpdate(a) => &a.target,
         PlanCommand::PostgresCreate(a) => &a.target,
