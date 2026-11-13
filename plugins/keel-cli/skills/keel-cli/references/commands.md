@@ -88,7 +88,7 @@ app does not have is refused (`error`) before the tag is created.
 | `keel get services [filter]` | Every app, Compose and database with environment and status |
 | `keel get service <svc> [--raw]` | Server, source, image, env keys, domains; keel scope and version when managed; for databases host, port, database, user, image, limits (password redacted). `--raw` = full redacted API response |
 | `keel get env <svc> [--write-to /abs/new]` | Env keys and value lengths, never values. `--write-to` saves the real block to a new owner-only file |
-| `keel env diff <svcA> <svcB>` | Env keys only in A, only in B, with a different value, with the same value. Values are compared as hashes in memory and never printed |
+| `keel env diff <svcA> <svcB> [--key KEY]… [--target-b org/instance]` | Whether two services' envs are equal (`equal`), and the keys only in A, only in B, with a different value, with the same value (and, with `--key`, in neither). Values are compared as hashes in memory and never printed. `--key` compares only those keys; `--target-b` reads B from another Dokploy |
 | `keel get env-backups [svc]` | Env backups saved before each env-set, env-patch or env-restore (local, no values) |
 | `keel get compose (--service <svc> \| --id <id>) [--show-compose] [--write-to /abs/new]` | Compose data; `--show-compose` adds the definition without environment or secret blocks; `--write-to` saves the original (secrets included) to a new owner-only file |
 | `keel compose diff <svc> --file <path>` | Sanitized diff between the remote Compose and a local file |
@@ -115,6 +115,7 @@ approves; `apply` runs it once against the instance stored in the plan.
 | --- | --- |
 | `keel plan env-patch <svc> [--set KEY]… [--set-from-file KEY=/abs/path]… [--unset KEY]… [--redeploy] [--not-keel-managed]` | Change only some keys. `--set` values come from `$KEEL_SET_<KEY>`, a hidden prompt (terminal) or stdin (single `--set` only) — never from the command line. Summary shows keys added, changed or removed and value lengths |
 | `keel plan env-set <svc> --file <new.env> [--redeploy] [--not-keel-managed]` | Replace the whole env with a dotenv file |
+| `keel plan env-copy --from <svc> --to <svc> --key KEY[:DEST]… [--from-target org/instance] [--overwrite] [--redeploy] [--not-keel-managed]` | Copy keys from one service's env to another's, each value exactly as written — it goes from Dokploy to the plan file and back, never through stdout, argv or you. A destination key with another value needs `--overwrite`; one with the same value is left alone. Summary: `copied_from`, keys added/changed and lengths |
 | `keel plan env-restore <svc> --backup <timestamp or prefix> [--redeploy] [--not-keel-managed]` | Put back an env from `get env-backups` (full replace) |
 | `keel plan compose-update (--service <svc> \| --compose-id <id>) --file <path> [--redeploy] [--not-keel-managed]` | Replace the Compose file; summary includes the sanitized diff |
 | `keel plan compose-create --environment <id or project/env> --name <n> --file <path> [--server <id or name>] [--description …]` | Create a raw Compose |

@@ -86,6 +86,7 @@ keel get logs shop/production/api -f            # logs en vivo, redactados
 keel get env production/api                     # claves y largo de cada valor, nunca valores
 keel compose diff production/docs --file docs.yaml  # diff saneado contra el remoto
 keel plan env-patch production/api --set SENTRY_DSN --unset OLD_FLAG --redeploy
+keel plan env-copy --from staging/api --to production/api --key STRIPE_KEY --key RSA:JWT_KEY
 keel apply --plan <id> --approve <token>        # una persona revisó el plan
 ```
 
@@ -167,7 +168,8 @@ La versión actual es la del último deploy exitoso. El nombre en Dokploy (`proy
 - `keel promote --from stg --to prod` despliega en `prod` la versión que corre en `stg`.
 - `keel deploy … --rollback-on-failure` (también en `promote`) espera el deploy y, si falla, vuelve a la versión anterior.
 - `keel changes -s prod [-v v1.4.0]` lista los commits y PRs entre lo desplegado y una versión.
-- `keel env diff staging/api production/api` compara los nombres de las variables de dos servicios de Dokploy sin mostrar valores.
+- `keel env diff staging/api production/api` compara las variables de dos servicios de Dokploy sin mostrar valores (solo compara hashes en memoria) y dice si son iguales. `--key API_KEY` compara solo esas variables; `--target-b org/instancia` compara contra un servicio de otro Dokploy.
+- `keel plan env-copy --from <servicio> --to <servicio> --key API_KEY [--key ORIGEN:DESTINO]` copia variables delicadas (API keys, secretos, llaves RSA) de un servicio a otro sin que el valor pase por la terminal, los argumentos ni un agente: keel lo lee de Dokploy y lo escribe tal cual en un plan que una persona aprueba. Si el destino ya tiene la variable con otro valor, pide `--overwrite`; `--from-target` toma el origen de otro Dokploy y `--redeploy` redespliega en el mismo plan.
 - `keel init` escribe el workflow de release y revisa que el repo esté vinculado y tenga sus secrets; `keel init --check` solo audita.
 - `keel skills add keel-cli` instala el skill para Claude Code, Codex y Copilot en el repo (`-g` para tu usuario).
 

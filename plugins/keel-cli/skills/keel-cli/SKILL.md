@@ -2,7 +2,7 @@
 name: keel-cli
 description: Operate releases and Dokploy with the keel CLI safely — create, promote and deploy versions through the keel server after CI passes, roll back, freeze scopes, read versions, changes, deploys, status and redacted logs, and change anything else on Dokploy (env, Compose, mounts, databases, backups, start/stop) only through expiring plans a person approves one by one. Use when the user wants to deploy, ship, promote or roll back a version, freeze deploys, or see what a deploy would change; asks what runs where, whether a service is up, for logs, or why a deploy failed or waits for CI; wants to change, add or remove an env variable, edit a Compose, add a volume or mount, create a database or a scheduled backup, start, stop or redeploy something on Dokploy; prepare a repo for keel or install agent skills; or when a keel command fails with an error kind such as keel_managed, locked, unauthorized, drift or ci_failed — even if they do not name keel. Never use the Dokploy web UI, curl or another client instead.
 metadata:
-  version: "0.5.0"
+  version: "0.6.0"
   owner: fundathyon
 ---
 
@@ -97,7 +97,7 @@ keel context --json      # keel org and app (this repo); Dokploy instance and wh
 | Promote what staging runs to production | `keel promote --from stg --to prod` |
 | To undo a deploy of a version | `keel rollback` (or `--rollback-on-failure` on deploy/promote) |
 | Freeze or unfreeze deploys of a scope | `keel lock -s <scope> -m <reason>`, `keel unlock -s <scope>` |
-| Compare env variables of two services (names only) | `keel env diff <svcA> <svcB>` |
+| Compare env variables of two services (names only), or check some keys are equal | `keel env diff <svcA> <svcB> [--key KEY]` |
 | Prepare a repo for keel (workflow, app, secrets), or audit it | `keel init`, `keel init --check` |
 | Install these skills in a repo | `keel skills add keel-cli` |
 | What runs where, is it up, what CI says | `keel status`, `keel scopes`, `keel versions` |
@@ -260,6 +260,7 @@ Take every field from the plan's output (`operation`, `changes`, `target`,
 | --- | --- |
 | Change some env variables | `plan env-patch <svc> --set KEY --unset KEY --set-from-file KEY=/abs/path [--redeploy]` |
 | Replace the whole env | `plan env-set <svc> --file <new.env> [--redeploy]` |
+| Copy a secret from one service to another | `plan env-copy --from <svc> --to <svc> --key KEY[:DEST] [--overwrite] [--redeploy]` |
 | Undo an env change | `plan env-restore <svc> --backup <timestamp> [--redeploy]` |
 | Change a Compose file | `get compose --write-to` → edit → `compose diff` → `plan compose-update` (below) |
 | New Compose | `plan compose-create --environment <project/env> --name <n> --file compose.yaml [--server …]` |
@@ -334,6 +335,18 @@ The plan summary says where each value came from (`value_sources`).
   printf '%s' 'debug' | keel plan env-patch shop/production/api --set LOG_LEVEL --json
   ```
 
+- **The value already lives in another service** (the staging API key, an
+  RSA key another service uses): copy it, never read it.
+
+  ```sh
+  keel plan env-copy --from shop/staging/api --to shop/production/api --key STRIPE_KEY --json
+  keel env diff shop/staging/api shop/production/api --key STRIPE_KEY --json   # after apply: equal
+  ```
+
+  `--key SRC:DEST` renames it; `--overwrite` is needed when the destination
+  already has another value — say so when you show the plan. Never use
+  `get env --write-to` plus `env-patch` for this: the value would pass
+  through a file you handle.
 - `$KEEL_SET_<KEY>` wins over stdin; check `value_sources` in the plan says
   what you expect before showing it for approval.
 - `--unset KEY` fails if the key does not exist; `get env <svc>` first.

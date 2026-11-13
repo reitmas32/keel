@@ -152,6 +152,24 @@ pub fn patch_env(
     set: &[(String, String)],
     unset: &[String],
 ) -> Result<(String, Value)> {
+    patch_env_lines(current, set, unset, true)
+}
+
+/// Like [`patch_env`], with `set` values written exactly as given (already
+/// in dotenv form, quotes included): what `env-copy` takes from another env.
+fn patch_env_lines(
+    current: &str,
+    set: &[(String, String)],
+    unset: &[String],
+    quote: bool,
+) -> Result<(String, Value)> {
+    let quote_env_value = |value: &str| {
+        if quote {
+            quote_env_value(value)
+        } else {
+            value.to_owned()
+        }
+    };
     for key in unset {
         if env_value(current, key).is_none() {
             return Err(fail(
@@ -209,6 +227,103 @@ pub fn patch_env(
         env,
         json!({"added": added, "changed": changed, "removed": removed}),
     ))
+}
+
+// ---------------------------------------------------------------- env copy
+
+/// `--key SRC` or `--key SRC:DEST` (copy SRC under another name).
+pub fn parse_copy_key(spec: &str) -> Result<(String, String)> {
+    let (source, dest) = match spec.split_once(':') {
+        Some((source, dest)) => (source.trim(), dest.trim()),
+        None => (spec.trim(), spec.trim()),
+    };
+    validate_env_key(source)?;
+    validate_env_key(dest)?;
+    Ok((source.to_owned(), dest.to_owned()))
+}
+
+/// A value as written is whole on its line: a quote it opens, it closes. A
+/// value split over several lines (an RSA key pasted with real line breaks)
+/// can't be copied line by line without cutting it.
+fn whole_on_its_line(raw: &str) -> bool {
+    let raw = raw.trim_end();
+    match raw.chars().next() {
+        Some(q @ ('"' | '\'')) => {
+            raw.len() >= 2 && raw.ends_with(q) && {
+                let body = &raw[1..raw.len() - 1];
+                let backslashes = body.chars().rev().take_while(|c| *c == '\\').count();
+                q == '\'' || backslashes % 2 == 0
+            }
+        }
+        _ => true,
+    }
+}
+
+/// Copies `keys` (source key → destination key) from `source` into `dest`,
+/// each value exactly as written, and returns the new destination env and
+/// the key changes (lengths only). A destination key with another value is
+/// only replaced with `overwrite`; one with the same value is left alone.
+pub fn copy_env(
+    source: &str,
+    dest: &str,
+    keys: &[(String, String)],
+    overwrite: bool,
+) -> Result<(String, Value)> {
+    let mut set = Vec::new();
+    let mut unchanged = Vec::new();
+    let mut conflicts = Vec::new();
+    for (i, (from, to)) in keys.iter().enumerate() {
+        if keys[..i].iter().any(|(_, t)| t == to) {
+            bail!("--key repite el destino {to}");
+        }
+        let Some(value) = env_value(source, from) else {
+            return Err(fail(
+                Kind::Refused,
+                format!("el servicio de origen no tiene la variable {from}"),
+            ));
+        };
+        let unquoted = value.trim().trim_matches(|c| c == '"' || c == '\'');
+        if unquoted.is_empty() {
+            return Err(fail(
+                Kind::Refused,
+                format!("{from} está vacía en el servicio de origen: no hay nada que copiar"),
+            ));
+        }
+        if !whole_on_its_line(value) {
+            return Err(fail(
+                Kind::Refused,
+                format!(
+                    "{from} ocupa varias líneas en el env de origen (comillas sin cerrar): no se copia para no cortarla. Guárdala en una sola línea con \\n o usa plan env-patch --set-from-file."
+                ),
+            ));
+        }
+        match env_value(dest, to) {
+            Some(current) if current == value => unchanged.push(to.clone()),
+            Some(_) if !overwrite => conflicts.push(to.clone()),
+            _ => set.push((to.clone(), value.to_owned())),
+        }
+    }
+    if !conflicts.is_empty() {
+        return Err(fail(
+            Kind::Refused,
+            format!(
+                "el destino ya tiene {} con otro valor; pasa --overwrite para reemplazarla(s)",
+                conflicts.join(", ")
+            ),
+        ));
+    }
+    if set.is_empty() {
+        return Err(fail(
+            Kind::Refused,
+            format!(
+                "nada que copiar: el destino ya tiene {} con el mismo valor",
+                unchanged.join(", ")
+            ),
+        ));
+    }
+    let (env, mut changes) = patch_env_lines(dest, &set, &[], false)?;
+    changes["unchanged"] = json!(unchanged);
+    Ok((env, changes))
 }
 
 /// Key changes between two whole env blocks (for env-restore), lengths only.
@@ -700,10 +815,13 @@ mod tests {
 
 /// Which env keys two services share, and whether their values match.
 /// Values are only hashed in memory: none is returned.
-pub fn env_diff(a: &str, b: &str) -> Value {
+/// With `keys`, only those keys are compared (and a key neither has is
+/// reported in `missing_in_both`).
+pub fn env_diff(a: &str, b: &str, keys: &[String]) -> Value {
     use sha2::{Digest, Sha256};
     let hashes = |env: &str| -> BTreeMap<String, Vec<u8>> {
         redact::env_pairs(env)
+            .filter(|(k, _)| keys.is_empty() || keys.iter().any(|key| key == k))
             .map(|(k, v)| (k.to_owned(), Sha256::digest(v.as_bytes()).to_vec()))
             .collect()
     };
@@ -714,24 +832,42 @@ pub fn env_diff(a: &str, b: &str) -> Value {
     let (same, different): (Vec<_>, Vec<_>) = shared.partition(|(k, v)| b[*k] == **v);
     let same: Vec<&String> = same.into_iter().map(|(k, _)| k).collect();
     let different: Vec<&String> = different.into_iter().map(|(k, _)| k).collect();
+    let missing: Vec<&String> = keys
+        .iter()
+        .filter(|k| !a.contains_key(*k) && !b.contains_key(*k))
+        .collect();
+    let equal =
+        only_a.is_empty() && only_b.is_empty() && different.is_empty() && missing.is_empty();
     serde_json::json!({
+        "equal": equal,
         "only_in_a": only_a, "only_in_b": only_b,
         "different_value": different, "same_value": same,
+        "missing_in_both": missing,
     })
 }
 
 /// `keel env diff`: compares two services' env keys, never their values.
+/// B can live on another Dokploy (`target_b`); `keys` limits the comparison.
 pub async fn env_diff_command(
     config: &crate::dokploy::config::Config,
     target: &crate::dokploy::paths::Target,
+    target_b: Option<&crate::dokploy::paths::Target>,
     a: &str,
     b: &str,
+    keys: &[String],
     json_output: bool,
 ) -> Result<()> {
+    for key in keys {
+        validate_env_key(key)?;
+    }
     let instance = target.resolve(config)?;
-    let client = crate::dokploy::client::DokployClient::new(instance)?;
+    let instance_b = match target_b {
+        Some(t) => t.resolve(config)?,
+        None => instance,
+    };
     let mut envs = Vec::new();
-    for query in [a, b] {
+    for (query, instance) in [(a, instance), (b, instance_b)] {
+        let client = crate::dokploy::client::DokployClient::new(instance)?;
         let (service, detail) = crate::dokploy::commands::resolve_detail(&client, query).await?;
         if !service.kind.has_environment() {
             return Err(fail(
@@ -748,16 +884,32 @@ pub async fn env_diff_command(
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned();
-        envs.push((service.label(), env));
+        let label = if std::ptr::eq(instance, instance_b) {
+            service.label()
+        } else {
+            format!("{} ({})", service.label(), instance.label())
+        };
+        envs.push((label, env));
     }
-    let diff = env_diff(&envs[0].1, &envs[1].1);
-    let data = serde_json::json!({"a": envs[0].0, "b": envs[1].0, "diff": diff,
+    let diff = env_diff(&envs[0].1, &envs[1].1, keys);
+    let data = serde_json::json!({"a": envs[0].0, "b": envs[1].0, "equal": diff["equal"], "diff": diff,
+        "keys": keys,
         "values": "nunca se muestran; solo se comparan sus hashes en memoria"});
     if json_output || !std::io::IsTerminal::is_terminal(&std::io::stdout()) {
         return crate::dokploy::print_json(&crate::dokploy::commands::envelope(instance, data));
     }
     let c = crate::ui::stdout_colors();
     println!("{}  A = {}\n   B = {}\n", c.cyan("◇"), envs[0].0, envs[1].0);
+    let scope = if keys.is_empty() {
+        "Los env".to_owned()
+    } else {
+        format!("{} ", keys.join(", "))
+    };
+    if diff["equal"] == true {
+        println!("  {} {scope}son iguales en A y B\n", c.green("✔"));
+    } else {
+        println!("  {} {scope}no son iguales en A y B\n", c.red("✖"));
+    }
     let section = |title: &str, keys: &Value, paint: &dyn Fn(&str) -> String| {
         let keys: Vec<&str> = keys
             .as_array()
@@ -776,6 +928,9 @@ pub async fn env_diff_command(
     section("Solo en B", &diff["only_in_b"], &|k| c.green(k));
     section("Valor distinto", &diff["different_value"], &|k| c.yellow(k));
     section("Mismo valor", &diff["same_value"], &|k| c.dim(k));
+    section("No está en ninguno", &diff["missing_in_both"], &|k| {
+        c.red(k)
+    });
     Ok(())
 }
 
@@ -787,12 +942,74 @@ mod env_diff_tests {
     fn compares_keys_without_values() {
         let a = "A=1\nB=2\nC=3\n# X=9\n";
         let b = "B=2\nC=4\nD=5\n";
-        let diff = env_diff(a, b);
+        let diff = env_diff(a, b, &[]);
+        assert_eq!(diff["equal"], false);
         assert_eq!(diff["only_in_a"], serde_json::json!(["A"]));
         assert_eq!(diff["only_in_b"], serde_json::json!(["D"]));
         assert_eq!(diff["different_value"], serde_json::json!(["C"]));
         assert_eq!(diff["same_value"], serde_json::json!(["B"]));
         let text = diff.to_string();
         assert!(!text.contains('4') && !text.contains('5'));
+
+        // Only some keys: equal when those match, whatever else differs.
+        let only_b = env_diff(a, b, &["B".into()]);
+        assert_eq!(only_b["equal"], true);
+        assert_eq!(only_b["same_value"], serde_json::json!(["B"]));
+        assert_eq!(only_b["only_in_a"], serde_json::json!([]));
+        let missing = env_diff(a, b, &["B".into(), "Z".into()]);
+        assert_eq!(missing["equal"], false);
+        assert_eq!(missing["missing_in_both"], serde_json::json!(["Z"]));
+        assert_eq!(env_diff(b, b, &[])["equal"], true);
+    }
+
+    #[test]
+    fn copies_values_exactly_as_written() {
+        let source = "API_KEY=sk-live-123\nRSA=\"-----BEGIN KEY-----\\nabc\\n-----END KEY-----\"\nSAME=x\nEMPTY=\nBROKEN=\"-----BEGIN\n";
+        let dest = "# comment\nSAME=x\nOLD=1\nAPI_KEY=other\n";
+        let keys = |specs: &[&str]| -> Vec<(String, String)> {
+            specs.iter().map(|s| parse_copy_key(s).unwrap()).collect()
+        };
+        // A different value is not replaced without --overwrite.
+        let error = copy_env(source, dest, &keys(&["API_KEY"]), false).unwrap_err();
+        assert!(error.to_string().contains("--overwrite"), "{error}");
+        assert!(!error.to_string().contains("sk-live"));
+
+        let (env, changes) = copy_env(
+            source,
+            dest,
+            &keys(&["API_KEY", "RSA:JWT_KEY", "SAME"]),
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            env,
+            "# comment\nSAME=x\nOLD=1\nAPI_KEY=sk-live-123\nJWT_KEY=\"-----BEGIN KEY-----\\nabc\\n-----END KEY-----\"\n"
+        );
+        // Byte for byte: the copy reads back the same as the source.
+        assert_eq!(env_value(&env, "JWT_KEY"), env_value(source, "RSA"));
+        assert_eq!(changes["changed"][0]["key"], "API_KEY");
+        assert_eq!(changes["added"][0]["key"], "JWT_KEY");
+        assert_eq!(changes["unchanged"], serde_json::json!(["SAME"]));
+        assert!(!changes.to_string().contains("sk-live"));
+
+        for (spec, why) in [
+            ("NOPE", "no tiene"),
+            ("EMPTY", "vacía"),
+            ("BROKEN", "varias líneas"),
+        ] {
+            let error = copy_env(source, dest, &keys(&[spec]), true).unwrap_err();
+            assert!(error.to_string().contains(why), "{spec}: {error}");
+        }
+        let error = copy_env(source, dest, &keys(&["SAME"]), false).unwrap_err();
+        assert!(error.to_string().contains("nada que copiar"));
+        assert!(copy_env(source, dest, &keys(&["SAME", "API_KEY:SAME"]), true).is_err());
+        assert!(parse_copy_key("1BAD").is_err());
+        assert!(parse_copy_key("A:").is_err());
+        assert_eq!(
+            parse_copy_key(" A : B ").unwrap(),
+            ("A".to_owned(), "B".to_owned())
+        );
+        assert!(whole_on_its_line("'single'") && whole_on_its_line("plain"));
+        assert!(!whole_on_its_line("\"ends with escaped quote\\\""));
     }
 }

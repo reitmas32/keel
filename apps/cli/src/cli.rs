@@ -350,6 +350,12 @@ pub enum EnvCommand {
         a: String,
         /// Servicio B.
         b: String,
+        /// Instancia de Dokploy de B (organización/instancia), si no es la de A.
+        #[arg(long = "target-b", value_name = "ORG/INSTANCIA")]
+        target_b: Option<String>,
+        /// Compara solo esta variable (se puede repetir): «iguales» si coinciden en A y B.
+        #[arg(long = "key", value_name = "KEY")]
+        keys: Vec<String>,
     },
 }
 
@@ -553,8 +559,27 @@ pub async fn run(cli: Cli) -> Result<()> {
             .await
         }
         Command::Env {
-            command: EnvCommand::Diff { target, a, b },
-        } => extra::env_diff_command(&config()?, &target, &a, &b, ctx.json).await,
+            command:
+                EnvCommand::Diff {
+                    target,
+                    a,
+                    b,
+                    target_b,
+                    keys,
+                },
+        } => {
+            let target_b = target_b.map(|t| crate::dokploy::paths::Target { target: Some(t) });
+            extra::env_diff_command(
+                &config()?,
+                &target,
+                target_b.as_ref(),
+                &a,
+                &b,
+                &keys,
+                ctx.json,
+            )
+            .await
+        }
         Command::Scopes => kc::scopes(&ctx).await,
         Command::Deploys {
             id,
@@ -977,6 +1002,42 @@ mod tests {
             .is_ok()
         );
         assert!(parse(&["get", "services", "--target", "acme/production"]).is_ok());
+        assert!(
+            parse(&[
+                "plan",
+                "env-copy",
+                "--from",
+                "stg/api",
+                "--to",
+                "prod/api",
+                "--key",
+                "API_KEY",
+                "--key",
+                "RSA:JWT_KEY",
+                "--from-target",
+                "acme/staging",
+                "--overwrite",
+                "--redeploy"
+            ])
+            .is_ok()
+        );
+        // Nothing to copy without --key, and never a value on the command line.
+        assert!(parse(&["plan", "env-copy", "--from", "a", "--to", "b"]).is_err());
+        assert!(
+            parse(&[
+                "env",
+                "diff",
+                "stg/api",
+                "api",
+                "--target-b",
+                "acme/other",
+                "--key",
+                "A",
+                "--key",
+                "B"
+            ])
+            .is_ok()
+        );
         assert!(
             parse(&[
                 "plan",

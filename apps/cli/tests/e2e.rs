@@ -1019,6 +1019,159 @@ async fn v0_6_servers_only_have_the_old_routes() {
     );
 }
 
+/// A Dokploy with Shop/staging/web (cmp1) and Shop/production/web (cmp2).
+async fn two_envs_dokploy(stg: &str, prod: &str) -> MockServer {
+    let dokploy = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/project.all"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
+            "projectId": "p1", "name": "Shop",
+            "environments": [
+                {"environmentId": "e1", "name": "staging",
+                 "compose": [{"composeId": "cmp1", "name": "web", "appName": "shop-web-a", "composeStatus": "done"}]},
+                {"environmentId": "e2", "name": "production",
+                 "compose": [{"composeId": "cmp2", "name": "web", "appName": "shop-web-b", "composeStatus": "done"}]}
+            ]
+        }])))
+        .mount(&dokploy)
+        .await;
+    for (id, env) in [("cmp1", stg), ("cmp2", prod)] {
+        Mock::given(method("GET"))
+            .and(path("/api/compose.one"))
+            .and(query_param("composeId", id))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "composeId": id, "name": "web", "appName": "x", "composeStatus": "done",
+                "env": env, "composeFile": "services: {}\n", "sourceType": "raw"
+            })))
+            .mount(&dokploy)
+            .await;
+    }
+    Mock::given(method("POST"))
+        .and(path("/api/compose.saveEnvironment"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!(true)))
+        .mount(&dokploy)
+        .await;
+    dokploy
+}
+
+#[tokio::test]
+async fn env_copy_moves_secrets_without_showing_them() {
+    let rsa = r#""-----BEGIN PRIVATE KEY-----\nMIIEv-rsa-body\n-----END PRIVATE KEY-----""#;
+    let stg = format!("STRIPE_KEY=sk_live_stg_9f8e\nJWT_PRIVATE_KEY={rsa}\nPORT=3000\n");
+    let prod = "# production\nPORT=3000\nSTRIPE_KEY=sk_old_prod\n";
+    let dokploy = two_envs_dokploy(&stg, prod).await;
+    let keel = fake_keel().await;
+    let w = world(&keel.uri());
+    w.dokploy(&dokploy.uri());
+    let secrets = ["sk_live_stg_9f8e", "MIIEv-rsa-body", "sk_old_prod"];
+    let clean = |out: &Output| {
+        let text = stdout_of(out);
+        for secret in secrets {
+            assert!(!text.contains(secret), "{secret} leaked: {text}");
+        }
+    };
+
+    // Compare only some keys: PORT matches, the secrets don't.
+    let out = w.keel(
+        &w.outside,
+        &[
+            "env",
+            "diff",
+            "staging/web",
+            "production/web",
+            "--key",
+            "PORT",
+            "--json",
+        ],
+    );
+    assert!(out.status.success(), "{}", stdout_of(&out));
+    clean(&out);
+    assert_eq!(json_of(&out)["data"]["equal"], true);
+    let out = w.keel(
+        &w.outside,
+        &[
+            "env",
+            "diff",
+            "staging/web",
+            "production/web",
+            "--key",
+            "STRIPE_KEY",
+            "--key",
+            "JWT_PRIVATE_KEY",
+            "--json",
+        ],
+    );
+    clean(&out);
+    let diff = &json_of(&out)["data"]["diff"];
+    assert_eq!(diff["equal"], false);
+    assert_eq!(diff["different_value"], json!(["STRIPE_KEY"]));
+    assert_eq!(diff["only_in_a"], json!(["JWT_PRIVATE_KEY"]));
+
+    // A different value in the destination needs --overwrite.
+    let copy = |extra: &[&str]| {
+        let mut args = vec![
+            "plan",
+            "env-copy",
+            "--from",
+            "staging/web",
+            "--to",
+            "production/web",
+            "--key",
+            "STRIPE_KEY",
+            "--key",
+            "JWT_PRIVATE_KEY:JWT_KEY",
+        ];
+        args.extend_from_slice(extra);
+        args.push("--json");
+        w.keel(&w.outside, &args)
+    };
+    let out = copy(&[]);
+    assert_eq!(out.status.code(), Some(20), "{}", stdout_of(&out));
+    clean(&out);
+    assert!(
+        json_of(&out)["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("--overwrite")
+    );
+
+    let out = copy(&["--overwrite"]);
+    assert!(out.status.success(), "{}", stdout_of(&out));
+    clean(&out);
+    let plan = json_of(&out);
+    assert_eq!(plan["operation"], "compose.saveEnvironment");
+    let changes = &plan["changes"]["key_changes"];
+    assert_eq!(changes["changed"][0]["key"], "STRIPE_KEY");
+    assert_eq!(changes["added"][0]["key"], "JWT_KEY");
+    assert_eq!(changes["copied_from"]["service"], "Shop/staging/web");
+    assert_eq!(
+        changes["copied_from"]["keys"],
+        json!(["STRIPE_KEY", "JWT_PRIVATE_KEY → JWT_KEY"])
+    );
+    assert_eq!(plan["changes"]["origin"], "env-copy");
+
+    let id = plan["plan_id"].as_str().unwrap().to_owned();
+    let token = plan["approval_token_sha256"].as_str().unwrap().to_owned();
+    let applied = w.keel(
+        &w.outside,
+        &["apply", "--plan", &id, "--approve", &token, "--json"],
+    );
+    assert!(applied.status.success(), "{}", stdout_of(&applied));
+    clean(&applied);
+    let requests = dokploy.received_requests().await.unwrap();
+    let saved = requests
+        .iter()
+        .find(|r| r.url.path() == "/api/compose.saveEnvironment")
+        .unwrap();
+    let saved: Value = serde_json::from_slice(&saved.body).unwrap();
+    assert_eq!(saved["composeId"], "cmp2");
+    // Byte for byte, comments and order kept.
+    assert_eq!(
+        saved["env"],
+        format!("# production\nPORT=3000\nSTRIPE_KEY=sk_live_stg_9f8e\nJWT_KEY={rsa}\n")
+    );
+}
+
 #[tokio::test]
 async fn env_diff_compares_names_only() {
     let dokploy = MockServer::start().await;
