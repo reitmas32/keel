@@ -1769,6 +1769,7 @@ async fn init_opens_a_pr_with_the_workflow() {
 }
 
 /// A release workflow written by hand, like the ones in payments-api or helm.
+#[cfg(unix)]
 const MAIN_WORKFLOW: &str = "name: main
 on:
   push:
