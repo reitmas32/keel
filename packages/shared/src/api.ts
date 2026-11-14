@@ -74,6 +74,26 @@ export type Version = z.infer<typeof versionSchema>;
 export const HEALTH_STATUSES = ["checking", "passed", "failed"] as const;
 export type HealthStatus = (typeof HEALTH_STATUSES)[number];
 
+export const APPROVAL_STATUSES = ["pending", "approved", "rejected"] as const;
+export type ApprovalStatus = (typeof APPROVAL_STATUSES)[number];
+
+/** A deploy's approval, when its scope requires one. `by` and `at` are null while it is pending. */
+export const deployApprovalSchema = z.object({
+  status: z.enum(APPROVAL_STATUSES),
+  by: z.string().nullable(),
+  at: z.string().nullable(),
+  reason: z.string().nullable(),
+});
+export type DeployApproval = z.infer<typeof deployApprovalSchema>;
+
+export const APPROVAL_REASON_MAX = 500;
+
+/** `POST …/deploys/:id/approve` and `…/reject` body. A rejection needs a reason; an approval may carry one. */
+export const approvalRequestSchema = z.object({
+  reason: z.string().trim().max(APPROVAL_REASON_MAX).optional(),
+});
+export type ApprovalRequest = z.infer<typeof approvalRequestSchema>;
+
 export const deploySchema = z.object({
   id: z.string(),
   repo: z.string(),
@@ -96,6 +116,8 @@ export const deploySchema = z.object({
   rollbackOf: z.string().nullable().optional(),
   // The scope's health check after Dokploy finished; null when the scope has none. Optional: servers before v0.10.0.
   healthStatus: z.enum(HEALTH_STATUSES).nullable().optional(),
+  // Null when the scope didn't require an approval. Optional: servers before v0.10.0.
+  approval: deployApprovalSchema.nullable().optional(),
 });
 export type Deploy = z.infer<typeof deploySchema>;
 
@@ -152,6 +174,8 @@ export const updateScopeRequestSchema = z.object({
   healthCheck: healthCheckSchema.nullable().optional(),
   /** After a failed deploy, deploy again the version the scope ran before. */
   autoRollback: z.boolean().optional(),
+  /** Whether a second member must approve each deploy. Null: what the app says. */
+  requireApproval: z.boolean().nullable().optional(),
 });
 export type UpdateScopeRequest = z.infer<typeof updateScopeRequestSchema>;
 
@@ -236,6 +260,8 @@ export const scopeSummarySchema = z.object({
   // Optional: servers before v0.10.0 don't send them.
   healthCheck: healthCheckSchema.nullable().optional(),
   autoRollback: z.boolean().optional(),
+  /** Whether its deploys need an approval, with the app's setting applied. */
+  requireApproval: z.boolean().optional(),
 });
 export type ScopeSummary = z.infer<typeof scopeSummarySchema>;
 

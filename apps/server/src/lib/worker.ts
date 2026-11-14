@@ -10,6 +10,8 @@ export interface WorkerOptions {
   ciExpiryMinutes: number;
   /** How long Dokploy may take to finish a deployment before it's marked failed. */
   deployTimeoutMinutes: number;
+  /** How long a deploy may wait for its approval, counted from when it was asked for. Default: 24 h. */
+  approvalExpiryMinutes?: number;
   now?: () => Date;
   log?: (message: string, fields?: Record<string, unknown>) => void;
   /** Where state changes are announced. Without one the worker stays quiet. */
@@ -83,6 +85,7 @@ export class DeployWorker {
     let ok = false;
     try {
       await this.expireWaiting();
+      await this.expireUnapproved();
       // Check first so a finished deploy frees its scope for the next queued one in the same tick.
       await this.checkDeploying();
       await this.startPassed();
@@ -116,10 +119,33 @@ export class DeployWorker {
     }
   }
 
+  private approvalCutoff(): number {
+    return this.now().getTime() - minutes(this.options.approvalExpiryMinutes ?? 24 * 60);
+  }
+
+  /** Deploys whose CI passed but that nobody approved in time. */
+  private async expireUnapproved(): Promise<void> {
+    const cutoff = this.approvalCutoff();
+    for (const d of await this.store.listDeploys({ status: "ci_passed" })) {
+      if (d.approval?.status !== "pending" || Date.parse(d.createdAt) >= cutoff) continue;
+      const hours = Math.round((this.options.approvalExpiryMinutes ?? 24 * 60) / 6) / 10;
+      const expired = await this.store.transition(d.id, "expired", this.now(), {
+        error: `Nadie aprobó el deploy en ${hours} h.`,
+      });
+      if (expired) {
+        this.log(`deploy ${d.id} expirado sin aprobación`, { deployId: d.id, repo: d.repo, scope: d.scope });
+        metrics.deployFinished("expired");
+        this.announce("deploy.expired", expired);
+      }
+    }
+  }
+
   private async startPassed(): Promise<void> {
     // One deploy at a time per scope, oldest first; the rest wait for the next tick.
     const busy = new Set((await this.store.listDeploys({ status: "deploying" })).map((d) => d.scopeId));
     for (const d of await this.store.listDeploys({ status: "ci_passed" })) {
+      // Waits for a second member; it doesn't hold the scope for the deploys queued after it.
+      if (d.approval?.status === "pending") continue;
       if (busy.has(d.scopeId)) continue;
       busy.add(d.scopeId);
       await this.start(d);

@@ -32,6 +32,8 @@ export default async function ScopeSettingsPage({ params }: { params: Promise<{ 
             scopeId={scope.id}
             healthCheck={scope.healthCheck}
             autoRollback={scope.autoRollback}
+            requireApproval={scope.requireApproval}
+            appRequiresApproval={app.requireApproval}
           />
         ) : (
           <p className="hint">Solo un maintainer de este scope puede cambiar su configuración.</p>

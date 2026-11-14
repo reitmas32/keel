@@ -8,9 +8,11 @@ import { ConfirmButton, TokenNotice } from "../ui-client";
 import {
   addScopeAction,
   createAppAction,
+  decideDeployAction,
   type FormState,
   lockScopeAction,
   rotateTokenAction,
+  setAppApprovalAction,
   updateScopeAction,
 } from "./actions";
 
@@ -204,11 +206,15 @@ export function ScopeSettingsForm({
   scopeId,
   healthCheck,
   autoRollback,
+  requireApproval,
+  appRequiresApproval,
 }: {
   appId: string;
   scopeId: string;
   healthCheck: HealthCheck | null;
   autoRollback: boolean;
+  requireApproval: boolean | null;
+  appRequiresApproval: boolean;
 }) {
   const [state, action, pending] = useActionState<FormState, FormData>(
     updateScopeAction.bind(null, appId, scopeId),
@@ -297,6 +303,21 @@ export function ScopeSettingsForm({
         <input type="checkbox" name="autoRollback" defaultChecked={autoRollback} /> Si un deploy falla, volver a
         desplegar la versión anterior (rollback automático)
       </label>
+      <div className="field narrow">
+        <label className="label" htmlFor="require-approval">
+          Aprobación de otro miembro
+        </label>
+        <select
+          id="require-approval"
+          className="input"
+          name="requireApproval"
+          defaultValue={requireApproval === null ? "" : requireApproval ? "1" : "0"}
+        >
+          <option value="">Como la app ({appRequiresApproval ? "obligatoria" : "no"})</option>
+          <option value="1">Obligatoria</option>
+          <option value="0">No</option>
+        </select>
+      </div>
       <div className="inline-form">
         <button type="submit" className="btn" disabled={pending}>
           {pending ? "Guardando…" : "Guardar"}
@@ -305,5 +326,75 @@ export function ScopeSettingsForm({
       </div>
       <FormError error={state.error} />
     </form>
+  );
+}
+
+/** The app-wide default for approvals; each scope can override it. */
+export function AppApprovalForm({ appId, requireApproval }: { appId: string; requireApproval: boolean }) {
+  const [state, action, pending] = useActionState<FormState, FormData>(setAppApprovalAction.bind(null, appId), {});
+  return (
+    <form action={action} className="inline-form">
+      <label className="check">
+        <input type="checkbox" name="requireApproval" defaultChecked={requireApproval} /> Cada deploy necesita la
+        aprobación de otro miembro (maintainer)
+      </label>
+      <button type="submit" className="btn btn-outline btn-sm" disabled={pending}>
+        {pending ? "Guardando…" : "Guardar"}
+      </button>
+      {state.ok && <span className="muted small">Guardado.</span>}
+      <FormError error={state.error} />
+    </form>
+  );
+}
+
+/** "Aprobar" right away, or "Rechazar" with a reason in a dialog. */
+export function ApprovalButtons({ appId, deployId, label }: { appId: string; deployId: string; label: string }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [state, action, pending] = useActionState<FormState, FormData>(
+    decideDeployAction.bind(null, appId, deployId),
+    {},
+  );
+  useEffect(() => {
+    if (state.ok) dialog.current?.close();
+  }, [state]);
+  return (
+    <div className="inline-form">
+      <form action={action}>
+        <input type="hidden" name="decision" value="approve" />
+        <button type="submit" className="btn btn-sm" disabled={pending}>
+          Aprobar
+        </button>
+      </form>
+      <button type="button" className="btn btn-outline btn-sm" onClick={() => dialog.current?.showModal()}>
+        Rechazar
+      </button>
+      {!dialog.current?.open && <FormError error={state.error} />}
+      <dialog ref={dialog} className="dialog" aria-labelledby={`reject-${deployId}`}>
+        <form action={action}>
+          <input type="hidden" name="decision" value="reject" />
+          <div className="dialog-header">
+            <h2 className="dialog-title" id={`reject-${deployId}`}>
+              Rechazar {label}
+            </h2>
+            <p className="muted">El deploy termina como deploy_failed y no se despliega.</p>
+          </div>
+          <div className="field">
+            <label className="label" htmlFor={`reject-reason-${deployId}`}>
+              Motivo
+            </label>
+            <textarea id={`reject-reason-${deployId}`} className="input" name="reason" required maxLength={500} />
+          </div>
+          <FormError error={state.error} />
+          <div className="dialog-footer">
+            <button type="button" className="btn btn-outline" onClick={() => dialog.current?.close()}>
+              Cancelar
+            </button>
+            <button type="submit" className="btn btn-destructive" disabled={pending}>
+              Rechazar deploy
+            </button>
+          </div>
+        </form>
+      </dialog>
+    </div>
   );
 }

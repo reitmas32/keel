@@ -182,6 +182,7 @@ describe("POST /repos/:owner/:name/scopes", () => {
       lock: null,
       healthCheck: null,
       autoRollback: false,
+      requireApproval: false,
     });
     const [entry] = (await store.listAudit()).filter((e) => e.action === "scope.link");
     expect(entry).toMatchObject({

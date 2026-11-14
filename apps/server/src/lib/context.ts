@@ -32,6 +32,7 @@ async function createContext(): Promise<AppContext> {
   const worker = new DeployWorker(store, dokploy, {
     ciExpiryMinutes: env.KEEL_CI_EXPIRY_MINUTES,
     deployTimeoutMinutes: env.KEEL_DEPLOY_TIMEOUT_MINUTES,
+    approvalExpiryMinutes: env.KEEL_APPROVAL_EXPIRY_MINUTES,
     notifier,
   });
   return { env, store, dokploy, worker, notifier, now: () => new Date() };

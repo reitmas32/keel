@@ -4,10 +4,12 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import {
   createAppAs,
+  decideDeployAs,
   deleteAppAs,
   linkScopeAs,
   lockScopeAs,
   rotateCiTokenAs,
+  setAppRequireApprovalAs,
   unlinkScopeAs,
   unlockScopeAs,
   updateScopeAs,
@@ -128,9 +130,42 @@ export async function updateScopeAction(
                 timeoutSeconds: numberField(form, "healthTimeout"),
               },
         autoRollback: form.get("autoRollback") === "on",
+        // "" follows the app; "1"/"0" overrides it.
+        requireApproval: field(form, "requireApproval") === "" ? null : field(form, "requireApproval") === "1",
       },
       now(),
     );
+    revalidatePath(`/apps/${appId}`, "layout");
+    return { ok: true };
+  });
+}
+
+/** Approves or rejects a deploy waiting for a second member. A rejection needs a reason. */
+export async function decideDeployAction(
+  appId: string,
+  deployId: string,
+  _state: FormState,
+  form: FormData,
+): Promise<FormState> {
+  return attempt(async (viewer) => {
+    const { store, notifier, now } = await getContext();
+    const decision = field(form, "decision") === "reject" ? "rejected" : "approved";
+    const deploy = await decideDeployAs(store, viewer, appId, deployId, decision, field(form, "reason"), now());
+    notifier.notify({
+      event: decision === "approved" ? "deploy.approved" : "deploy.rejected",
+      deploy,
+      actor: viewer.member.name,
+      detail: deploy.approval?.reason ?? null,
+    });
+    revalidatePath(`/apps/${appId}`, "layout");
+    return { ok: true };
+  });
+}
+
+export async function setAppApprovalAction(appId: string, _state: FormState, form: FormData): Promise<FormState> {
+  return attempt(async (viewer) => {
+    const { store, now } = await getContext();
+    await setAppRequireApprovalAs(store, viewer, appId, form.get("requireApproval") === "on", now());
     revalidatePath(`/apps/${appId}`, "layout");
     return { ok: true };
   });

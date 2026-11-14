@@ -653,6 +653,12 @@ pub async fn deploy(ctx: &Ctx, args: DeployArgs) -> Result<()> {
             created.scope,
             status_name(created.status)
         ));
+        if created.awaiting_approval() {
+            ui::info(&format!(
+                "Este scope pide aprobación: otro maintainer debe correr `keel approve {}` (o aprobarlo en el admin).",
+                short(&created.id)
+            ));
+        }
         if created.status == DeployStatus::CiFailed {
             ui::warn(
                 created
@@ -1339,6 +1345,7 @@ mod tests {
             deploy_started_at: None,
             finished_at: None,
             requested_by: None,
+            approval: None,
         }
     }
 

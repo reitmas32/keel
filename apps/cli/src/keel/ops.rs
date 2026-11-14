@@ -90,6 +90,61 @@ pub async fn unlock(ctx: &Ctx, scope: Option<String>) -> Result<()> {
     Ok(())
 }
 
+// ------------------------------------------------------------ approve/reject
+
+/// Approves (or rejects, with a reason) someone else's deploy waiting for approval.
+pub async fn decide(ctx: &Ctx, id: String, approve: bool, reason: Option<String>) -> Result<()> {
+    let repo = resolve_repo(
+        ctx,
+        if approve {
+            "aprobar deploys"
+        } else {
+            "rechazar deploys"
+        },
+    )?;
+    let reason = match reason {
+        Some(r) => Some(r),
+        None if !approve && ui::interactive() && !ctx.json => {
+            Some(ui::ask("Motivo del rechazo", "falta revisar la migración")?)
+        }
+        None if !approve => return Err(need_terminal("el motivo con -m")),
+        None => None,
+    };
+    let reason = reason.as_deref().map(str::trim).filter(|r| !r.is_empty());
+    if reason.is_some_and(|r| r.chars().count() > 500) {
+        return Err(fail(
+            Kind::Error,
+            "El motivo puede tener hasta 500 caracteres.",
+        ));
+    }
+    if !approve && reason.is_none() {
+        return Err(fail(Kind::Error, "Escribe el motivo del rechazo con -m."));
+    }
+    let deploy = repo
+        .api
+        .decide_deploy(&repo.repo, &id, approve, reason)
+        .await?;
+    if ctx.json {
+        return print_json(&json!({"ok": true, "deploy": deploy}));
+    }
+    if approve {
+        ui::success(&format!(
+            "Deploy {} aprobado: {} → {} sale en cuanto su CI pase.",
+            short(&deploy.id),
+            deploy.tag,
+            deploy.scope
+        ));
+    } else {
+        ui::success(&format!(
+            "Deploy {} rechazado: {} → {} no se despliega.",
+            short(&deploy.id),
+            deploy.tag,
+            deploy.scope
+        ));
+    }
+    Ok(())
+}
+
 // --------------------------------------------------------------------- whoami
 
 pub async fn whoami(ctx: &Ctx) -> Result<()> {

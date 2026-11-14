@@ -11,7 +11,9 @@ CREATE TABLE IF NOT EXISTS apps (
   name          TEXT NOT NULL,
   repo          TEXT NOT NULL UNIQUE,
   ci_token_hash TEXT NOT NULL,
-  created_at    TEXT NOT NULL
+  created_at    TEXT NOT NULL,
+  -- v0.10.0: a second member must approve each deploy (scopes can override it).
+  require_approval INTEGER NOT NULL DEFAULT 0
 );
 
 -- v0.7.0: a scope is a deploy target of an app, pointing at a Dokploy application or compose (the \`services\` table
@@ -28,6 +30,8 @@ CREATE TABLE IF NOT EXISTS scopes (
   -- v0.10.0: JSON { enabled, url, expectedStatus, retries, intervalSeconds, timeoutSeconds }; NULL: no health check.
   health_check TEXT,
   auto_rollback INTEGER NOT NULL DEFAULT 0,
+  -- NULL: what the app says.
+  require_approval INTEGER,
   UNIQUE (app_id, alias)
 );
 
@@ -59,7 +63,14 @@ CREATE TABLE IF NOT EXISTS deploys (
   health_status     TEXT,
   health_attempts   INTEGER NOT NULL DEFAULT 0,
   health_checked_at TEXT,
-  rollback_of       TEXT
+  rollback_of       TEXT,
+  -- v0.10.0: who asked (as a member) and the approval, when the scope requires one.
+  requested_by_member_id TEXT,
+  approval_status   TEXT,
+  approval_by       TEXT,
+  approval_by_member_id TEXT,
+  approval_at       TEXT,
+  approval_reason   TEXT
 );
 
 CREATE INDEX IF NOT EXISTS deploys_status ON deploys (status, created_at);
@@ -237,12 +248,23 @@ function migrate(db: DatabaseSync): void {
       if (!existing.includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
     }
   };
-  addColumns("scopes", { health_check: "TEXT", auto_rollback: "INTEGER NOT NULL DEFAULT 0" });
+  addColumns("scopes", {
+    health_check: "TEXT",
+    auto_rollback: "INTEGER NOT NULL DEFAULT 0",
+    require_approval: "INTEGER",
+  });
+  addColumns("apps", { require_approval: "INTEGER NOT NULL DEFAULT 0" });
   addColumns("deploys", {
     health_status: "TEXT",
     health_attempts: "INTEGER NOT NULL DEFAULT 0",
     health_checked_at: "TEXT",
     rollback_of: "TEXT",
+    requested_by_member_id: "TEXT",
+    approval_status: "TEXT",
+    approval_by: "TEXT",
+    approval_by_member_id: "TEXT",
+    approval_at: "TEXT",
+    approval_reason: "TEXT",
   });
 
   const tokenColumns = columnsOf(db, "api_tokens");

@@ -66,9 +66,33 @@ pub struct Deploy {
     /// Name of the personal token that asked for it (servers with API tokens).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requested_by: Option<String>,
+    /// Its approval, when the scope requires one (servers from v0.10.0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<Approval>,
+}
+
+/// A deploy's approval: `pending`, `approved` or `rejected`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Approval {
+    pub status: String,
+    #[serde(default)]
+    pub by: Option<String>,
+    #[serde(default)]
+    pub at: Option<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 impl Deploy {
+    /// Still waiting for a second member to approve it.
+    pub fn awaiting_approval(&self) -> bool {
+        !self.status.is_terminal()
+            && self
+                .approval
+                .as_ref()
+                .is_some_and(|a| a.status == "pending")
+    }
+
     /// When it reached its final state; servers before v0.3.0 only say it with `updatedAt`.
     pub fn finished(&self) -> Option<&str> {
         self.finished_at.as_deref().or(self
@@ -524,6 +548,27 @@ impl KeelApi {
             Err(error) if is_unsupported(&error) => Ok(None),
             Err(error) => Err(error),
         }
+    }
+
+    /// Approves (or rejects, with a reason) a deploy waiting for approval.
+    pub async fn decide_deploy(
+        &self,
+        repo: &str,
+        id_prefix: &str,
+        approve: bool,
+        reason: Option<&str>,
+    ) -> Result<Deploy> {
+        let action = if approve { "approve" } else { "reject" };
+        let body = match reason {
+            Some(r) => serde_json::json!({ "reason": r }),
+            None => serde_json::json!({}),
+        };
+        self.request(
+            reqwest::Method::POST,
+            &format!("/repos/{repo}/deploys/{}/{action}", encode(id_prefix)),
+            Some(body),
+        )
+        .await
     }
 
     /// One deploy of `repo` by its id or a unique prefix (at least 4 characters).

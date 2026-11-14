@@ -1,7 +1,11 @@
+import { isTerminal, roleAtLeast } from "@keel/shared";
 import Link from "next/link";
+import { roleOn } from "@/lib/access";
+import { APPROVER_ROLE } from "@/lib/approvals";
 import { getContext } from "@/lib/context";
 import { formatDate } from "@/lib/format";
 import { Card, deployTone, StatusBadge } from "../../../ui";
+import { ApprovalButtons } from "../../components";
 import { AppPage, loadApp, none } from "../shared";
 
 const LIMIT = 50;
@@ -13,7 +17,7 @@ export default async function DeploysPage({
   params: Promise<{ id: string }>;
   searchParams: Promise<{ scope?: string }>;
 }) {
-  const { app, appRole } = await loadApp(params);
+  const { viewer, app, appRole } = await loadApp(params);
   const { store } = await getContext();
   const scopes = await store.listScopes(app.id);
   const wanted = (await searchParams).scope;
@@ -70,6 +74,24 @@ export default async function DeploysPage({
                     <td>{d.scope}</td>
                     <td>
                       <StatusBadge tone={deployTone(d.status)}>{d.status}</StatusBadge>
+                      {d.approval?.status === "pending" && !isTerminal(d.status) && (
+                        <>
+                          {" "}
+                          <StatusBadge tone="running">espera aprobación</StatusBadge>
+                          {d.requestedByMemberId !== viewer.member.id &&
+                            roleAtLeast(roleOn(viewer, { repo: app.repo, scope: d.scope }), APPROVER_ROLE) && (
+                              <div className="sub">
+                                <ApprovalButtons appId={app.id} deployId={d.id} label={`${d.tag} → ${d.scope}`} />
+                              </div>
+                            )}
+                        </>
+                      )}
+                      {d.approval && d.approval.status !== "pending" && (
+                        <div className="sub">
+                          {d.approval.status === "approved" ? "Aprobado" : "Rechazado"} por {d.approval.by}
+                          {d.approval.reason && `: ${d.approval.reason}`}
+                        </div>
+                      )}
                       {d.error && <div className="sub">{d.error}</div>}
                     </td>
                     <td>{d.requestedBy ?? none}</td>

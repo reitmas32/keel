@@ -5,7 +5,7 @@ import { IconTrash } from "../../../icons";
 import { Card } from "../../../ui";
 import { ConfirmButton } from "../../../ui-client";
 import { deleteAppAction } from "../../actions";
-import { RotateTokenForm } from "../../components";
+import { AppApprovalForm, RotateTokenForm } from "../../components";
 import { AppPage, loadApp } from "../shared";
 
 export default async function SettingsPage({ params }: { params: Promise<{ id: string }> }) {
@@ -45,6 +45,18 @@ export default async function SettingsPage({ params }: { params: Promise<{ id: s
           <RotateTokenForm appId={app.id} />
         ) : (
           <p className="hint">Solo un maintainer de esta app puede generar un nuevo token de CI.</p>
+        )}
+      </Card>
+      <Card
+        title="Aprobaciones"
+        description="Con esto activo, cada deploy espera a que otro miembro con rol maintainer lo apruebe (en Deploys o con keel approve). Cada scope puede cambiarlo en su configuración."
+      >
+        {canDelete ? (
+          <AppApprovalForm appId={app.id} requireApproval={app.requireApproval} />
+        ) : (
+          <p className="hint">
+            {app.requireApproval ? "Activadas" : "Desactivadas"}. Solo un admin de esta app puede cambiarlo.
+          </p>
         )}
       </Card>
       {canDelete && (

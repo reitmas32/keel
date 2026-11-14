@@ -8,11 +8,12 @@ import {
 } from "@keel/shared";
 import { type AuditActor, actorOf, baseRole, isAdmin, type Principal, requireRoleOn } from "./access";
 import { createApiToken } from "./api-auth";
+import { type ApprovalDecision, decideDeploy } from "./approvals";
 import { addScope, createApp, rotateCiToken, scopeSettingsDetails, updateScopeSettings } from "./apps";
 import { ApiError } from "./errors";
 import { maskUrl, parseChannelInput } from "./notify";
 import type { Target } from "./roles";
-import type { App, NotificationChannel, Scope, Store } from "./store";
+import type { App, DeployRecord, NotificationChannel, Scope, Store } from "./store";
 
 // What the admin's server actions do, with the role check and the audit entry, so they can be tested without Next.
 // Every function throws ApiError (403 for a role that can't, 404 for something missing).
@@ -130,6 +131,37 @@ export async function updateScopeAs(
   const updated = await updateScopeSettings(store, scope, settings);
   await record(store, actorOf(p), "scope.update", target, scopeSettingsDetails(settings), now);
   return updated;
+}
+
+/** Whether every scope of the app (unless a scope says otherwise) needs a second member's approval to deploy. */
+export async function setAppRequireApprovalAs(
+  store: Store,
+  p: Principal,
+  appId: string,
+  required: boolean,
+  now: Date,
+): Promise<void> {
+  const app = await appOr404(store, appId);
+  requireRoleOn(p, "admin", "configurar aprobaciones", { repo: app.repo });
+  if (app.requireApproval === required) return;
+  await store.setAppRequireApproval(app.id, required);
+  await record(store, actorOf(p), "app.update", { repo: app.repo }, { requireApproval: required }, now);
+}
+
+/** Approves or rejects a deploy from the admin's deploys page. */
+export async function decideDeployAs(
+  store: Store,
+  p: Principal,
+  appId: string,
+  deployId: string,
+  decision: ApprovalDecision,
+  reason: string,
+  now: Date,
+): Promise<DeployRecord> {
+  const app = await appOr404(store, appId);
+  const deploy = await store.getDeploy(deployId);
+  if (deploy?.repo !== app.repo) throw new ApiError(404, "Deploy no encontrado.");
+  return decideDeploy(store, p, actorOf(p), deploy, decision, { reason, via: "admin" }, now);
 }
 
 /** Returns the new plaintext CI token, shown once. */

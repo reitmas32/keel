@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  type ApprovalStatus,
   type CiResultRequest,
   canTransition,
   type Deploy,
@@ -19,6 +20,8 @@ export interface App {
   name: string;
   repo: string;
   createdAt: string;
+  /** Deploys of its scopes need a second member's approval, unless a scope says otherwise. */
+  requireApproval: boolean;
 }
 
 export type ScopeKind = "application" | "compose";
@@ -37,7 +40,13 @@ export interface Scope {
   healthCheck: HealthCheck | null;
   /** After a failed deploy, deploy again the version the scope ran before. */
   autoRollback: boolean;
+  /** Overrides the app's `requireApproval`; null follows it. */
+  requireApproval: boolean | null;
 }
+
+/** Whether deploys to `scope` need an approval: its own setting, or else its app's. */
+export const approvalRequired = (app: Pick<App, "requireApproval">, scope: Pick<Scope, "requireApproval">) =>
+  scope.requireApproval ?? app.requireApproval;
 
 export interface CiResult {
   repo: string;
@@ -58,6 +67,14 @@ export interface DeployRecord extends Omit<Deploy, "service"> {
   /** Health checks made so far, and when the last one started. */
   healthAttempts: number;
   healthCheckedAt: string | null;
+  requestedByMemberId: string | null;
+  approval: {
+    status: ApprovalStatus;
+    by: string | null;
+    byMemberId: string | null;
+    at: string | null;
+    reason: string | null;
+  } | null;
 }
 
 export interface ApiToken {
@@ -171,6 +188,7 @@ const toApp = (r: Row): App => ({
   name: r.name as string,
   repo: r.repo as string,
   createdAt: r.created_at as string,
+  requireApproval: Number(r.require_approval ?? 0) === 1,
 });
 
 function parseHealthCheck(raw: unknown): HealthCheck | null {
@@ -193,6 +211,7 @@ const toScope = (r: Row): Scope => ({
   createdAt: r.created_at as string,
   healthCheck: parseHealthCheck(r.health_check),
   autoRollback: Number(r.auto_rollback ?? 0) === 1,
+  requireApproval: r.require_approval == null ? null : Number(r.require_approval) === 1,
 });
 
 const toDeploy = (r: Row): DeployRecord => ({
@@ -214,6 +233,16 @@ const toDeploy = (r: Row): DeployRecord => ({
   healthStatus: (r.health_status as HealthStatus | null) ?? null,
   healthAttempts: Number(r.health_attempts ?? 0),
   healthCheckedAt: (r.health_checked_at as string | null) ?? null,
+  requestedByMemberId: (r.requested_by_member_id as string | null) ?? null,
+  approval: r.approval_status
+    ? {
+        status: r.approval_status as ApprovalStatus,
+        by: (r.approval_by as string | null) ?? null,
+        byMemberId: (r.approval_by_member_id as string | null) ?? null,
+        at: (r.approval_at as string | null) ?? null,
+        reason: (r.approval_reason as string | null) ?? null,
+      }
+    : null,
 });
 
 const toApiToken = (r: Row): ApiToken => ({
@@ -329,7 +358,13 @@ export class Store {
   // --- apps ---
 
   async createApp(input: { name: string; repo: string; ciTokenHash: string }, now: Date): Promise<App> {
-    const app = { id: randomUUID(), name: input.name, repo: normalizeRepo(input.repo), createdAt: now.toISOString() };
+    const app: App = {
+      id: randomUUID(),
+      name: input.name,
+      repo: normalizeRepo(input.repo),
+      createdAt: now.toISOString(),
+      requireApproval: false,
+    };
     await this.db.run("INSERT INTO apps (id, name, repo, ci_token_hash, created_at) VALUES (?, ?, ?, ?, ?)", [
       app.id,
       app.name,
@@ -363,19 +398,27 @@ export class Store {
     await this.db.run("UPDATE apps SET ci_token_hash = ? WHERE id = ?", [hash, appId]);
   }
 
+  async setAppRequireApproval(id: string, required: boolean): Promise<void> {
+    await this.db.run("UPDATE apps SET require_approval = ? WHERE id = ?", [required ? 1 : 0, id]);
+  }
+
   async deleteApp(id: string): Promise<void> {
     await this.db.run("DELETE FROM apps WHERE id = ?", [id]);
   }
 
   // --- scopes ---
 
-  async addScope(input: Omit<Scope, "id" | "createdAt" | "healthCheck" | "autoRollback">, now: Date): Promise<Scope> {
+  async addScope(
+    input: Omit<Scope, "id" | "createdAt" | "healthCheck" | "autoRollback" | "requireApproval">,
+    now: Date,
+  ): Promise<Scope> {
     const scope: Scope = {
       ...input,
       id: randomUUID(),
       createdAt: now.toISOString(),
       healthCheck: null,
       autoRollback: false,
+      requireApproval: null,
     };
     await this.db.run(
       "INSERT INTO scopes (id, app_id, alias, dokploy_url, kind, dokploy_id, tag_variable, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -418,8 +461,12 @@ export class Store {
   /** Changes only the settings given. */
   async updateScopeSettings(
     id: string,
-    settings: { healthCheck?: HealthCheck | null; autoRollback?: boolean },
+    settings: { healthCheck?: HealthCheck | null; autoRollback?: boolean; requireApproval?: boolean | null },
   ): Promise<void> {
+    if (settings.requireApproval !== undefined) {
+      const value = settings.requireApproval === null ? null : settings.requireApproval ? 1 : 0;
+      await this.db.run("UPDATE scopes SET require_approval = ? WHERE id = ?", [value, id]);
+    }
     if (settings.healthCheck !== undefined) {
       await this.db.run("UPDATE scopes SET health_check = ? WHERE id = ?", [
         settings.healthCheck ? JSON.stringify(settings.healthCheck) : null,
@@ -893,7 +940,10 @@ export class Store {
       status: DeployStatus;
       error?: string;
       requestedBy?: string | null;
+      requestedByMemberId?: string | null;
       rollbackOf?: string | null;
+      /** The deploy waits for a second member's approval before it starts. */
+      needsApproval?: boolean;
     },
     now: Date,
   ): Promise<DeployRecord> {
@@ -901,8 +951,8 @@ export class Store {
     const ts = now.toISOString();
     await this.db.run(
       `INSERT INTO deploys (id, repo, tag, sha, scope_id, scope_alias, status, error, ci_passed_at, finished_at,
-         requested_by, rollback_of, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         requested_by, requested_by_member_id, rollback_of, approval_status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         normalizeRepo(input.repo),
@@ -916,7 +966,9 @@ export class Store {
         input.status === "ci_passed" ? ts : null,
         isTerminal(input.status) ? ts : null,
         input.requestedBy ?? null,
+        input.requestedByMemberId ?? null,
         input.rollbackOf ?? null,
+        input.needsApproval && !isTerminal(input.status) ? "pending" : null,
         ts,
         ts,
       ],
@@ -989,6 +1041,24 @@ export class Store {
       ],
     );
     return result.changes === 1 ? this.getDeploy(id) : undefined;
+  }
+
+  /**
+   * Records the decision on a pending approval. Returns false when it was no longer pending (someone else decided
+   * first, or the deploy ended), so a deploy is approved or rejected exactly once.
+   */
+  async decideApproval(
+    id: string,
+    decision: { status: "approved" | "rejected"; by: string; byMemberId: string | null; reason: string | null },
+    now: Date,
+  ): Promise<boolean> {
+    const { changes } = await this.db.run(
+      `UPDATE deploys SET approval_status = ?, approval_by = ?, approval_by_member_id = ?, approval_at = ?,
+         approval_reason = ?, updated_at = ?
+       WHERE id = ? AND approval_status = 'pending' AND status IN ('waiting_ci', 'ci_passed')`,
+      [decision.status, decision.by, decision.byMemberId, now.toISOString(), decision.reason, now.toISOString(), id],
+    );
+    return changes === 1;
   }
 
   /**

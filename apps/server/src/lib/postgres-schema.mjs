@@ -261,6 +261,21 @@ export const POSTGRES_MIGRATIONS = [
       `ALTER TABLE deploys ADD COLUMN IF NOT EXISTS rollback_of ${TEXT}`,
     ],
   },
+  {
+    version: 6,
+    name: "aprobación de deploys",
+    statements: [
+      "ALTER TABLE apps ADD COLUMN IF NOT EXISTS require_approval INTEGER NOT NULL DEFAULT 0",
+      // NULL: what the app says.
+      "ALTER TABLE scopes ADD COLUMN IF NOT EXISTS require_approval INTEGER",
+      `ALTER TABLE deploys ADD COLUMN IF NOT EXISTS requested_by_member_id ${TEXT}`,
+      `ALTER TABLE deploys ADD COLUMN IF NOT EXISTS approval_status ${TEXT}`,
+      `ALTER TABLE deploys ADD COLUMN IF NOT EXISTS approval_by ${TEXT}`,
+      `ALTER TABLE deploys ADD COLUMN IF NOT EXISTS approval_by_member_id ${TEXT}`,
+      `ALTER TABLE deploys ADD COLUMN IF NOT EXISTS approval_at ${TEXT}`,
+      `ALTER TABLE deploys ADD COLUMN IF NOT EXISTS approval_reason ${TEXT}`,
+    ],
+  },
 ];
 
 /**

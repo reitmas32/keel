@@ -49,6 +49,8 @@ const envSchema = z
     ),
     KEEL_CI_EXPIRY_MINUTES: z.coerce.number().int().positive().default(60),
     KEEL_DEPLOY_TIMEOUT_MINUTES: z.coerce.number().int().positive().default(15),
+    // How long a deploy that needs an approval may wait for one before it expires.
+    KEEL_APPROVAL_EXPIRY_MINUTES: optional(z.coerce.number().int().positive().default(1440)),
     // `required`: every /api route except /health and /ci-result needs a personal API token.
     KEEL_API_AUTH: z.enum(API_AUTH_MODES).default("optional"),
     // What /api calls without a token may do while KEEL_API_AUTH=optional. `deployer` keeps keel's old behavior.

@@ -181,6 +181,22 @@ pub enum Command {
         #[arg(short = 'm', long = "message", value_name = "MOTIVO")]
         message: Option<String>,
     },
+    /// Aprueba el deploy de otra persona en un scope que pide aprobación.
+    Approve {
+        /// Id del deploy (o sus primeros 4+ caracteres), como lo muestra `keel deploys`.
+        id: String,
+        /// Comentario opcional, visible en el historial.
+        #[arg(short = 'm', long = "message", value_name = "COMENTARIO")]
+        message: Option<String>,
+    },
+    /// Rechaza el deploy de otra persona: termina como deploy_failed con el motivo.
+    Reject {
+        /// Id del deploy (o sus primeros 4+ caracteres).
+        id: String,
+        /// Motivo del rechazo (obligatorio).
+        #[arg(short = 'm', long = "message", value_name = "MOTIVO")]
+        message: Option<String>,
+    },
     /// Vuelve a permitir deploys en un scope bloqueado con `keel lock`.
     Unlock {
         /// Scope; si se omite, se pregunta.
@@ -506,6 +522,8 @@ pub async fn run(cli: Cli) -> Result<()> {
         Command::Changes { scope, version } => ops::changes(&ctx, scope, version).await,
         Command::Lock { scope, message } => ops::lock(&ctx, scope, message).await,
         Command::Unlock { scope } => ops::unlock(&ctx, scope).await,
+        Command::Approve { id, message } => ops::decide(&ctx, id, true, message).await,
+        Command::Reject { id, message } => ops::decide(&ctx, id, false, message).await,
         Command::Init {
             check,
             force,

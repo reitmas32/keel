@@ -101,6 +101,7 @@ export async function updateScopeSettings(store: Store, scope: Scope, settings: 
   await store.updateScopeSettings(scope.id, {
     ...(settings.healthCheck !== undefined && { healthCheck: settings.healthCheck }),
     ...(settings.autoRollback !== undefined && { autoRollback: settings.autoRollback }),
+    ...(settings.requireApproval !== undefined && { requireApproval: settings.requireApproval }),
   });
   return (await store.getScope(scope.id)) as Scope;
 }
@@ -109,4 +110,5 @@ export async function updateScopeSettings(store: Store, scope: Scope, settings: 
 export const scopeSettingsDetails = (settings: UpdateScopeRequest): Record<string, unknown> => ({
   ...(settings.healthCheck !== undefined && { healthCheck: settings.healthCheck }),
   ...(settings.autoRollback !== undefined && { autoRollback: settings.autoRollback }),
+  ...(settings.requireApproval !== undefined && { requireApproval: settings.requireApproval }),
 });

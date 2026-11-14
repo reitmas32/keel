@@ -1,5 +1,6 @@
 import {
   type AppInfo,
+  approvalRequestSchema,
   type CreateAppResponse,
   ciResultRequestSchema,
   createAppRequestSchema,
@@ -26,6 +27,7 @@ import {
 import type { z } from "zod";
 import { actorOf, baseRole, CI_ACTOR, type Principal, requireRoleOn } from "./access";
 import { authenticate, type Caller } from "./api-auth";
+import { type ApprovalDecision, decideDeploy } from "./approvals";
 import {
   addScope,
   assertScopeAliasFree,
@@ -38,18 +40,33 @@ import {
   updateScopeSettings,
 } from "./apps";
 import type { AppContext } from "./context";
-import { recordCiResult, registerVersion, requestDeploy } from "./deploys";
+import { queueDeploy, recordCiResult, registerVersion } from "./deploys";
 import { DokployError } from "./dokploy";
 import { ApiError } from "./errors";
 import { errorFields, logger } from "./log";
 import { type Target, tokenRole } from "./roles";
-import { type App, type DeployRecord, normalizeRepo, type Scope, type ScopeLockRecord } from "./store";
+import {
+  type App,
+  approvalRequired,
+  type DeployRecord,
+  normalizeRepo,
+  type Scope,
+  type ScopeLockRecord,
+} from "./store";
 import { bearerToken } from "./tokens";
 
 /** A deploy as the API returns it: with `service`, the name of `scope` before v0.7.0, for older clients. */
-const toPublic = ({ scopeId: _s, healthAttempts: _a, healthCheckedAt: _c, ...deploy }: DeployRecord): Deploy => ({
+const toPublic = ({
+  scopeId: _s,
+  healthAttempts: _a,
+  healthCheckedAt: _c,
+  requestedByMemberId: _m,
+  approval,
+  ...deploy
+}: DeployRecord): Deploy => ({
   ...deploy,
   service: deploy.scope,
+  approval: approval && { status: approval.status, by: approval.by, at: approval.at, reason: approval.reason },
 });
 
 const toLockInfo = ({ reason, lockedBy, createdAt }: ScopeLockRecord): ScopeLockInfo => ({
@@ -99,6 +116,7 @@ const toAppInfo = ({ id, name, repo, createdAt }: App): AppInfo => ({ id, name, 
 
 /** A scope as `GET …/scopes` lists it: with its Dokploy name, current and last deploy, and lock. */
 async function scopeSummary(ctx: AppContext, s: Scope): Promise<ScopeSummary> {
+  const app = await ctx.store.getApp(s.appId);
   const [current] = await ctx.store.listDeploys({ scopeId: s.id, status: "deployed" }, { limit: 1, newestFirst: true });
   const [last] = await ctx.store.listDeploys({ scopeId: s.id }, { limit: 1, newestFirst: true });
   const lock = await ctx.store.getScopeLock(s.id);
@@ -114,6 +132,7 @@ async function scopeSummary(ctx: AppContext, s: Scope): Promise<ScopeSummary> {
     lock: lock ? toLockInfo(lock) : null,
     healthCheck: s.healthCheck,
     autoRollback: s.autoRollback,
+    requireApproval: app ? approvalRequired(app, s) : false,
   };
 }
 
@@ -156,6 +175,20 @@ function parseLimit(params: URLSearchParams): number {
     throw new ApiError(400, `limit debe ser un entero entre 1 y ${MAX_LIST_LIMIT}.`);
   }
   return limit;
+}
+
+/** The one deploy of `app` whose id starts with `idPrefix` (at least MIN_ID_PREFIX characters). */
+async function findRepoDeploy(ctx: AppContext, app: App, idPrefix: string): Promise<DeployRecord> {
+  if (idPrefix.length < MIN_ID_PREFIX) {
+    throw new ApiError(400, `Usa al menos ${MIN_ID_PREFIX} caracteres del id del deploy.`);
+  }
+  const matches = await ctx.store.findDeploysByPrefix(app.repo, idPrefix.toLowerCase());
+  if (matches.length === 0) throw new ApiError(404, `No hay ningún deploy ${idPrefix} en ${app.repo}.`);
+  if (matches.length > 1) {
+    const ids = matches.map((d) => `${d.id.slice(0, 8)} (${d.tag} → ${d.scope})`).join(", ");
+    throw new ApiError(409, `${idPrefix} coincide con varios deploys: ${ids}. Usa más caracteres.`);
+  }
+  return matches[0] as DeployRecord;
 }
 
 /** Wraps a handler so ApiErrors become JSON responses and anything else is a logged 500. */
@@ -210,13 +243,17 @@ export const handlers = {
       const body = await parseBody(request, createDeployRequestSchema);
       const target = { repo: normalizeRepo(body.repo), scope: body.scope };
       requireRoleOn(caller, "deployer", "desplegar", target);
-      const deploy = await requestDeploy(ctx.store, body, ctx.now(), caller.name);
+      const { deploy, created } = await queueDeploy(ctx.store, body, ctx.now(), caller.name, caller.member?.id ?? null);
       await audit(ctx, caller, "deploy.create", target, {
         deployId: deploy.id,
         tag: deploy.tag,
         sha: deploy.sha,
         status: deploy.status,
+        ...(deploy.approval && { approval: deploy.approval.status }),
       });
+      if (created && deploy.approval?.status === "pending") {
+        ctx.notifier.notify({ event: "deploy.approval_requested", deploy });
+      }
       return Response.json(toPublic(deploy), { status: 202 });
     }),
 
@@ -444,22 +481,52 @@ export const handlers = {
       return Response.json({ repo: app.repo, deploys: deploys.map(toPublic) });
     }),
 
+  /** `POST /repos/:owner/:name/deploys/:id/approve` and `…/reject`: a second member decides on a deploy. */
+  decideRepoDeploy: (
+    ctx: AppContext,
+    request: Request,
+    owner: string,
+    name: string,
+    idPrefix: string,
+    decision: ApprovalDecision,
+  ) =>
+    authed(ctx, request, async (caller) => {
+      requireRoleOn(caller, "viewer", "ver deploys", { repo: repoOf(owner, name) });
+      const deploy = await findRepoDeploy(ctx, await findApp(ctx, owner, name), idPrefix);
+      // The body is optional: `{}` or nothing approves without a comment.
+      const text = await request.text();
+      let json: unknown = {};
+      try {
+        if (text.trim()) json = JSON.parse(text);
+      } catch {
+        throw new ApiError(400, "El cuerpo debe ser JSON.");
+      }
+      const parsed = approvalRequestSchema.safeParse(json);
+      if (!parsed.success) {
+        throw new ApiError(400, "Petición inválida: reason debe ser un texto de hasta 500 caracteres.");
+      }
+      const decided = await decideDeploy(
+        ctx.store,
+        caller,
+        actorOf(caller),
+        deploy,
+        decision,
+        { reason: parsed.data.reason, via: "api" },
+        ctx.now(),
+      );
+      ctx.notifier.notify({
+        event: decision === "approved" ? "deploy.approved" : "deploy.rejected",
+        deploy: decided,
+        actor: actorOf(caller).name,
+        detail: decided.approval?.reason ?? null,
+      });
+      return Response.json(toPublic(decided));
+    }),
+
   getRepoDeploy: (ctx: AppContext, request: Request, owner: string, name: string, idPrefix: string) =>
     authed(ctx, request, async (caller) => {
       requireRoleOn(caller, "viewer", "ver deploys", { repo: repoOf(owner, name) });
-      const app = await findApp(ctx, owner, name);
-      if (idPrefix.length < MIN_ID_PREFIX) {
-        throw new ApiError(400, `Usa al menos ${MIN_ID_PREFIX} caracteres del id del deploy.`);
-      }
-
-      const matches = await ctx.store.findDeploysByPrefix(app.repo, idPrefix.toLowerCase());
-      if (matches.length === 0) throw new ApiError(404, `No hay ningún deploy ${idPrefix} en ${app.repo}.`);
-      if (matches.length > 1) {
-        const ids = matches.map((d) => `${d.id.slice(0, 8)} (${d.tag} → ${d.scope})`).join(", ");
-        throw new ApiError(409, `${idPrefix} coincide con varios deploys: ${ids}. Usa más caracteres.`);
-      }
-
-      const deploy = matches[0] as DeployRecord;
+      const deploy = await findRepoDeploy(ctx, await findApp(ctx, owner, name), idPrefix);
       const scope = await ctx.store.getScope(deploy.scopeId);
       const detail: DeployDetail = {
         ...toPublic(deploy),
