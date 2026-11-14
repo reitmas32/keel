@@ -2069,6 +2069,19 @@ input[type="checkbox"]:focus-visible {
   background: hsl(var(--muted) / 0.4);
 }
 
+/* A link that leaves keel (GitHub Actions, Dokploy), with its arrow. */
+.external-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.8125rem;
+}
+
+.external-link svg.icon {
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
 /* ---------- scopes: a protections table with switches and an expandable detail row ---------- */
 
 .table.scope-table tbody tr td {

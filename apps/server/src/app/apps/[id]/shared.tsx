@@ -64,3 +64,24 @@ export function AppPage({
 }
 
 export const none = <span className="muted">—</span>;
+
+/**
+ * Where a version's pipeline ran. The CI reports its run URL when it finishes; until then, the repo's Actions
+ * filtered by the tag (a tag push runs with the tag as its branch).
+ */
+export const pipelineUrl = (repo: string, tag: string, runUrl: string | null) =>
+  runUrl ?? `https://github.com/${repo}/actions?query=${encodeURIComponent(`branch:${tag}`)}`;
+
+/**
+ * The Deployments tab of a scope's service in Dokploy. keel does not keep Dokploy's deployment id, and Dokploy opens
+ * each deployment's logs in a dialog without a URL of its own, so the tab is the closest link.
+ */
+export function dokployDeploymentsUrl(dokployUrl: string): string {
+  try {
+    const url = new URL(dokployUrl);
+    url.searchParams.set("tab", "deployments");
+    return url.toString();
+  } catch {
+    return dokployUrl;
+  }
+}
