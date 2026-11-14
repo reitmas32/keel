@@ -72,7 +72,12 @@ export default async function SettingsPage({ params }: { params: Promise<{ id: s
         description="Mientras una está activa keel rechaza los deploys nuevos de esta app y retiene los que estaban en cola. Un maintainer puede forzarlas con keel deploy --force-freeze."
         footer={canMaintain && <CreateFreezeForm appId={app.id} timezone={env.KEEL_TIMEZONE ?? "UTC"} />}
       >
-        <FreezeList windows={appFreezes} now={now()} canEdit={canMaintain} />
+        <FreezeList
+          windows={appFreezes}
+          now={now()}
+          canEdit={canMaintain}
+          emptyHint="Esta app no tiene ventanas propias."
+        />
         {orgFreezes.length > 0 && (
           <>
             <p className="hint">

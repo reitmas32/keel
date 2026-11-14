@@ -180,6 +180,17 @@ export function StatusBadge({ tone, href, children }: { tone: Tone; href?: strin
   );
 }
 
+/** What a list shows when it has nothing yet: an icon, a short title and, optionally, what to do about it. */
+export function EmptyState({ icon, title, children }: { icon?: ReactNode; title: string; children?: ReactNode }) {
+  return (
+    <div className="empty">
+      {icon && <span className="empty-icon">{icon}</span>}
+      <p className="empty-title">{title}</p>
+      {children && <p className="small">{children}</p>}
+    </div>
+  );
+}
+
 /** A member's role as a quiet outline pill. */
 export function RoleBadge({ role }: { role: Role | null }) {
   return <span className="badge badge-outline role-badge">{role ?? "sin rol"}</span>;

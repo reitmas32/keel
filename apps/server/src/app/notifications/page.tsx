@@ -1,9 +1,9 @@
 import { getContext } from "@/lib/context";
 import { formatDate } from "@/lib/format";
 import { ALL_EVENTS, EVENT_LABELS, envChannels, maskUrl, NOTIFY_EVENTS, type NotifyEvent } from "@/lib/notify";
-import { IconTrash } from "../icons";
+import { IconBell, IconTrash } from "../icons";
 import { requireRole } from "../session";
-import { Card, Page, PageHeader, StatusBadge } from "../ui";
+import { Card, EmptyState, Page, PageHeader, StatusBadge } from "../ui";
 import { ConfirmButton } from "../ui-client";
 import { deleteChannelAction, toggleChannelAction } from "./actions";
 import { CreateChannelForm, TestChannelButton } from "./components";
@@ -32,7 +32,9 @@ export default async function NotificationsPage() {
           footer={<CreateChannelForm events={NOTIFY_EVENTS.map((name) => ({ name, label: EVENT_LABELS[name] }))} />}
         >
           {channels.length === 0 ? (
-            <p className="empty">Todavía no hay canales creados en el admin.</p>
+            <EmptyState icon={<IconBell />} title="Sin canales">
+              Agrega uno abajo para recibir los avisos de deploys en Slack, Discord o tu propio servicio.
+            </EmptyState>
           ) : (
             <div className="table-wrap">
               <table className="table">
@@ -103,7 +105,7 @@ export default async function NotificationsPage() {
           }
         >
           {fromEnv.length === 0 ? (
-            <p className="empty">Ninguno configurado.</p>
+            <EmptyState title="Ninguno configurado" />
           ) : (
             <ul className="plain-list">
               {fromEnv.map((c) => (

@@ -151,16 +151,29 @@ export function frozenError(active: ActiveFreeze, scope: string): ApiError {
   );
 }
 
+/** `lun–vie`, `sáb y dom`, `lun, mié y vie`, `todos los días`. */
+export function describeDays(days: readonly number[]): string {
+  const sorted = [...new Set(days)].sort((a, b) => a - b);
+  if (sorted.length === 7) return "todos los días";
+  const names = sorted.map((d) => WEEKDAYS[d - 1] as string);
+  const consecutive = sorted.every((d, i) => i === 0 || d === (sorted[i - 1] as number) + 1);
+  if (sorted.length >= 3 && consecutive) return `${names[0]}–${names.at(-1)}`;
+  if (names.length <= 1) return names[0] ?? "";
+  return `${names.slice(0, -1).join(", ")} y ${names.at(-1)}`;
+}
+
 /** One line describing when a window applies, for the admin. */
 export function describeWindow(w: FreezeWindow): string {
   if (w.kind === "range") return `${w.startsAt?.replace("T", " ")} → ${w.endsAt?.replace("T", " ")}`;
   if (w.kind === "date") {
     return w.startTime || w.endTime
-      ? `${w.startsAt} ${w.startTime ?? "00:00"}–${w.endTime ?? "24:00"}`
-      : `${w.startsAt} todo el día`;
+      ? `${w.startsAt}, ${w.startTime ?? "00:00"}–${w.endTime ?? "24:00"}`
+      : `${w.startsAt}, todo el día`;
   }
-  const days = w.days.map((d) => WEEKDAYS[d - 1]).join(", ");
-  return `${days} ${w.startTime}–${w.endTime}`;
+  const allDay = w.startTime === w.endTime && w.startTime === "00:00";
+  if (allDay) return `${describeDays(w.days)}, todo el día`;
+  const crosses = (w.endTime ?? "") <= (w.startTime ?? "");
+  return `${describeDays(w.days)}, ${w.startTime}–${w.endTime}${crosses ? " (+1 día)" : ""}`;
 }
 
 export type FreezeInput = {

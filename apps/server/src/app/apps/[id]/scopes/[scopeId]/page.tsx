@@ -17,14 +17,7 @@ export default async function ScopeSettingsPage({ params }: { params: Promise<{ 
     <AppPage app={app} appRole={appRole} section={`Scope ${scope.alias}`}>
       <Card
         title="Después del deploy"
-        description={
-          <>
-            Sin health check, un deploy queda <code>deployed</code> cuando Dokploy termina. Con él, keel además llama a
-            la URL: si no responde bien tras los intentos, el deploy queda <code>deploy_failed</code>. El rollback
-            automático vuelve a la última versión que keel desplegó bien en este scope, sin pasar por bloqueos, ventanas
-            de congelamiento ni aprobaciones.
-          </>
-        }
+        description="Qué hace keel cuando Dokploy termina, si un deploy falla y quién tiene que aprobarlo. Todo empieza apagado."
       >
         {canMaintain ? (
           <ScopeSettingsForm

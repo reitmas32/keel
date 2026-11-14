@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createFreezeAs, deleteFreezeAs, setFreezeEnabledAs } from "./admin";
 import { recordCiResult, requestDeploy } from "./deploys";
-import { activeFreeze, activeUntil, type FreezeWindow, parseFreezeInput, wallClock } from "./freeze";
+import { activeFreeze, activeUntil, describeWindow, type FreezeWindow, parseFreezeInput, wallClock } from "./freeze";
 import { handlers } from "./handlers";
 import { addMember, apiRequest, createTestContext, memberToken, SHA } from "./testing";
 
@@ -83,6 +83,19 @@ describe("freeze window rules", () => {
     const prodOnly = window({ ...always, scopePattern: "prod*" });
     expect(activeFreeze([prodOnly], { appId: "x", scope: "stg" }, now)).toBeUndefined();
     expect(activeFreeze([{ ...org, enabled: false }], { appId: "x", scope: "prod" }, now)).toBeUndefined();
+  });
+
+  it("describes windows the way people say them", () => {
+    expect(describeWindow(window({ days: [1, 2, 3, 4, 5], startTime: "18:00", endTime: "08:00" }))).toBe(
+      "lun–vie, 18:00–08:00 (+1 día)",
+    );
+    expect(describeWindow(window({ days: [1, 2, 3, 4, 5, 6, 7], startTime: "00:00", endTime: "00:00" }))).toBe(
+      "todos los días, todo el día",
+    );
+    expect(describeWindow(window({ days: [6, 7], startTime: "09:00", endTime: "14:00" }))).toBe(
+      "sáb y dom, 09:00–14:00",
+    );
+    expect(describeWindow(window({ kind: "date", startsAt: "2026-12-25" }))).toBe("2026-12-25, todo el día");
   });
 
   it("validates the admin's input", () => {
