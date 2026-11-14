@@ -25,7 +25,12 @@ export default async function FreezesPage() {
         }
         footer={<CreateFreezeForm appId={null} timezone={env.KEEL_TIMEZONE ?? "UTC"} />}
       >
-        <FreezeList windows={windows} now={now()} canEdit />
+        <FreezeList
+          windows={windows}
+          now={now()}
+          canEdit
+          emptyHint="Los deploys salen a cualquier hora. Agrega una abajo para bloquear horarios o fechas."
+        />
       </Card>
     </Page>
   );

@@ -1,6 +1,6 @@
 import { getContext } from "@/lib/context";
-import { formatDate } from "@/lib/format";
-import { Card, StatusBadge, versionTone } from "../../../ui";
+import { IconTag } from "../../../icons";
+import { Card, EmptyState, StatusBadge, VERSION_LABEL, versionTone, When } from "../../../ui";
 import { AppPage, loadApp, none } from "../shared";
 
 const LIMIT = 50;
@@ -14,9 +14,9 @@ export default async function VersionsPage({ params }: { params: Promise<{ id: s
     <AppPage app={app} appRole={appRole} section="Versiones">
       <Card title="Versiones" description={`Las ${LIMIT} más recientes, de keel create-version o de su CI.`}>
         {versions.length === 0 ? (
-          <p className="empty">
-            Sin versiones todavía. Aparecen al crearlas con <code>keel create-version</code> o cuando su CI avisa.
-          </p>
+          <EmptyState icon={<IconTag />} title="Sin versiones todavía">
+            Aparecen al crearlas con <code>keel create-version</code> o cuando su CI avisa.
+          </EmptyState>
         ) : (
           <div className="table-wrap">
             <table className="table">
@@ -39,10 +39,12 @@ export default async function VersionsPage({ params }: { params: Promise<{ id: s
                     <td>{v.createdByName ?? v.createdByEmail ?? none}</td>
                     <td>
                       <StatusBadge tone={versionTone(v.ciStatus)} href={v.runUrl}>
-                        {v.ciStatus}
+                        {VERSION_LABEL[v.ciStatus]}
                       </StatusBadge>
                     </td>
-                    <td className="muted nowrap">{formatDate(v.createdAt)}</td>
+                    <td className="muted nowrap">
+                      <When iso={v.createdAt} />
+                    </td>
                   </tr>
                 ))}
               </tbody>

@@ -3,8 +3,8 @@ import Link from "next/link";
 import { roleOn } from "@/lib/access";
 import { getContext } from "@/lib/context";
 import { formatDate } from "@/lib/format";
-import { IconExternal, IconLock, IconSettings, IconUnlock } from "../../../icons";
-import { Card, StatusBadge } from "../../../ui";
+import { IconExternal, IconLayers, IconLock, IconSettings, IconUnlock } from "../../../icons";
+import { Card, EmptyState, StatusBadge } from "../../../ui";
 import { ConfirmButton } from "../../../ui-client";
 import { unlinkScopeAction, unlockScopeAction } from "../../actions";
 import { AddScopeForm, LockScopeButton } from "../../components";
@@ -32,27 +32,12 @@ export default async function ScopesPage({ params }: { params: Promise<{ id: str
             scope bloqueado rechaza los deploys nuevos.
           </>
         }
-        footer={
-          canMaintain && (
-            <div className="stack" style={{ gap: "0.75rem" }}>
-              <AddScopeForm appId={app.id} />
-              <p className="hint">
-                Copia la URL del servicio desde el dashboard de Dokploy. En un <strong>Application</strong> keel cambia
-                el tag de su imagen Docker. En un <strong>Compose</strong> cambia la variable del tag (por defecto{" "}
-                <code>DOCKER_TAG</code>) en su Environment y lo redespliega: la imagen debe usarla, p.ej.{" "}
-                <code>
-                  image: ${"{DOCKER_IMAGE}"}:${"{DOCKER_TAG}"}
-                </code>
-                .
-              </p>
-            </div>
-          )
-        }
+        footer={canMaintain && <AddScopeForm appId={app.id} />}
       >
         {scopes.length === 0 ? (
-          <p className="empty">
-            Todavía no hay scopes. Agrega uno por cada servicio de Dokploy al que despliega esta app.
-          </p>
+          <EmptyState icon={<IconLayers />} title="Sin scopes">
+            Vincula uno por cada servicio de Dokploy al que despliega esta app.
+          </EmptyState>
         ) : (
           <ul className="scope-list">
             {scopes.map((scope) => (

@@ -1,8 +1,8 @@
 import Link from "next/link";
 import { getContext } from "@/lib/context";
-import { IconLock, IconRepo, IconServer } from "../icons";
+import { IconApps, IconLock, IconRepo, IconServer } from "../icons";
 import { requireMember, viewerIsAdmin } from "../session";
-import { deployTone, Page, PageHeader, StatusBadge } from "../ui";
+import { DeployBadge, EmptyState, Page, PageHeader, StatusBadge } from "../ui";
 import { CreateAppForm } from "./components";
 
 export default async function AppsPage() {
@@ -56,9 +56,7 @@ export default async function AppsPage() {
                 </span>
               )}
               {app.last ? (
-                <StatusBadge tone={deployTone(app.last.status)}>
-                  {app.last.tag} · {app.last.status}
-                </StatusBadge>
+                <DeployBadge status={app.last.status} prefix={app.last.tag} />
               ) : (
                 <StatusBadge tone="idle">sin deploys</StatusBadge>
               )}
@@ -80,7 +78,11 @@ export default async function AppsPage() {
           </section>
         )}
       </div>
-      {apps.length === 0 && !admin && <p className="empty">Todavía no hay apps. Un admin de keel puede crearlas.</p>}
+      {apps.length === 0 && !admin && (
+        <EmptyState icon={<IconApps />} title="Todavía no hay apps">
+          Un admin de keel puede crearlas.
+        </EmptyState>
+      )}
     </Page>
   );
 }

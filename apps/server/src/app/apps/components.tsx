@@ -2,7 +2,7 @@
 
 import { HEALTH_CHECK_LIMITS, type HealthCheck, LOCK_REASON_MAX } from "@keel/shared";
 import Link from "next/link";
-import { useActionState, useEffect, useRef } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import { IconLock, IconPlus, IconRefresh } from "../icons";
 import { ConfirmButton, TokenNotice } from "../ui-client";
 import {
@@ -72,12 +72,18 @@ export function CreateAppForm() {
 
 export function AddScopeForm({ appId }: { appId: string }) {
   const [state, action, pending] = useActionState<FormState, FormData>(addScopeAction.bind(null, appId), {});
+  const [url, setUrl] = useState("");
+  const isCompose = /\/services\/compose\//.test(url);
   return (
-    <>
-      <form action={action} className="form-row">
-        <div className="field narrow">
+    <form action={action} className="form-panel">
+      <div className="form-panel-head">
+        <h3 className="form-panel-title">Vincular un scope</h3>
+        <p className="hint">Copia la URL del servicio desde el dashboard de Dokploy.</p>
+      </div>
+      <div className="form-grid">
+        <div className="field span-3">
           <label className="label" htmlFor="scope-alias">
-            Scope
+            Nombre del scope
           </label>
           <input
             id="scope-alias"
@@ -87,8 +93,11 @@ export function AddScopeForm({ appId }: { appId: string }) {
             placeholder="prod"
             pattern="[a-z0-9][a-z0-9\-]*"
           />
+          <span className="field-hint">
+            Lo que eliges en <code>keel deploy -s</code>.
+          </span>
         </div>
-        <div className="field">
+        <div className="field span-6">
           <label className="label" htmlFor="scope-url">
             URL del servicio en Dokploy
           </label>
@@ -98,12 +107,19 @@ export function AddScopeForm({ appId }: { appId: string }) {
             name="dokployUrl"
             required
             type="url"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
             placeholder="https://dokploy…/dashboard/project/…/services/compose/…"
           />
+          <span className="field-hint">
+            {isCompose
+              ? "Compose: keel cambia la variable del tag en su Environment y lo redespliega."
+              : "Application: keel cambia el tag de su imagen Docker."}
+          </span>
         </div>
-        <div className="field narrow">
+        <div className="field span-3" hidden={!isCompose}>
           <label className="label" htmlFor="scope-tag">
-            Variable del tag (Compose)
+            Variable del tag
           </label>
           <input
             id="scope-tag"
@@ -112,14 +128,23 @@ export function AddScopeForm({ appId }: { appId: string }) {
             placeholder="DOCKER_TAG"
             pattern="[A-Za-z_][A-Za-z0-9_]*"
           />
+          <span className="field-hint">
+            La imagen debe usarla:{" "}
+            <code>
+              image: ${"{DOCKER_IMAGE}"}:${"{DOCKER_TAG}"}
+            </code>
+          </span>
         </div>
+      </div>
+      <div className="form-actions">
+        <span />
         <button type="submit" className="btn" disabled={pending}>
           <IconPlus />
-          {pending ? "Vinculando…" : "Vincular"}
+          {pending ? "Vinculando…" : "Vincular scope"}
         </button>
-      </form>
+      </div>
       <FormError error={state.error} />
-    </>
+    </form>
   );
 }
 
@@ -200,7 +225,7 @@ export function LockScopeButton({ appId, scopeId, alias }: { appId: string; scop
   );
 }
 
-/** A scope's health check and automatic rollback. Both start off. */
+/** A scope's health check, automatic rollback and approval. All start off. */
 export function ScopeSettingsForm({
   appId,
   scopeId,
@@ -220,28 +245,44 @@ export function ScopeSettingsForm({
     updateScopeAction.bind(null, appId, scopeId),
     {},
   );
+  const [healthOn, setHealthOn] = useState(healthCheck?.enabled ?? false);
   const limits = HEALTH_CHECK_LIMITS;
+  const approval = requireApproval === null ? "" : requireApproval ? "1" : "0";
   return (
-    <form action={action} className="form-stack">
-      <label className="check">
-        <input type="checkbox" name="healthEnabled" defaultChecked={healthCheck?.enabled ?? false} /> Comprobar la salud
-        del servicio después de cada deploy
-      </label>
-      <div className="field">
-        <label className="label" htmlFor="health-url">
-          URL del health check
-        </label>
+    <form action={action} className="form-panel">
+      <label className="option-row">
         <input
-          id="health-url"
-          className="input"
-          name="healthUrl"
-          type="url"
-          defaultValue={healthCheck?.url ?? ""}
-          placeholder="https://api.example.com/healthz"
+          type="checkbox"
+          name="healthEnabled"
+          checked={healthOn}
+          onChange={(e) => setHealthOn(e.target.checked)}
         />
-      </div>
-      <div className="form-row">
-        <div className="field narrow">
+        <span>
+          <span className="option-title">Health check</span>
+          <span className="option-description" style={{ display: "block" }}>
+            Cuando Dokploy termina, keel llama a una URL del servicio. Si no responde bien tras los intentos, el deploy
+            queda <code>deploy_failed</code>.
+          </span>
+        </span>
+      </label>
+
+      {/* Hidden, not removed: a saved URL survives turning the check off. */}
+      <div className="form-grid" hidden={!healthOn} style={{ paddingLeft: "1.75rem" }}>
+        <div className="field">
+          <label className="label" htmlFor="health-url">
+            URL
+          </label>
+          <input
+            id="health-url"
+            className="input"
+            name="healthUrl"
+            type="url"
+            defaultValue={healthCheck?.url ?? ""}
+            placeholder="https://api.example.com/healthz"
+          />
+          <span className="field-hint">Puede no ser /health: la ruta que tenga el servicio.</span>
+        </div>
+        <div className="field span-3">
           <label className="label" htmlFor="health-status">
             Código esperado
           </label>
@@ -253,10 +294,10 @@ export function ScopeSettingsForm({
             min={100}
             max={599}
             defaultValue={healthCheck?.expectedStatus ?? ""}
-            placeholder="2xx"
+            placeholder="Cualquier 2xx"
           />
         </div>
-        <div className="field narrow">
+        <div className="field span-3">
           <label className="label" htmlFor="health-retries">
             Intentos
           </label>
@@ -270,7 +311,7 @@ export function ScopeSettingsForm({
             defaultValue={healthCheck?.retries ?? limits.retries.default}
           />
         </div>
-        <div className="field narrow">
+        <div className="field span-3">
           <label className="label" htmlFor="health-interval">
             Segundos entre intentos
           </label>
@@ -284,7 +325,7 @@ export function ScopeSettingsForm({
             defaultValue={healthCheck?.intervalSeconds ?? limits.intervalSeconds.default}
           />
         </div>
-        <div className="field narrow">
+        <div className="field span-3">
           <label className="label" htmlFor="health-timeout">
             Timeout (s)
           </label>
@@ -299,30 +340,40 @@ export function ScopeSettingsForm({
           />
         </div>
       </div>
-      <label className="check">
-        <input type="checkbox" name="autoRollback" defaultChecked={autoRollback} /> Si un deploy falla, volver a
-        desplegar la versión anterior (rollback automático)
+
+      <label className="option-row">
+        <input type="checkbox" name="autoRollback" defaultChecked={autoRollback} />
+        <span>
+          <span className="option-title">Rollback automático</span>
+          <span className="option-description" style={{ display: "block" }}>
+            Si un deploy falla, keel vuelve a desplegar la última versión que dejó bien este scope, sin pasar por
+            bloqueos, ventanas ni aprobaciones.
+          </span>
+        </span>
       </label>
-      <div className="field narrow">
-        <label className="label" htmlFor="require-approval">
-          Aprobación de otro miembro
-        </label>
-        <select
-          id="require-approval"
-          className="input"
-          name="requireApproval"
-          defaultValue={requireApproval === null ? "" : requireApproval ? "1" : "0"}
-        >
-          <option value="">Como la app ({appRequiresApproval ? "obligatoria" : "no"})</option>
-          <option value="1">Obligatoria</option>
-          <option value="0">No</option>
-        </select>
-      </div>
-      <div className="inline-form">
+
+      <fieldset className="field">
+        <legend className="label">Aprobación de otro miembro</legend>
+        <div className="segmented" role="radiogroup">
+          {[
+            { value: "", label: `Como la app (${appRequiresApproval ? "obligatoria" : "no"})` },
+            { value: "1", label: "Obligatoria" },
+            { value: "0", label: "No" },
+          ].map((o) => (
+            <label key={o.value || "app"}>
+              <input type="radio" name="requireApproval" value={o.value} defaultChecked={approval === o.value} />
+              {o.label}
+            </label>
+          ))}
+        </div>
+        <span className="field-hint">Con aprobación, cada deploy espera a que otro maintainer lo apruebe.</span>
+      </fieldset>
+
+      <div className="form-actions">
+        <span className="muted small">{state.ok ? "Guardado." : ""}</span>
         <button type="submit" className="btn" disabled={pending}>
-          {pending ? "Guardando…" : "Guardar"}
+          {pending ? "Guardando…" : "Guardar cambios"}
         </button>
-        {state.ok && <span className="muted small">Guardado.</span>}
       </div>
       <FormError error={state.error} />
     </form>

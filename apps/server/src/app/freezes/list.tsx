@@ -1,12 +1,28 @@
 import { activeUntil, describeWindow, type FreezeWindow } from "@/lib/freeze";
-import { IconTrash } from "../icons";
-import { StatusBadge } from "../ui";
+import { IconSnowflake, IconTrash } from "../icons";
+import { EmptyState, StatusBadge } from "../ui";
 import { ConfirmButton } from "../ui-client";
 import { deleteFreezeAction, toggleFreezeAction } from "./actions";
 
 /** A table of windows with their state now; actions only when `canEdit`. */
-export function FreezeList({ windows, now, canEdit }: { windows: FreezeWindow[]; now: Date; canEdit: boolean }) {
-  if (windows.length === 0) return <p className="empty">Sin ventanas de congelamiento.</p>;
+export function FreezeList({
+  windows,
+  now,
+  canEdit,
+  emptyHint,
+}: {
+  windows: FreezeWindow[];
+  now: Date;
+  canEdit: boolean;
+  emptyHint?: string;
+}) {
+  if (windows.length === 0) {
+    return (
+      <EmptyState icon={<IconSnowflake />} title="Sin ventanas de congelamiento">
+        {emptyHint}
+      </EmptyState>
+    );
+  }
   return (
     <div className="table-wrap">
       <table className="table">

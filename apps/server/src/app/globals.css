@@ -97,6 +97,12 @@ html {
   -webkit-text-size-adjust: 100%;
 }
 
+/* Components with their own display (grid, flex) must still hide with the attribute. */
+[hidden] {
+  /* biome-ignore lint/complexity/noImportantStyles: the attribute has to win over any component's display */
+  display: none !important;
+}
+
 body {
   margin: 0;
   min-height: 100vh;
@@ -718,11 +724,32 @@ a.card:hover {
 }
 
 .empty {
-  padding: 2rem 1rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 1.75rem 1rem;
   border: 1px dashed hsl(var(--border));
   border-radius: var(--radius);
+  background: hsl(var(--muted) / 0.15);
   text-align: center;
   color: hsl(var(--muted-foreground));
+}
+
+.empty-icon {
+  display: grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  margin-bottom: 0.25rem;
+  border-radius: 999px;
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
+}
+
+.empty-title {
+  font-weight: 500;
+  color: hsl(var(--foreground));
 }
 
 /* ---------- tables ---------- */
@@ -1296,4 +1323,421 @@ fieldset.field {
 
 .login .filter-chips {
   margin-bottom: 1rem;
+}
+
+/* ---------- native controls ---------- */
+
+select.input {
+  appearance: none;
+  padding-right: 2rem;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a1a1aa' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.625rem center;
+  background-size: 1rem;
+}
+
+select.input option {
+  background: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+}
+
+.input[type="time"],
+.input[type="date"],
+.input[type="datetime-local"] {
+  font-variant-numeric: tabular-nums;
+}
+
+.input::-webkit-calendar-picker-indicator {
+  opacity: 0.55;
+  cursor: pointer;
+}
+
+.input::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
+}
+
+input[type="checkbox"] {
+  appearance: none;
+  flex-shrink: 0;
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  border: 1px solid hsl(var(--muted-foreground) / 0.6);
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  display: inline-grid;
+  place-content: center;
+  transition:
+    background-color 0.15s,
+    border-color 0.15s;
+}
+
+input[type="checkbox"]::before {
+  content: "";
+  width: 0.625rem;
+  height: 0.625rem;
+  transform: scale(0);
+  transition: transform 0.1s;
+  background: hsl(var(--primary-foreground));
+  clip-path: polygon(14% 44%, 0 65%, 50% 100%, 100% 16%, 80% 0%, 43% 62%);
+}
+
+input[type="checkbox"]:checked {
+  background: hsl(var(--primary));
+  border-color: hsl(var(--primary));
+}
+
+input[type="checkbox"]:checked::before {
+  transform: scale(1);
+}
+
+input[type="checkbox"]:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px hsl(var(--background)),
+    0 0 0 4px hsl(var(--ring));
+}
+
+.check {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+  line-height: 1.25;
+  cursor: pointer;
+}
+
+.check input {
+  margin-top: 0.0625rem;
+}
+
+/* A switch-like row: a checkbox with a title and a description. */
+.option-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.875rem 1rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    background-color 0.15s;
+}
+
+.option-row:hover {
+  background: hsl(var(--muted) / 0.3);
+}
+
+.option-row:has(input:checked) {
+  border-color: hsl(var(--ring) / 0.45);
+  background: hsl(var(--muted) / 0.35);
+}
+
+.option-row input {
+  margin-top: 0.125rem;
+}
+
+.option-title {
+  font-weight: 500;
+}
+
+.option-description {
+  margin-top: 0.125rem;
+  font-size: 0.8125rem;
+  color: hsl(var(--muted-foreground));
+}
+
+/* ---------- pills (multi-select) and segmented control (single choice) ---------- */
+
+.pill-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+.pill {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  height: 2rem;
+  min-width: 3rem;
+  justify-content: center;
+  padding: 0 0.875rem;
+  border: 1px solid hsl(var(--muted-foreground) / 0.3);
+  border-radius: 999px;
+  background: hsl(var(--muted) / 0.35);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: hsl(var(--foreground) / 0.8);
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background-color 0.15s,
+    border-color 0.15s,
+    color 0.15s;
+}
+
+.pill:hover {
+  color: hsl(var(--foreground));
+  background: hsl(var(--accent));
+}
+
+.pill input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.pill:has(input:checked) {
+  border-color: hsl(var(--primary));
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+}
+
+.pill:has(input:focus-visible) {
+  box-shadow:
+    0 0 0 2px hsl(var(--background)),
+    0 0 0 4px hsl(var(--ring));
+}
+
+.pill-actions {
+  align-self: flex-start;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  margin-top: 0.5rem;
+  font-size: 0.8125rem;
+}
+
+.pill-actions button {
+  height: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  font-weight: 500;
+  color: hsl(var(--muted-foreground));
+  text-decoration: underline;
+  text-decoration-color: hsl(var(--muted-foreground) / 0.4);
+  text-underline-offset: 3px;
+}
+
+.pill-actions button:hover {
+  background: none;
+  color: hsl(var(--foreground));
+}
+
+.segmented {
+  align-self: flex-start;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  border-radius: var(--radius);
+  background: hsl(var(--muted));
+}
+
+.segmented label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  height: 1.875rem;
+  padding: 0 0.75rem;
+  border-radius: calc(var(--radius) - 2px);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  transition:
+    background-color 0.15s,
+    color 0.15s;
+}
+
+.segmented label:hover {
+  color: hsl(var(--foreground));
+}
+
+.segmented input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.segmented label:has(input:checked) {
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.25);
+}
+
+.segmented label:has(input:focus-visible) {
+  box-shadow:
+    0 0 0 2px hsl(var(--background)),
+    0 0 0 4px hsl(var(--ring));
+}
+
+/* ---------- form panels: a titled form inside a card ---------- */
+
+.form-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.form-panel-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.form-panel-title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.form-grid > * {
+  grid-column: span 12;
+}
+
+.form-grid > .span-3 {
+  grid-column: span 3;
+}
+
+.form-grid > .span-4 {
+  grid-column: span 4;
+}
+
+.form-grid > .span-6 {
+  grid-column: span 6;
+}
+
+.form-grid > .span-8 {
+  grid-column: span 8;
+}
+
+@media (max-width: 900px) {
+  .form-grid > .span-3,
+  .form-grid > .span-4 {
+    grid-column: span 6;
+  }
+  .form-grid > .span-6,
+  .form-grid > .span-8 {
+    grid-column: span 12;
+  }
+}
+
+@media (max-width: 560px) {
+  .form-grid > .span-3,
+  .form-grid > .span-4 {
+    grid-column: span 12;
+  }
+}
+
+.field-hint {
+  font-size: 0.8125rem;
+  color: hsl(var(--muted-foreground));
+}
+
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-top: 1rem;
+  border-top: 1px solid hsl(var(--border));
+}
+
+.form-actions .error {
+  margin-top: 0;
+}
+
+/* A live sentence of what the form will create. */
+.preview {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  font-size: 0.8125rem;
+  color: hsl(var(--muted-foreground));
+}
+
+.preview strong {
+  color: hsl(var(--foreground));
+  font-weight: 500;
+}
+
+/* The card's footer as a form area: room to breathe instead of a thin strip. */
+.card-footer:has(.form-panel) {
+  padding: 1.5rem;
+}
+
+/* ---------- key/value list (audit details) ---------- */
+
+.kv-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  margin: 0;
+  max-width: 34rem;
+  font-size: 0.8125rem;
+}
+
+.kv {
+  display: inline-flex;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
+.kv dt {
+  color: hsl(var(--muted-foreground));
+}
+
+.kv dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.25rem;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+/* ---------- people ---------- */
+
+.avatar {
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 999px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: hsl(0 0% 98%);
+  letter-spacing: 0.02em;
+}
+
+.person {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.625rem;
+  text-decoration: none;
+}
+
+.person:hover strong {
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }

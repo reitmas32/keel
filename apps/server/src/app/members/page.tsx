@@ -1,8 +1,7 @@
 import Link from "next/link";
 import { getContext } from "@/lib/context";
-import { formatDate } from "@/lib/format";
 import { requireRole } from "../session";
-import { Card, Page, PageHeader, RoleBadge, MEMBER_STATUS as STATUS, StatusBadge } from "../ui";
+import { Avatar, Card, Page, PageHeader, RoleBadge, MEMBER_STATUS as STATUS, StatusBadge, When } from "../ui";
 import { InviteMemberForm } from "./components";
 
 export default async function MembersPage() {
@@ -42,7 +41,8 @@ export default async function MembersPage() {
                 {members.map((m) => (
                   <tr key={m.id}>
                     <td>
-                      <Link className="link" href={`/members/${m.id}`}>
+                      <Link className="person" href={`/members/${m.id}`}>
+                        <Avatar name={m.name} />
                         <strong>{m.name}</strong>
                       </Link>
                     </td>
@@ -53,7 +53,7 @@ export default async function MembersPage() {
                     <td>
                       <StatusBadge tone={STATUS[m.status].tone}>{STATUS[m.status].label}</StatusBadge>
                     </td>
-                    <td className="muted nowrap">{m.lastLoginAt ? formatDate(m.lastLoginAt) : "Nunca"}</td>
+                    <td className="muted nowrap">{m.lastLoginAt ? <When iso={m.lastLoginAt} /> : "Nunca"}</td>
                     <td className="muted">{m.grants}</td>
                   </tr>
                 ))}
