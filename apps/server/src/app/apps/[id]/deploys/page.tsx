@@ -97,7 +97,8 @@ export default async function DeploysPage({
                           Forzado en una ventana de congelamiento por {d.forcedBy}: {d.forcedReason}
                         </div>
                       )}
-                      {d.error && <div className="sub">{d.error}</div>}
+                      {/* A rejection's error repeats the approval line above. */}
+                      {d.error && d.approval?.status !== "rejected" && <div className="sub">{d.error}</div>}
                     </td>
                     <td>{d.requestedBy ?? none}</td>
                     <td className="muted nowrap">{formatDate(d.createdAt)}</td>

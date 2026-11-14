@@ -28,6 +28,8 @@ export default async function ScopeSettingsPage({ params }: { params: Promise<{ 
       >
         {canMaintain ? (
           <ScopeSettingsForm
+            // React resets a submitted form to its first defaults; a new key mounts it with the saved values.
+            key={JSON.stringify([scope.healthCheck, scope.autoRollback, scope.requireApproval, app.requireApproval])}
             appId={app.id}
             scopeId={scope.id}
             healthCheck={scope.healthCheck}

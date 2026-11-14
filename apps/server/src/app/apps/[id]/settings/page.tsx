@@ -60,7 +60,7 @@ export default async function SettingsPage({ params }: { params: Promise<{ id: s
         description="Con esto activo, cada deploy espera a que otro miembro con rol maintainer lo apruebe (en Deploys o con keel approve). Cada scope puede cambiarlo en su configuración."
       >
         {canDelete ? (
-          <AppApprovalForm appId={app.id} requireApproval={app.requireApproval} />
+          <AppApprovalForm key={String(app.requireApproval)} appId={app.id} requireApproval={app.requireApproval} />
         ) : (
           <p className="hint">
             {app.requireApproval ? "Activadas" : "Desactivadas"}. Solo un admin de esta app puede cambiarlo.
