@@ -154,7 +154,7 @@ export interface ScopeLockRecord {
   createdAt: string;
 }
 
-export const CHANNEL_KINDS = ["slack", "discord", "webhook"] as const;
+export const CHANNEL_KINDS = ["slack", "slack_bot", "discord", "webhook"] as const;
 export type ChannelKind = (typeof CHANNEL_KINDS)[number];
 
 /** Where keel sends notifications. `url` and `secret` never leave the server unmasked. */
@@ -163,8 +163,10 @@ export interface NotificationChannel {
   name: string;
   kind: ChannelKind;
   url: string;
-  /** Generic webhooks only: signs the body. */
+  /** Generic webhooks: signs the body. Slack bots: the bot token. */
   secret: string | null;
+  /** Slack bots only: the channel to post to (an id like C0123ABCD, or #name). */
+  target: string | null;
   /** Event names, or `["*"]` for all. */
   events: string[];
   repoPattern: string;
@@ -179,6 +181,7 @@ const toChannel = (r: Row): NotificationChannel => ({
   kind: r.kind as ChannelKind,
   url: r.url as string,
   secret: (r.secret as string | null) ?? null,
+  target: (r.target as string | null) ?? null,
   events: (r.events as string).split(",").filter(Boolean),
   repoPattern: r.repo_pattern as string,
   scopePattern: r.scope_pattern as string,
@@ -802,14 +805,16 @@ export class Store {
   ): Promise<NotificationChannel> {
     const id = randomUUID();
     await this.db.run(
-      `INSERT INTO notification_channels (id, name, kind, url, secret, events, repo_pattern, scope_pattern, enabled, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+      `INSERT INTO notification_channels (id, name, kind, url, secret, target, events, repo_pattern, scope_pattern, enabled,
+         created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
       [
         id,
         input.name,
         input.kind,
         input.url,
         input.secret,
+        input.target,
         input.events.join(","),
         input.repoPattern,
         input.scopePattern,
@@ -831,13 +836,14 @@ export class Store {
   async updateChannel(id: string, input: Omit<NotificationChannel, "id" | "createdAt" | "enabled">): Promise<void> {
     await this.db.run(
       `UPDATE notification_channels
-       SET name = ?, kind = ?, url = ?, secret = ?, events = ?, repo_pattern = ?, scope_pattern = ?
+       SET name = ?, kind = ?, url = ?, secret = ?, target = ?, events = ?, repo_pattern = ?, scope_pattern = ?
        WHERE id = ?`,
       [
         input.name,
         input.kind,
         input.url,
         input.secret,
+        input.target,
         input.events.join(","),
         input.repoPattern,
         input.scopePattern,

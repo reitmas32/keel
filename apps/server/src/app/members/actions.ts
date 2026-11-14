@@ -5,6 +5,7 @@ import { actorOf } from "@/lib/access";
 import { requireAdmin } from "@/lib/admin";
 import { getContext } from "@/lib/context";
 import { ApiError } from "@/lib/errors";
+import { rejectedAction } from "@/lib/log";
 import {
   addMemberGrant,
   changeMemberRole,
@@ -34,7 +35,7 @@ async function asAdmin(fn: (viewer: Viewer) => Promise<MemberFormState>): Promis
     revalidatePath("/members", "layout");
     return state;
   } catch (error) {
-    if (error instanceof ApiError) return { error: error.message };
+    if (error instanceof ApiError) return rejectedAction("members", error);
     throw error;
   }
 }

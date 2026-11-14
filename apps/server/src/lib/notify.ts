@@ -1,8 +1,9 @@
 import { createHmac } from "node:crypto";
-import type { Env } from "./env";
+import { type Env, SLACK_TOKEN } from "./env";
 import { ApiError } from "./errors";
 import { logger } from "./log";
 import { metrics } from "./metrics";
+import { type Dependency, tracedFetch } from "./outbound";
 import { globMatch, normalizeGrantPatterns } from "./roles";
 import { CHANNEL_KINDS, type ChannelKind, type DeployRecord, type NotificationChannel, type Store } from "./store";
 
@@ -51,7 +52,29 @@ export interface Notifier {
 }
 
 /** A channel as the notifier uses it; the ones from the environment have no id. */
-type Target = Pick<NotificationChannel, "name" | "kind" | "url" | "secret" | "events" | "repoPattern" | "scopePattern">;
+type Target = Pick<
+  NotificationChannel,
+  "name" | "kind" | "url" | "secret" | "target" | "events" | "repoPattern" | "scopePattern"
+>;
+
+/** Where a Slack bot posts. Its channels keep it as their `url`, so every channel has one. */
+export const SLACK_POST_URL = "https://slack.com/api/chat.postMessage";
+
+/** A Slack channel id (C0123ABCD, G…, D…) or a channel name, with or without its `#`. */
+const SLACK_CHANNEL = /^(?:[CGD][A-Z0-9]{6,}|#?[a-z0-9][a-z0-9._-]{0,79})$/;
+
+/** What Slack's `error` codes mean for whoever set the channel up. */
+const SLACK_ERRORS: Record<string, string> = {
+  not_in_channel: "el bot no está en el canal: invítalo con /invite @<bot>",
+  channel_not_found: "Slack no encuentra el canal (usa su id, p. ej. C0123ABCD)",
+  is_archived: "el canal está archivado",
+  invalid_auth: "el token del bot no es válido",
+  not_authed: "el token del bot no es válido",
+  token_revoked: "el token del bot fue revocado",
+  account_inactive: "el token del bot fue revocado",
+  missing_scope: "al bot le falta el scope chat:write",
+  ratelimited: "Slack limitó los envíos; reintenta en un momento",
+};
 
 /** `https://hooks.slack.com/…a1b2`: enough to recognize a webhook, never enough to call it. */
 export function maskUrl(url: string): string {
@@ -83,10 +106,34 @@ export function envChannels(env: Partial<Env>): Target[] {
   const base = { events, repoPattern: "*", scopePattern: "*" };
   const channels: Target[] = [];
   if (env.KEEL_SLACK_WEBHOOK_URL) {
-    channels.push({ ...base, name: "env:slack", kind: "slack", url: env.KEEL_SLACK_WEBHOOK_URL, secret: null });
+    channels.push({
+      ...base,
+      name: "env:slack",
+      kind: "slack",
+      url: env.KEEL_SLACK_WEBHOOK_URL,
+      secret: null,
+      target: null,
+    });
+  }
+  if (env.KEEL_SLACK_BOT_TOKEN && env.KEEL_SLACK_CHANNEL) {
+    channels.push({
+      ...base,
+      name: "env:slack-bot",
+      kind: "slack_bot",
+      url: SLACK_POST_URL,
+      secret: env.KEEL_SLACK_BOT_TOKEN,
+      target: env.KEEL_SLACK_CHANNEL,
+    });
   }
   if (env.KEEL_DISCORD_WEBHOOK_URL) {
-    channels.push({ ...base, name: "env:discord", kind: "discord", url: env.KEEL_DISCORD_WEBHOOK_URL, secret: null });
+    channels.push({
+      ...base,
+      name: "env:discord",
+      kind: "discord",
+      url: env.KEEL_DISCORD_WEBHOOK_URL,
+      secret: null,
+      target: null,
+    });
   }
   if (env.KEEL_WEBHOOK_URL) {
     channels.push({
@@ -95,6 +142,7 @@ export function envChannels(env: Partial<Env>): Target[] {
       kind: "webhook",
       url: env.KEEL_WEBHOOK_URL,
       secret: env.KEEL_WEBHOOK_SECRET ?? null,
+      target: null,
     });
   }
   return channels;
@@ -143,6 +191,9 @@ export function formatMessage(n: DeployNotification, link?: string): string {
 
 function bodyFor(channel: Target, n: DeployNotification, at: string, link?: string): string {
   if (channel.kind === "slack") return JSON.stringify({ text: formatMessage(n, link) });
+  if (channel.kind === "slack_bot") {
+    return JSON.stringify({ channel: channel.target, text: formatMessage(n, link), unfurl_links: false });
+  }
   if (channel.kind === "discord") return JSON.stringify({ content: formatMessage(n, link).slice(0, 2000) });
   return JSON.stringify({
     event: n.event,
@@ -166,6 +217,19 @@ function bodyFor(channel: Target, n: DeployNotification, at: string, link?: stri
 
 export const signBody = (body: string, secret: string) =>
   `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
+
+/** Why Slack refused a chat.postMessage, or undefined when it posted it. Never the raw body: it is Slack's, not ours. */
+async function slackFailure(response: Response): Promise<string | undefined> {
+  let body: { ok?: boolean; error?: string };
+  try {
+    body = (await response.json()) as typeof body;
+  } catch {
+    return "Slack respondió algo que no es JSON";
+  }
+  if (body.ok) return undefined;
+  const code = String(body.error ?? "error desconocido");
+  return SLACK_ERRORS[code] ? `${SLACK_ERRORS[code]} (${code})` : `Slack respondió ${code}`;
+}
 
 /**
  * Sends notifications to the channels of the environment and of the admin. `notify` returns right away and never
@@ -198,11 +262,12 @@ export class WebhookNotifier implements Notifier {
 
   private async dispatch(n: DeployNotification): Promise<void> {
     const saved = (await this.store.listChannels()).filter((c) => c.enabled);
-    // The same webhook configured in both places gets each event once.
+    // The same webhook (or the same Slack channel) configured in both places gets each event once.
     const seen = new Set<string>();
     const targets = [...this.fromEnv, ...saved].filter((c) => {
-      if (!wants(c, n) || seen.has(c.url)) return false;
-      seen.add(c.url);
+      const key = c.kind === "slack_bot" ? `slack:${c.target}` : c.url;
+      if (!wants(c, n) || seen.has(key)) return false;
+      seen.add(key);
       return true;
     });
     if (targets.length === 0) return;
@@ -225,9 +290,16 @@ export class WebhookNotifier implements Notifier {
       headers["x-keel-event"] = n.event;
       if (channel.secret) headers["x-keel-signature"] = signBody(body, channel.secret);
     }
+    if (channel.kind === "slack_bot") {
+      headers["content-type"] = "application/json; charset=utf-8";
+      headers.authorization = `Bearer ${channel.secret ?? ""}`;
+    }
     let failure: string | undefined;
     try {
-      const response = await (this.options.fetch ?? fetch)(channel.url, {
+      // A webhook's URL is a secret: its line shows the masked one.
+      const dependency: Dependency = channel.kind === "slack_bot" || channel.kind === "slack" ? "slack" : channel.kind;
+      const traced = tracedFetch(dependency, this.options.fetch ?? fetch, () => maskUrl(channel.url));
+      const response = await traced(channel.url, {
         method: "POST",
         headers,
         body,
@@ -235,6 +307,8 @@ export class WebhookNotifier implements Notifier {
         signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
       });
       if (!response.ok) failure = `respondió ${response.status}`;
+      // Slack's Web API answers 200 with `ok: false` when it refuses the message.
+      else if (channel.kind === "slack_bot") failure = await slackFailure(response);
     } catch (error) {
       // Never the raw error of fetch: it can carry the URL.
       failure = (error as Error).name === "TimeoutError" ? "no respondió a tiempo" : "no se pudo conectar";
@@ -253,12 +327,19 @@ export class WebhookNotifier implements Notifier {
   }
 }
 
-/** Validates what the admin's form sends for a new channel. Throws ApiError 400. */
+/**
+ * Validates what the admin's form sends for a channel. Throws ApiError 400. A Slack bot takes its token and channel
+ * instead of a URL; any other kind takes a webhook URL.
+ */
 export function parseChannelInput(input: {
   name: string;
   kind: string;
-  url: string;
+  url?: string;
   secret?: string;
+  /** Slack bots: the bot token (xoxb-…). */
+  token?: string;
+  /** Slack bots: the channel id or #name. */
+  channel?: string;
   events?: string | readonly string[];
   repo?: string;
   scope?: string;
@@ -271,9 +352,23 @@ export function parseChannelInput(input: {
     throw new ApiError(400, `Tipo de canal inválido. Usa: ${CHANNEL_KINDS.join(", ")}.`);
   }
   const kind = input.kind as ChannelKind;
+  const { repoPattern, scopePattern } = normalizeGrantPatterns(input.repo ?? "", input.scope ?? "");
+  const common = { name, kind, events: parseEvents(input.events), repoPattern, scopePattern };
+
+  if (kind === "slack_bot") {
+    const token = input.token?.trim() ?? "";
+    // Never echo the token in the error: it is a credential.
+    if (!SLACK_TOKEN.test(token)) throw new ApiError(400, "El token del bot de Slack debe empezar con xoxb-.");
+    const channel = input.channel?.trim() ?? "";
+    if (!SLACK_CHANNEL.test(channel)) {
+      throw new ApiError(400, "Indica el canal de Slack: su id (p. ej. C0123ABCD) o su nombre (#deploys).");
+    }
+    return { ...common, url: SLACK_POST_URL, secret: token, target: channel };
+  }
+
   let url: URL;
   try {
-    url = new URL(input.url.trim());
+    url = new URL(input.url?.trim() ?? "");
   } catch {
     throw new ApiError(400, "La URL del webhook no es válida.");
   }
@@ -281,14 +376,10 @@ export function parseChannelInput(input: {
   if (url.protocol !== "https:" && !(kind === "webhook" && url.protocol === "http:")) {
     throw new ApiError(400, "La URL del webhook debe empezar con https://.");
   }
-  const { repoPattern, scopePattern } = normalizeGrantPatterns(input.repo ?? "", input.scope ?? "");
   return {
-    name,
-    kind,
+    ...common,
     url: url.toString(),
     secret: kind === "webhook" ? input.secret?.trim() || null : null,
-    events: parseEvents(input.events),
-    repoPattern,
-    scopePattern,
+    target: null,
   };
 }

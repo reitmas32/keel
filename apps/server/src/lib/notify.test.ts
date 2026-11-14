@@ -3,7 +3,16 @@ import { createChannelAs, deleteChannelAs, setChannelEnabledAs, updateChannelAs 
 import { recordCiResult, requestDeploy } from "./deploys";
 import { loadEnv } from "./env";
 import { handlers } from "./handlers";
-import { formatMessage, maskUrl, parseChannelInput, parseEvents, signBody, WebhookNotifier } from "./notify";
+import {
+  envChannels,
+  formatMessage,
+  maskUrl,
+  parseChannelInput,
+  parseEvents,
+  SLACK_POST_URL,
+  signBody,
+  WebhookNotifier,
+} from "./notify";
 import { addMember, apiRequest, createTestContext, SHA } from "./testing";
 
 const SLACK = "https://hooks.slack.com/services/T000/B000/secretsecret";
@@ -174,6 +183,130 @@ describe("notification channels", () => {
     const audit = JSON.stringify(await store.listAudit());
     expect(audit).toContain("channel.update");
     expect(audit).not.toContain("secretsecret");
+  });
+
+  describe("Slack bot", () => {
+    const TOKEN = "xoxb-1111-2222-tokentoken";
+    /** A fetch that answers like Slack's Web API: 200 with `ok`, or `ok: false` and an error code. */
+    function slackFetch(error?: string) {
+      const calls: { url: string; headers: Record<string, string>; body: Record<string, unknown> }[] = [];
+      const fn = (async (url: string, init: RequestInit) => {
+        calls.push({ url, headers: init.headers as Record<string, string>, body: JSON.parse(init.body as string) });
+        return Response.json(error ? { ok: false, error } : { ok: true, ts: "1.2" });
+      }) as unknown as typeof fetch;
+      return { fn, calls };
+    }
+
+    it("posts with chat.postMessage, the token as a bearer and the channel in the body", async () => {
+      const { store, clock } = await createTestContext();
+      const admin = await addMember(store, clock.now(), { role: "admin" });
+      const p = { member: admin, grants: [], maxRole: null, anonymousRole: null };
+      const channel = await createChannelAs(
+        store,
+        p,
+        { name: "deploys", kind: "slack_bot", token: TOKEN, channel: "C0123ABCD" },
+        clock.now(),
+      );
+      expect(channel).toMatchObject({ url: SLACK_POST_URL, secret: TOKEN, target: "C0123ABCD" });
+
+      const { fn, calls } = slackFetch();
+      const notifier = new WebhookNotifier(store, {}, { fetch: fn });
+      notifier.notify(sample);
+      await notifier.flush();
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.url).toBe(SLACK_POST_URL);
+      expect(calls[0]?.headers.authorization).toBe(`Bearer ${TOKEN}`);
+      expect(calls[0]?.body).toMatchObject({ channel: "C0123ABCD", text: expect.stringContaining("v1.0.0") });
+
+      // The audit log keeps the channel, never the token.
+      const audit = JSON.stringify(await store.listAudit());
+      expect(audit).toContain("C0123ABCD");
+      expect(audit).not.toContain("tokentoken");
+    });
+
+    it("reports Slack's ok:false as a failure with what to do", async () => {
+      const { store } = await createTestContext();
+      const target = {
+        name: "x",
+        kind: "slack_bot" as const,
+        url: SLACK_POST_URL,
+        secret: TOKEN,
+        target: "#deploys",
+        events: ["*"],
+        repoPattern: "*",
+        scopePattern: "*",
+      };
+      const failing = new WebhookNotifier(store, {}, { fetch: slackFetch("not_in_channel").fn });
+      expect(await failing.send(target, sample, "2026-01-01T00:00:00Z")).toMatch(/invítalo.*not_in_channel/);
+      const ok = new WebhookNotifier(store, {}, { fetch: slackFetch().fn });
+      expect(await ok.send(target, sample, "2026-01-01T00:00:00Z")).toBeUndefined();
+    });
+
+    it("comes from the environment with both variables, and posts to a channel once", async () => {
+      const { store, clock } = await createTestContext();
+      const admin = await addMember(store, clock.now(), { role: "admin" });
+      const p = { member: admin, grants: [], maxRole: null, anonymousRole: null };
+      // The same channel in the admin and in the environment.
+      await createChannelAs(
+        store,
+        p,
+        { name: "dup", kind: "slack_bot", token: TOKEN, channel: "C0123ABCD" },
+        clock.now(),
+      );
+      const { fn, calls } = slackFetch();
+      const env = { KEEL_SLACK_BOT_TOKEN: TOKEN, KEEL_SLACK_CHANNEL: "C0123ABCD" };
+      expect(envChannels(env)).toMatchObject([{ kind: "slack_bot", target: "C0123ABCD" }]);
+      const notifier = new WebhookNotifier(store, env, { fetch: fn });
+      notifier.notify(sample);
+      await notifier.flush();
+      expect(calls).toHaveLength(1);
+
+      const base = { DOKPLOY_URL: "https://d.example.com", DOKPLOY_API_KEY: "k", KEEL_ADMIN_PASSWORD: "x".repeat(12) };
+      expect(() => loadEnv({ ...base, KEEL_SLACK_BOT_TOKEN: TOKEN })).toThrow(/KEEL_SLACK_CHANNEL/);
+      let message = "";
+      try {
+        loadEnv({ ...base, KEEL_SLACK_BOT_TOKEN: "not-a-token-secret", KEEL_SLACK_CHANNEL: "C0123ABCD" });
+      } catch (error) {
+        message = (error as Error).message;
+      }
+      expect(message).toMatch(/xoxb-/);
+      expect(message).not.toContain("not-a-token-secret");
+    });
+
+    it("validates the token and channel, and keeps the token on edit", async () => {
+      expect(() => parseChannelInput({ name: "x", kind: "slack_bot", token: "nope", channel: "C0123ABCD" })).toThrow(
+        /xoxb-/,
+      );
+      expect(() => parseChannelInput({ name: "x", kind: "slack_bot", token: TOKEN, channel: "" })).toThrow(/canal/);
+      expect(parseChannelInput({ name: "x", kind: "slack_bot", token: TOKEN, channel: "#deploys" }).target).toBe(
+        "#deploys",
+      );
+
+      const { store, clock } = await createTestContext();
+      const admin = await addMember(store, clock.now(), { role: "admin" });
+      const p = { member: admin, grants: [], maxRole: null, anonymousRole: null };
+      const channel = await createChannelAs(
+        store,
+        p,
+        { name: "bot", kind: "slack_bot", token: TOKEN, channel: "C0123ABCD" },
+        clock.now(),
+      );
+      const moved = await updateChannelAs(
+        store,
+        p,
+        channel.id,
+        { name: "bot", kind: "slack_bot", token: "", channel: "C9999ZZZZ" },
+        clock.now(),
+      );
+      expect(moved).toMatchObject({ secret: TOKEN, target: "C9999ZZZZ" });
+      // Back to a webhook: needs its own URL, and drops the token and channel.
+      await expect(
+        updateChannelAs(store, p, channel.id, { name: "bot", kind: "slack", url: "" }, clock.now()),
+      ).rejects.toThrow(/URL del webhook/);
+      await expect(
+        updateChannelAs(store, p, channel.id, { name: "bot", kind: "slack", url: SLACK }, clock.now()),
+      ).resolves.toMatchObject({ kind: "slack", url: SLACK, secret: null, target: null });
+    });
   });
 
   it("only lets global admins manage channels", async () => {

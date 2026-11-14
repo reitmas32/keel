@@ -86,7 +86,7 @@ describe("Metrics", () => {
 });
 
 describe("structured logs", () => {
-  it("writes one JSON object per line, or the old text form", () => {
+  it("writes one JSON object per line, or a line to read by eye", () => {
     const now = new Date("2026-11-13T00:00:00Z");
     expect(JSON.parse(formatLine("info", "deploy completado", { deployId: "d1" }, now, "json"))).toEqual({
       ts: "2026-11-13T00:00:00.000Z",
@@ -94,6 +94,8 @@ describe("structured logs", () => {
       msg: "deploy completado",
       deployId: "d1",
     });
-    expect(formatLine("warn", "x", { a: 1, b: "c" }, now, "text")).toBe("[keel] x a=1 b=c");
+    expect(formatLine("warn", "x", { a: 1, b: "c" }, now, "text")).toMatch(
+      /^\d\d:\d\d:\d\d\.\d{3} WARN {2}keel {2}x a=1 b=c$/,
+    );
   });
 });

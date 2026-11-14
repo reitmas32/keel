@@ -213,7 +213,7 @@ export async function handle(fn: () => Promise<Response> | Response): Promise<Re
     if (error instanceof DokployError || (error instanceof Error && error.name === "DokployError")) {
       return Response.json({ error: error.message }, { status: 502 });
     }
-    logger.error("error no controlado", errorFields(error));
+    logger.error("error no controlado", errorFields(error, true));
     return Response.json({ error: "Error interno." }, { status: 500 });
   }
 }

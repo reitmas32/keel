@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { createTokenAs, revokeTokenAs } from "@/lib/admin";
 import { getContext } from "@/lib/context";
 import { ApiError } from "@/lib/errors";
+import { rejectedAction } from "@/lib/log";
 import { requireMember } from "../session";
 
 export interface TokenFormState {
@@ -29,7 +30,7 @@ export async function createApiTokenAction(_state: TokenFormState, form: FormDat
     revalidatePath("/tokens");
     return { token, name: record.name };
   } catch (error) {
-    if (error instanceof ApiError) return { error: error.message };
+    if (error instanceof ApiError) return rejectedAction("tokens", error);
     throw error;
   }
 }

@@ -19,6 +19,9 @@ const isHttpUrl = (value: string) => {
 const secretUrl = () =>
   optional(z.string().trim().refine(isHttpUrl, { error: "debe ser una URL http(s) válida." }).optional());
 
+/** A Slack bot (or user) token. keel posts with it through chat.postMessage. */
+export const SLACK_TOKEN = /^xox[bp]-[A-Za-z0-9-]+$/;
+
 const isPostgresUrl = (value: string) => {
   try {
     const url = new URL(value);
@@ -64,6 +67,8 @@ const envSchema = z
     // json (default): one JSON object per log line. text: `[keel] mensaje`, for reading by eye.
     KEEL_LOG_FORMAT: optional(z.enum(["json", "text"]).default("json")),
     KEEL_LOG_LEVEL: optional(z.enum(["debug", "info", "warn", "error"]).default("info")),
+    // With KEEL_LOG_LEVEL=debug, also the headers and bodies (2 KB, redacted) of every API request and response.
+    KEEL_LOG_BODIES: optional(z.enum(["true", "false"]).default("false")),
     // Default time zone (IANA) of new freeze windows in the admin, e.g. America/Mexico_City.
     KEEL_TIMEZONE: optional(
       z
@@ -93,6 +98,9 @@ const envSchema = z
     KEEL_SLACK_WEBHOOK_URL: secretUrl(),
     KEEL_DISCORD_WEBHOOK_URL: secretUrl(),
     KEEL_WEBHOOK_URL: secretUrl(),
+    // A Slack app's bot token (xoxb-…) and the channel it posts to (an id like C0123ABCD, or #name). Both or neither.
+    KEEL_SLACK_BOT_TOKEN: optional(z.string().trim().min(1).optional()),
+    KEEL_SLACK_CHANNEL: optional(z.string().trim().min(1).optional()),
     // Signs generic webhook bodies: `X-Keel-Signature: sha256=<hmac>`.
     KEEL_WEBHOOK_SECRET: optional(z.string().min(1).optional()),
     // Comma-separated events the environment channels receive; empty or `*` means all of them.
@@ -109,6 +117,25 @@ const envSchema = z
           message: `falta: el login con Accounts necesita ${accounts.join(", ")}.`,
         });
       }
+    }
+    const slackBot = ["KEEL_SLACK_BOT_TOKEN", "KEEL_SLACK_CHANNEL"] as const;
+    const slackSet = slackBot.filter((name) => env[name]);
+    if (slackSet.length === 1) {
+      for (const name of slackBot.filter((n) => !env[n])) {
+        ctx.addIssue({
+          code: "custom",
+          path: [name],
+          message: `falta: el bot de Slack necesita ${slackBot.join(" y ")}.`,
+        });
+      }
+    }
+    if (env.KEEL_SLACK_BOT_TOKEN && !SLACK_TOKEN.test(env.KEEL_SLACK_BOT_TOKEN)) {
+      // Never echo the value: it is a credential.
+      ctx.addIssue({
+        code: "custom",
+        path: ["KEEL_SLACK_BOT_TOKEN"],
+        message: "debe ser un token de bot de Slack (xoxb-…).",
+      });
     }
     if (env.DB_ENGINE === "postgres" && !env.POSTGRES_DSN) {
       ctx.addIssue({

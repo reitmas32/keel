@@ -302,6 +302,14 @@ export const POSTGRES_MIGRATIONS = [
       `ALTER TABLE deploys ADD COLUMN IF NOT EXISTS forced_reason ${TEXT}`,
     ],
   },
+  {
+    version: 8,
+    name: "canales de Slack con token de bot",
+    statements: [
+      // The channel a Slack bot posts to; its token goes in `secret`, like a webhook's signing secret.
+      `ALTER TABLE notification_channels ADD COLUMN IF NOT EXISTS target ${TEXT}`,
+    ],
+  },
 ];
 
 /**
