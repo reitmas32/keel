@@ -1,7 +1,14 @@
-import { LOCK_REASON_MAX, lockScopeRequestSchema, type Role, roleAtLeast } from "@keel/shared";
+import {
+  LOCK_REASON_MAX,
+  lockScopeRequestSchema,
+  type Role,
+  roleAtLeast,
+  type UpdateScopeRequest,
+  updateScopeRequestSchema,
+} from "@keel/shared";
 import { type AuditActor, actorOf, baseRole, isAdmin, type Principal, requireRoleOn } from "./access";
 import { createApiToken } from "./api-auth";
-import { addScope, createApp, rotateCiToken } from "./apps";
+import { addScope, createApp, rotateCiToken, scopeSettingsDetails, updateScopeSettings } from "./apps";
 import { ApiError } from "./errors";
 import { maskUrl, parseChannelInput } from "./notify";
 import type { Target } from "./roles";
@@ -99,6 +106,30 @@ export async function unlinkScopeAs(
   requireRoleOn(p, "maintainer", "desvincular scopes", { repo: app.repo, scope: scope.alias });
   await store.deleteScope(scope.id);
   await record(store, actorOf(p), "scope.unlink", { repo: app.repo, scope: scope.alias }, {}, now);
+}
+
+/** Changes a scope's health check and automatic rollback. `raw` is validated like the API's PATCH body. */
+export async function updateScopeAs(
+  store: Store,
+  p: Principal,
+  appId: string,
+  scopeId: string,
+  raw: unknown,
+  now: Date,
+): Promise<Scope> {
+  const app = await appOr404(store, appId);
+  const scope = await scopeOr404(store, app, scopeId);
+  const target = { repo: app.repo, scope: scope.alias };
+  requireRoleOn(p, "maintainer", "configurar scopes", target);
+  const parsed = updateScopeRequestSchema.safeParse(raw);
+  if (!parsed.success) {
+    const issues = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
+    throw new ApiError(400, `Configuración inválida: ${issues}`);
+  }
+  const settings: UpdateScopeRequest = parsed.data;
+  const updated = await updateScopeSettings(store, scope, settings);
+  await record(store, actorOf(p), "scope.update", target, scopeSettingsDetails(settings), now);
+  return updated;
 }
 
 /** Returns the new plaintext CI token, shown once. */

@@ -1,3 +1,4 @@
+import type { UpdateScopeRequest } from "@keel/shared";
 import { DEFAULT_TAG_VARIABLE, type DokployClient, parseDokployServiceUrl } from "./dokploy";
 import { ApiError } from "./errors";
 import type { App, Scope, ScopeKind, Store } from "./store";
@@ -94,3 +95,18 @@ export async function addScope(
     now,
   );
 }
+
+/** Applies the settings sent (see `updateScopeRequestSchema`) and returns the scope as it is now. */
+export async function updateScopeSettings(store: Store, scope: Scope, settings: UpdateScopeRequest): Promise<Scope> {
+  await store.updateScopeSettings(scope.id, {
+    ...(settings.healthCheck !== undefined && { healthCheck: settings.healthCheck }),
+    ...(settings.autoRollback !== undefined && { autoRollback: settings.autoRollback }),
+  });
+  return (await store.getScope(scope.id)) as Scope;
+}
+
+/** What the audit log keeps of a settings change: only what was sent. */
+export const scopeSettingsDetails = (settings: UpdateScopeRequest): Record<string, unknown> => ({
+  ...(settings.healthCheck !== undefined && { healthCheck: settings.healthCheck }),
+  ...(settings.autoRollback !== undefined && { autoRollback: settings.autoRollback }),
+});

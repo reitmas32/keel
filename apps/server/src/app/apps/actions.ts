@@ -10,6 +10,7 @@ import {
   rotateCiTokenAs,
   unlinkScopeAs,
   unlockScopeAs,
+  updateScopeAs,
 } from "@/lib/admin";
 import { getContext } from "@/lib/context";
 import { ApiError } from "@/lib/errors";
@@ -86,6 +87,50 @@ export async function lockScopeAction(
   return attempt(async (viewer) => {
     const { store, now } = await getContext();
     await lockScopeAs(store, viewer, appId, scopeId, field(form, "reason"), now());
+    revalidatePath(`/apps/${appId}`, "layout");
+    return { ok: true };
+  });
+}
+
+const numberField = (form: FormData, name: string) => {
+  const value = field(form, name);
+  return value === "" ? undefined : Number(value);
+};
+
+/** The scope's health check and automatic rollback, from its settings form. */
+export async function updateScopeAction(
+  appId: string,
+  scopeId: string,
+  _state: FormState,
+  form: FormData,
+): Promise<FormState> {
+  return attempt(async (viewer) => {
+    const { store, now } = await getContext();
+    const enabled = form.get("healthEnabled") === "on";
+    const url = field(form, "healthUrl");
+    const expectedStatus = numberField(form, "healthStatus");
+    await updateScopeAs(
+      store,
+      viewer,
+      appId,
+      scopeId,
+      {
+        // Off and without a URL there is nothing worth keeping.
+        healthCheck:
+          !enabled && !url
+            ? null
+            : {
+                enabled,
+                url,
+                expectedStatus: expectedStatus ?? null,
+                retries: numberField(form, "healthRetries"),
+                intervalSeconds: numberField(form, "healthInterval"),
+                timeoutSeconds: numberField(form, "healthTimeout"),
+              },
+        autoRollback: form.get("autoRollback") === "on",
+      },
+      now(),
+    );
     revalidatePath(`/apps/${appId}`, "layout");
     return { ok: true };
   });

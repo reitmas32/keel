@@ -180,6 +180,8 @@ describe("POST /repos/:owner/:name/scopes", () => {
       current: null,
       last: null,
       lock: null,
+      healthCheck: null,
+      autoRollback: false,
     });
     const [entry] = (await store.listAudit()).filter((e) => e.action === "scope.link");
     expect(entry).toMatchObject({

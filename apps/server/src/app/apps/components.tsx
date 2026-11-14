@@ -1,11 +1,18 @@
 "use client";
 
-import { LOCK_REASON_MAX } from "@keel/shared";
+import { HEALTH_CHECK_LIMITS, type HealthCheck, LOCK_REASON_MAX } from "@keel/shared";
 import Link from "next/link";
 import { useActionState, useEffect, useRef } from "react";
 import { IconLock, IconPlus, IconRefresh } from "../icons";
 import { ConfirmButton, TokenNotice } from "../ui-client";
-import { addScopeAction, createAppAction, type FormState, lockScopeAction, rotateTokenAction } from "./actions";
+import {
+  addScopeAction,
+  createAppAction,
+  type FormState,
+  lockScopeAction,
+  rotateTokenAction,
+  updateScopeAction,
+} from "./actions";
 
 const SECRET_HINT = (
   <>
@@ -188,5 +195,115 @@ export function LockScopeButton({ appId, scopeId, alias }: { appId: string; scop
         </form>
       </dialog>
     </>
+  );
+}
+
+/** A scope's health check and automatic rollback. Both start off. */
+export function ScopeSettingsForm({
+  appId,
+  scopeId,
+  healthCheck,
+  autoRollback,
+}: {
+  appId: string;
+  scopeId: string;
+  healthCheck: HealthCheck | null;
+  autoRollback: boolean;
+}) {
+  const [state, action, pending] = useActionState<FormState, FormData>(
+    updateScopeAction.bind(null, appId, scopeId),
+    {},
+  );
+  const limits = HEALTH_CHECK_LIMITS;
+  return (
+    <form action={action} className="form-stack">
+      <label className="check">
+        <input type="checkbox" name="healthEnabled" defaultChecked={healthCheck?.enabled ?? false} /> Comprobar la salud
+        del servicio después de cada deploy
+      </label>
+      <div className="field">
+        <label className="label" htmlFor="health-url">
+          URL del health check
+        </label>
+        <input
+          id="health-url"
+          className="input"
+          name="healthUrl"
+          type="url"
+          defaultValue={healthCheck?.url ?? ""}
+          placeholder="https://api.example.com/healthz"
+        />
+      </div>
+      <div className="form-row">
+        <div className="field narrow">
+          <label className="label" htmlFor="health-status">
+            Código esperado
+          </label>
+          <input
+            id="health-status"
+            className="input"
+            name="healthStatus"
+            type="number"
+            min={100}
+            max={599}
+            defaultValue={healthCheck?.expectedStatus ?? ""}
+            placeholder="2xx"
+          />
+        </div>
+        <div className="field narrow">
+          <label className="label" htmlFor="health-retries">
+            Intentos
+          </label>
+          <input
+            id="health-retries"
+            className="input"
+            name="healthRetries"
+            type="number"
+            min={limits.retries.min}
+            max={limits.retries.max}
+            defaultValue={healthCheck?.retries ?? limits.retries.default}
+          />
+        </div>
+        <div className="field narrow">
+          <label className="label" htmlFor="health-interval">
+            Segundos entre intentos
+          </label>
+          <input
+            id="health-interval"
+            className="input"
+            name="healthInterval"
+            type="number"
+            min={limits.intervalSeconds.min}
+            max={limits.intervalSeconds.max}
+            defaultValue={healthCheck?.intervalSeconds ?? limits.intervalSeconds.default}
+          />
+        </div>
+        <div className="field narrow">
+          <label className="label" htmlFor="health-timeout">
+            Timeout (s)
+          </label>
+          <input
+            id="health-timeout"
+            className="input"
+            name="healthTimeout"
+            type="number"
+            min={limits.timeoutSeconds.min}
+            max={limits.timeoutSeconds.max}
+            defaultValue={healthCheck?.timeoutSeconds ?? limits.timeoutSeconds.default}
+          />
+        </div>
+      </div>
+      <label className="check">
+        <input type="checkbox" name="autoRollback" defaultChecked={autoRollback} /> Si un deploy falla, volver a
+        desplegar la versión anterior (rollback automático)
+      </label>
+      <div className="inline-form">
+        <button type="submit" className="btn" disabled={pending}>
+          {pending ? "Guardando…" : "Guardar"}
+        </button>
+        {state.ok && <span className="muted small">Guardado.</span>}
+      </div>
+      <FormError error={state.error} />
+    </form>
   );
 }

@@ -248,6 +248,19 @@ export const POSTGRES_MIGRATIONS = [
       )`,
     ],
   },
+  {
+    version: 5,
+    name: "health check y rollback automático por scope",
+    statements: [
+      // JSON: { enabled, url, expectedStatus, retries, intervalSeconds, timeoutSeconds }. NULL: no health check.
+      `ALTER TABLE scopes ADD COLUMN IF NOT EXISTS health_check ${TEXT}`,
+      "ALTER TABLE scopes ADD COLUMN IF NOT EXISTS auto_rollback INTEGER NOT NULL DEFAULT 0",
+      `ALTER TABLE deploys ADD COLUMN IF NOT EXISTS health_status ${TEXT}`,
+      "ALTER TABLE deploys ADD COLUMN IF NOT EXISTS health_attempts INTEGER NOT NULL DEFAULT 0",
+      `ALTER TABLE deploys ADD COLUMN IF NOT EXISTS health_checked_at ${TEXT}`,
+      `ALTER TABLE deploys ADD COLUMN IF NOT EXISTS rollback_of ${TEXT}`,
+    ],
+  },
 ];
 
 /**

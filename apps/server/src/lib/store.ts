@@ -4,6 +4,8 @@ import {
   canTransition,
   type Deploy,
   type DeployStatus,
+  type HealthCheck,
+  type HealthStatus,
   isTerminal,
   type Role,
   type Version,
@@ -31,6 +33,10 @@ export interface Scope {
   /** Compose only: env variable keel sets to the version tag before redeploying. */
   tagVariable: string | null;
   createdAt: string;
+  /** What to call after Dokploy finishes a deploy; null without one. */
+  healthCheck: HealthCheck | null;
+  /** After a failed deploy, deploy again the version the scope ran before. */
+  autoRollback: boolean;
 }
 
 export interface CiResult {
@@ -47,6 +53,11 @@ export interface DeployRecord extends Omit<Deploy, "service"> {
   deployStartedAt: string | null;
   ciPassedAt: string | null;
   finishedAt: string | null;
+  rollbackOf: string | null;
+  healthStatus: HealthStatus | null;
+  /** Health checks made so far, and when the last one started. */
+  healthAttempts: number;
+  healthCheckedAt: string | null;
 }
 
 export interface ApiToken {
@@ -162,6 +173,15 @@ const toApp = (r: Row): App => ({
   createdAt: r.created_at as string,
 });
 
+function parseHealthCheck(raw: unknown): HealthCheck | null {
+  if (typeof raw !== "string" || !raw) return null;
+  try {
+    return JSON.parse(raw) as HealthCheck;
+  } catch {
+    return null;
+  }
+}
+
 const toScope = (r: Row): Scope => ({
   id: r.id as string,
   appId: r.app_id as string,
@@ -171,6 +191,8 @@ const toScope = (r: Row): Scope => ({
   dokployId: r.dokploy_id as string,
   tagVariable: (r.tag_variable as string | null) ?? null,
   createdAt: r.created_at as string,
+  healthCheck: parseHealthCheck(r.health_check),
+  autoRollback: Number(r.auto_rollback ?? 0) === 1,
 });
 
 const toDeploy = (r: Row): DeployRecord => ({
@@ -188,6 +210,10 @@ const toDeploy = (r: Row): DeployRecord => ({
   requestedBy: (r.requested_by as string | null) ?? null,
   createdAt: r.created_at as string,
   updatedAt: r.updated_at as string,
+  rollbackOf: (r.rollback_of as string | null) ?? null,
+  healthStatus: (r.health_status as HealthStatus | null) ?? null,
+  healthAttempts: Number(r.health_attempts ?? 0),
+  healthCheckedAt: (r.health_checked_at as string | null) ?? null,
 });
 
 const toApiToken = (r: Row): ApiToken => ({
@@ -343,8 +369,14 @@ export class Store {
 
   // --- scopes ---
 
-  async addScope(input: Omit<Scope, "id" | "createdAt">, now: Date): Promise<Scope> {
-    const scope: Scope = { ...input, id: randomUUID(), createdAt: now.toISOString() };
+  async addScope(input: Omit<Scope, "id" | "createdAt" | "healthCheck" | "autoRollback">, now: Date): Promise<Scope> {
+    const scope: Scope = {
+      ...input,
+      id: randomUUID(),
+      createdAt: now.toISOString(),
+      healthCheck: null,
+      autoRollback: false,
+    };
     await this.db.run(
       "INSERT INTO scopes (id, app_id, alias, dokploy_url, kind, dokploy_id, tag_variable, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
       [
@@ -381,6 +413,22 @@ export class Store {
   async getScopeByAlias(appId: string, alias: string): Promise<Scope | undefined> {
     const row = await this.db.get("SELECT * FROM scopes WHERE app_id = ? AND alias = ?", [appId, alias]);
     return row ? toScope(row) : undefined;
+  }
+
+  /** Changes only the settings given. */
+  async updateScopeSettings(
+    id: string,
+    settings: { healthCheck?: HealthCheck | null; autoRollback?: boolean },
+  ): Promise<void> {
+    if (settings.healthCheck !== undefined) {
+      await this.db.run("UPDATE scopes SET health_check = ? WHERE id = ?", [
+        settings.healthCheck ? JSON.stringify(settings.healthCheck) : null,
+        id,
+      ]);
+    }
+    if (settings.autoRollback !== undefined) {
+      await this.db.run("UPDATE scopes SET auto_rollback = ? WHERE id = ?", [settings.autoRollback ? 1 : 0, id]);
+    }
   }
 
   async deleteScope(id: string): Promise<void> {
@@ -845,6 +893,7 @@ export class Store {
       status: DeployStatus;
       error?: string;
       requestedBy?: string | null;
+      rollbackOf?: string | null;
     },
     now: Date,
   ): Promise<DeployRecord> {
@@ -852,8 +901,8 @@ export class Store {
     const ts = now.toISOString();
     await this.db.run(
       `INSERT INTO deploys (id, repo, tag, sha, scope_id, scope_alias, status, error, ci_passed_at, finished_at,
-         requested_by, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         requested_by, rollback_of, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         normalizeRepo(input.repo),
@@ -867,6 +916,7 @@ export class Store {
         input.status === "ci_passed" ? ts : null,
         isTerminal(input.status) ? ts : null,
         input.requestedBy ?? null,
+        input.rollbackOf ?? null,
         ts,
         ts,
       ],
@@ -917,18 +967,20 @@ export class Store {
     id: string,
     to: DeployStatus,
     now: Date,
-    extra: { error?: string; deployStartedAt?: Date } = {},
+    extra: { error?: string; deployStartedAt?: Date; healthStatus?: HealthStatus } = {},
   ): Promise<DeployRecord | undefined> {
     const current = await this.getDeploy(id);
     if (!current || !canTransition(current.status, to)) return undefined;
     const result = await this.db.run(
       `UPDATE deploys SET status = ?, error = ?, deploy_started_at = COALESCE(?, deploy_started_at),
+         health_status = COALESCE(?, health_status),
          ci_passed_at = COALESCE(?, ci_passed_at), finished_at = COALESCE(?, finished_at), updated_at = ?
        WHERE id = ? AND status = ?`,
       [
         to,
         extra.error ?? null,
         extra.deployStartedAt?.toISOString() ?? null,
+        extra.healthStatus ?? null,
         to === "ci_passed" ? now.toISOString() : null,
         isTerminal(to) ? now.toISOString() : null,
         now.toISOString(),
@@ -937,6 +989,19 @@ export class Store {
       ],
     );
     return result.changes === 1 ? this.getDeploy(id) : undefined;
+  }
+
+  /**
+   * Takes the next health check of a `deploying` deploy: counts the attempt and stamps when it started. Returns false
+   * when another replica took it first (the count no longer matches), so each attempt runs once.
+   */
+  async claimHealthAttempt(id: string, attemptsSoFar: number, now: Date): Promise<boolean> {
+    const { changes } = await this.db.run(
+      `UPDATE deploys SET health_status = 'checking', health_attempts = ?, health_checked_at = ?, updated_at = ?
+       WHERE id = ? AND status = 'deploying' AND health_attempts = ?`,
+      [attemptsSoFar + 1, now.toISOString(), now.toISOString(), id, attemptsSoFar],
+    );
+    return changes === 1;
   }
 
   /**

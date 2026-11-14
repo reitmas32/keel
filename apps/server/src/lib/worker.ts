@@ -1,3 +1,4 @@
+import type { HealthCheck } from "@keel/shared";
 import type { DokployClient, DokployDeploymentStatus, DokployTarget } from "./dokploy";
 import { logger } from "./log";
 import { metrics } from "./metrics";
@@ -13,7 +14,37 @@ export interface WorkerOptions {
   log?: (message: string, fields?: Record<string, unknown>) => void;
   /** Where state changes are announced. Without one the worker stays quiet. */
   notifier?: Notifier;
+  /** Calls a scope's health check. Defaults to an HTTP GET (see `probeHealth`). */
+  probe?: HealthProbe;
 }
+
+export interface ProbeResult {
+  ok: boolean;
+  /** Why it failed, for the deploy's error: the status it answered, a timeout, a refused connection. */
+  reason?: string;
+}
+export type HealthProbe = (check: HealthCheck) => Promise<ProbeResult>;
+
+/** Who asks for the deploys keel creates on its own. */
+export const ROLLBACK_ACTOR = "keel (rollback automático)";
+
+/** `GET check.url`: healthy when it answers `expectedStatus`, or any 2xx without one, within the timeout. */
+export const probeHealth: HealthProbe = async (check) => {
+  try {
+    const response = await fetch(check.url, {
+      method: "GET",
+      headers: { "user-agent": "keel-health-check" },
+      signal: AbortSignal.timeout(check.timeoutSeconds * 1000),
+    });
+    // Nothing reads the body; drop it so the connection is released.
+    await response.body?.cancel().catch(() => {});
+    const ok = check.expectedStatus === null ? response.ok : response.status === check.expectedStatus;
+    return ok ? { ok } : { ok, reason: `respondió ${response.status}` };
+  } catch (error) {
+    const timedOut = (error as Error).name === "TimeoutError";
+    return { ok: false, reason: timedOut ? `no respondió en ${check.timeoutSeconds} s` : "no se pudo conectar" };
+  }
+};
 
 const minutes = (n: number) => n * 60_000;
 
@@ -29,6 +60,7 @@ export class DeployWorker {
   private readonly now: () => Date;
   private readonly log: (message: string, fields?: Record<string, unknown>) => void;
   private readonly notifier: Notifier | undefined;
+  private readonly probe: HealthProbe;
 
   constructor(
     private readonly store: Store,
@@ -38,6 +70,7 @@ export class DeployWorker {
     this.now = options.now ?? (() => new Date());
     this.log = options.log ?? ((message, fields) => logger.info(message, fields));
     this.notifier = options.notifier;
+    this.probe = options.probe ?? probeHealth;
   }
 
   private announce(event: NotifyEvent, deploy: DeployRecord, extra: Partial<DeployNotification> = {}): void {
@@ -112,7 +145,7 @@ export class DeployWorker {
       });
     } catch (error) {
       metrics.dokployError("deploy");
-      await this.fail(d, (error as Error).message);
+      await this.fail(d, (error as Error).message, scope);
     }
   }
 
@@ -122,6 +155,11 @@ export class DeployWorker {
       const startedAt = new Date(d.deployStartedAt ?? d.updatedAt);
       if (!scope) {
         await this.fail(d, "El scope ya no existe.");
+        continue;
+      }
+      // Dokploy already finished this one: only its health check is pending.
+      if (d.healthStatus === "checking") {
+        await this.checkHealth(d, scope, startedAt);
         continue;
       }
       let status: DokployDeploymentStatus;
@@ -135,32 +173,122 @@ export class DeployWorker {
         status = "running";
       }
       if (status === "done") {
-        await this.succeed(d, startedAt);
+        if (scope.healthCheck?.enabled) await this.checkHealth(d, scope, startedAt);
+        else await this.succeed(d, startedAt);
       } else if (status === "error") {
         await this.fail(
           d,
           message || "Dokploy reportó un error en el deployment. Revisa los logs del servicio en Dokploy.",
+          scope,
         );
       } else if (this.now().getTime() - startedAt.getTime() > minutes(this.options.deployTimeoutMinutes)) {
-        await this.fail(d, `Dokploy no terminó el deployment en ${this.options.deployTimeoutMinutes} min.`);
+        await this.fail(d, `Dokploy no terminó el deployment en ${this.options.deployTimeoutMinutes} min.`, scope);
       }
     }
   }
 
-  private async succeed(d: DeployRecord, startedAt: Date): Promise<void> {
-    const done = await this.store.transition(d.id, "deployed", this.now());
+  /**
+   * One health check of a deploy Dokploy already finished, at most every `intervalSeconds`. The first healthy answer
+   * completes the deploy; after `retries` unhealthy ones it fails (and rolls back, if the scope asks for it).
+   */
+  private async checkHealth(d: DeployRecord, scope: Scope, startedAt: Date): Promise<void> {
+    const check = scope.healthCheck;
+    // The health check was removed while this deploy waited on it: Dokploy's word is enough again.
+    if (!check?.enabled) {
+      await this.succeed(d, startedAt);
+      return;
+    }
+    const last = d.healthCheckedAt ? Date.parse(d.healthCheckedAt) : undefined;
+    if (last !== undefined && this.now().getTime() - last < check.intervalSeconds * 1000) return;
+    // With several replicas, only the one that counts the attempt makes the call.
+    if (!(await this.store.claimHealthAttempt(d.id, d.healthAttempts, this.now()))) return;
+    const attempt = d.healthAttempts + 1;
+    const result = await this.probe(check);
+    metrics.healthCheck(result.ok);
+    if (result.ok) {
+      await this.succeed(d, startedAt, "passed");
+      return;
+    }
+    this.log(`deploy ${d.id}: health check ${attempt}/${check.retries} falló: ${result.reason}`, {
+      deployId: d.id,
+      repo: d.repo,
+      scope: d.scope,
+      attempt,
+    });
+    if (attempt >= check.retries) {
+      await this.fail(
+        d,
+        `El health check de ${scope.alias} falló ${attempt} ${attempt === 1 ? "vez" : "veces"}: ${result.reason ?? "sin respuesta"}.`,
+        scope,
+        "failed",
+      );
+    }
+  }
+
+  private async succeed(d: DeployRecord, startedAt: Date, healthStatus?: "passed"): Promise<void> {
+    const done = await this.store.transition(d.id, "deployed", this.now(), { ...(healthStatus && { healthStatus }) });
     if (!done) return;
     this.log(`deploy ${d.id} completado`, { deployId: d.id, repo: d.repo, scope: d.scope, tag: d.tag });
     metrics.deployFinished("deployed", (this.now().getTime() - startedAt.getTime()) / 1000);
     this.announce("deploy.deployed", done);
   }
 
-  private async fail(d: DeployRecord, error: string): Promise<DeployRecord | undefined> {
-    const failed = await this.store.transition(d.id, "deploy_failed", this.now(), { error });
-    if (!failed) return undefined;
+  /** Fails a deploy. With `scope` (a deploy that reached Dokploy), also starts its automatic rollback. */
+  private async fail(d: DeployRecord, error: string, scope?: Scope, healthStatus?: "failed"): Promise<void> {
+    const failed = await this.store.transition(d.id, "deploy_failed", this.now(), {
+      error,
+      ...(healthStatus && { healthStatus }),
+    });
+    if (!failed) return;
     this.log(`deploy ${d.id} falló: ${error}`, { deployId: d.id, repo: d.repo, scope: d.scope, tag: d.tag });
     metrics.deployFinished("deploy_failed");
     this.announce("deploy.failed", failed);
-    return failed;
+    if (scope?.autoRollback) await this.rollBack(failed, scope);
+  }
+
+  /**
+   * Queues a deploy of the version the scope ran before `failed`. It is born `ci_passed` (that version's CI passed
+   * when it was first deployed) and skips locks, freeze windows and approvals: it only undoes a deploy that already
+   * went through them. A rollback that fails is not rolled back again.
+   */
+  private async rollBack(failed: DeployRecord, scope: Scope): Promise<void> {
+    if (failed.rollbackOf) return;
+    const [previous] = await this.store.listDeploys(
+      { scopeId: scope.id, status: "deployed" },
+      { limit: 1, newestFirst: true },
+    );
+    if (!previous || previous.tag === failed.tag) {
+      this.log(`deploy ${failed.id}: sin versión anterior a la que volver`, { deployId: failed.id });
+      return;
+    }
+    const rollback = await this.store.insertDeploy(
+      {
+        repo: failed.repo,
+        tag: previous.tag,
+        sha: previous.sha,
+        scope,
+        status: "ci_passed",
+        requestedBy: ROLLBACK_ACTOR,
+        rollbackOf: failed.id,
+      },
+      this.now(),
+    );
+    await this.store.recordAudit(
+      {
+        actor: "keel",
+        action: "deploy.rollback",
+        repo: failed.repo,
+        scope: scope.alias,
+        details: { deployId: rollback.id, failedDeployId: failed.id, from: failed.tag, to: previous.tag },
+      },
+      this.now(),
+    );
+    this.log(`deploy ${failed.id}: rollback automático a ${previous.tag}`, {
+      deployId: rollback.id,
+      repo: failed.repo,
+      scope: scope.alias,
+      tag: previous.tag,
+    });
+    this.announce("deploy.rollback", rollback, { detail: `${failed.tag} falló: vuelve a ${previous.tag}.` });
   }
 }

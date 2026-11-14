@@ -25,6 +25,9 @@ CREATE TABLE IF NOT EXISTS scopes (
   dokploy_id   TEXT NOT NULL,
   tag_variable TEXT,
   created_at   TEXT NOT NULL,
+  -- v0.10.0: JSON { enabled, url, expectedStatus, retries, intervalSeconds, timeoutSeconds }; NULL: no health check.
+  health_check TEXT,
+  auto_rollback INTEGER NOT NULL DEFAULT 0,
   UNIQUE (app_id, alias)
 );
 
@@ -51,7 +54,12 @@ CREATE TABLE IF NOT EXISTS deploys (
   finished_at       TEXT,
   requested_by      TEXT,
   created_at        TEXT NOT NULL,
-  updated_at        TEXT NOT NULL
+  updated_at        TEXT NOT NULL,
+  -- v0.10.0: the scope's health check after Dokploy finished, and the failed deploy an automatic rollback undoes.
+  health_status     TEXT,
+  health_attempts   INTEGER NOT NULL DEFAULT 0,
+  health_checked_at TEXT,
+  rollback_of       TEXT
 );
 
 CREATE INDEX IF NOT EXISTS deploys_status ON deploys (status, created_at);
@@ -221,6 +229,21 @@ function migrate(db: DatabaseSync): void {
   }
   // v0.6.0: the API token name that asked for the deploy.
   if (!deployColumns.includes("requested_by")) db.exec("ALTER TABLE deploys ADD COLUMN requested_by TEXT");
+
+  // v0.10.0: health check and automatic rollback per scope.
+  const addColumns = (table: string, columns: Record<string, string>) => {
+    const existing = columnsOf(db, table);
+    for (const [column, definition] of Object.entries(columns)) {
+      if (!existing.includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
+  };
+  addColumns("scopes", { health_check: "TEXT", auto_rollback: "INTEGER NOT NULL DEFAULT 0" });
+  addColumns("deploys", {
+    health_status: "TEXT",
+    health_attempts: "INTEGER NOT NULL DEFAULT 0",
+    health_checked_at: "TEXT",
+    rollback_of: "TEXT",
+  });
 
   const tokenColumns = columnsOf(db, "api_tokens");
   // v0.6.0: tokens belong to a member and can be capped to a role. Tokens from before belong to the bootstrap admin.

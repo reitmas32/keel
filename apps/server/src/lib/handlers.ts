@@ -18,6 +18,7 @@ import {
   type ScopeLockInfo,
   type ScopeSummary,
   type UnlockScopeResponse,
+  updateScopeRequestSchema,
   VERSION_CI_STATUSES,
   type VersionCiStatus,
   type WhoamiResponse,
@@ -33,6 +34,8 @@ import {
   parseGithubRepoUrl,
   resolveDokployService,
   rotateCiToken,
+  scopeSettingsDetails,
+  updateScopeSettings,
 } from "./apps";
 import type { AppContext } from "./context";
 import { recordCiResult, registerVersion, requestDeploy } from "./deploys";
@@ -44,7 +47,10 @@ import { type App, type DeployRecord, normalizeRepo, type Scope, type ScopeLockR
 import { bearerToken } from "./tokens";
 
 /** A deploy as the API returns it: with `service`, the name of `scope` before v0.7.0, for older clients. */
-const toPublic = ({ scopeId: _s, ...deploy }: DeployRecord): Deploy => ({ ...deploy, service: deploy.scope });
+const toPublic = ({ scopeId: _s, healthAttempts: _a, healthCheckedAt: _c, ...deploy }: DeployRecord): Deploy => ({
+  ...deploy,
+  service: deploy.scope,
+});
 
 const toLockInfo = ({ reason, lockedBy, createdAt }: ScopeLockRecord): ScopeLockInfo => ({
   reason,
@@ -106,6 +112,8 @@ async function scopeSummary(ctx: AppContext, s: Scope): Promise<ScopeSummary> {
     current: current ? toPublic(current) : null,
     last: last ? toPublic(last) : null,
     lock: lock ? toLockInfo(lock) : null,
+    healthCheck: s.healthCheck,
+    autoRollback: s.autoRollback,
   };
 }
 
@@ -332,6 +340,18 @@ export const handlers = {
         { kind: scope.kind, dokployId: scope.dokployId, tagVariable: scope.tagVariable },
       );
       return Response.json(await scopeSummary(ctx, scope), { status: 201 });
+    }),
+
+  /** `PATCH /repos/:owner/:name/scopes/:alias`: the scope's health check and automatic rollback. */
+  updateScope: (ctx: AppContext, request: Request, owner: string, name: string, alias: string) =>
+    authed(ctx, request, async (caller) => {
+      const target = { repo: repoOf(owner, name), scope: alias };
+      requireRoleOn(caller, "maintainer", "configurar scopes", target);
+      const scope = await findScope(ctx, await findApp(ctx, owner, name), alias);
+      const body = await parseBody(request, updateScopeRequestSchema);
+      const updated = await updateScopeSettings(ctx.store, scope, body);
+      await audit(ctx, caller, "scope.update", target, scopeSettingsDetails(body));
+      return Response.json(await scopeSummary(ctx, updated));
     }),
 
   /** `GET /dokploy/services`: Dokploy's applications and composes, and which keel scope points at each. */
