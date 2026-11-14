@@ -200,7 +200,7 @@ En Dokploy: **Project → Create Service → Compose**. Ponle de nombre `keel` (
 ```yaml
 services:
   keel:
-    image: docker.io/getfoundathyon/keel-api:v0.10.0
+    image: docker.io/getfoundathyon/keel-api:v0.11.0
     restart: unless-stopped
     environment:
       DOKPLOY_URL: ${DOKPLOY_URL:?URL de tu Dokploy, p.ej. https://dokploy.konectus.internal}
@@ -226,7 +226,7 @@ volumes:
 
 El archivo del repo trae además, comentado, un servicio `postgres` de ejemplo.
 
-- Usa una versión fija (`:v0.10.0`) en lugar de `:latest`, así un redeploy no cambia de versión sin que lo decidas. Para actualizar keel, cambia la tag y redespliega.
+- Usa una versión fija (`:v0.11.0`) en lugar de `:latest`, así un redeploy no cambia de versión sin que lo decidas. Para actualizar keel, cambia la tag y redespliega.
 - `keel-data` es un volumen con nombre: la base (apps, scopes, tokens de CI e historial) sobrevive a redeploys y actualizaciones de la imagen.
 - `expose` solo abre el puerto 3000 dentro de la red de Docker; el acceso desde fuera lo da el dominio del paso 3. No publiques el puerto con `ports`.
 
