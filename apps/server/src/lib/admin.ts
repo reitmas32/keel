@@ -3,8 +3,9 @@ import { type AuditActor, actorOf, baseRole, isAdmin, type Principal, requireRol
 import { createApiToken } from "./api-auth";
 import { addScope, createApp, rotateCiToken } from "./apps";
 import { ApiError } from "./errors";
+import { maskUrl, parseChannelInput } from "./notify";
 import type { Target } from "./roles";
-import type { App, Scope, Store } from "./store";
+import type { App, NotificationChannel, Scope, Store } from "./store";
 
 // What the admin's server actions do, with the role check and the audit entry, so they can be tested without Next.
 // Every function throws ApiError (403 for a role that can't, 404 for something missing).
@@ -181,3 +182,55 @@ export async function revokeTokenAs(store: Store, p: Principal, tokenId: string,
 /** The roles `p` may cap a new token at: up to its own base role. */
 export const tokenRoleChoices = (p: Principal, roles: readonly Role[]) =>
   roles.filter((r) => p.member && roleAtLeast(p.member.role, r));
+
+// --- notification channels (global admins only) ---
+
+/** What the audit log keeps of a channel: never its URL or secret, only a masked hint. */
+const channelDetails = (c: NotificationChannel) => ({
+  channelId: c.id,
+  name: c.name,
+  kind: c.kind,
+  url: maskUrl(c.url),
+  events: c.events,
+  repo: c.repoPattern,
+  scope: c.scopePattern,
+});
+
+export async function createChannelAs(
+  store: Store,
+  p: Principal,
+  input: Parameters<typeof parseChannelInput>[0],
+  now: Date,
+): Promise<NotificationChannel> {
+  requireAdmin(p, "configurar notificaciones");
+  const channel = await store.createChannel(parseChannelInput(input), now);
+  await record(store, actorOf(p), "channel.create", {}, channelDetails(channel), now);
+  return channel;
+}
+
+async function channelOr404(store: Store, id: string): Promise<NotificationChannel> {
+  const channel = await store.getChannel(id);
+  if (!channel) throw new ApiError(404, "Canal no encontrado.");
+  return channel;
+}
+
+export async function setChannelEnabledAs(
+  store: Store,
+  p: Principal,
+  id: string,
+  enabled: boolean,
+  now: Date,
+): Promise<void> {
+  requireAdmin(p, "configurar notificaciones");
+  const channel = await channelOr404(store, id);
+  if (channel.enabled === enabled) return;
+  await store.setChannelEnabled(id, enabled);
+  await record(store, actorOf(p), enabled ? "channel.enable" : "channel.disable", {}, channelDetails(channel), now);
+}
+
+export async function deleteChannelAs(store: Store, p: Principal, id: string, now: Date): Promise<void> {
+  requireAdmin(p, "configurar notificaciones");
+  const channel = await channelOr404(store, id);
+  await store.deleteChannel(id);
+  await record(store, actorOf(p), "channel.delete", {}, channelDetails(channel), now);
+}

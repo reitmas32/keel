@@ -3,7 +3,8 @@ export async function register() {
   if (process.env.NEXT_RUNTIME === "nodejs") {
     const { getContext, startWorker } = await import("./lib/context");
     // Open the database at boot so a bad config or an unreachable Postgres shows up in the logs right away.
-    getContext().catch((error) => console.error("[keel] no se pudo abrir la base de datos", error));
+    const { errorFields, logger } = await import("./lib/log");
+    getContext().catch((error) => logger.error("no se pudo abrir la base de datos", errorFields(error)));
     startWorker();
   }
 }

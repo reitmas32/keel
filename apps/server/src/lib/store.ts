@@ -123,6 +123,38 @@ export interface ScopeLockRecord {
   createdAt: string;
 }
 
+export const CHANNEL_KINDS = ["slack", "discord", "webhook"] as const;
+export type ChannelKind = (typeof CHANNEL_KINDS)[number];
+
+/** Where keel sends notifications. `url` and `secret` never leave the server unmasked. */
+export interface NotificationChannel {
+  id: string;
+  name: string;
+  kind: ChannelKind;
+  url: string;
+  /** Generic webhooks only: signs the body. */
+  secret: string | null;
+  /** Event names, or `["*"]` for all. */
+  events: string[];
+  repoPattern: string;
+  scopePattern: string;
+  enabled: boolean;
+  createdAt: string;
+}
+
+const toChannel = (r: Row): NotificationChannel => ({
+  id: r.id as string,
+  name: r.name as string,
+  kind: r.kind as ChannelKind,
+  url: r.url as string,
+  secret: (r.secret as string | null) ?? null,
+  events: (r.events as string).split(",").filter(Boolean),
+  repoPattern: r.repo_pattern as string,
+  scopePattern: r.scope_pattern as string,
+  enabled: Number(r.enabled) === 1,
+  createdAt: r.created_at as string,
+});
+
 const toApp = (r: Row): App => ({
   id: r.id as string,
   name: r.name as string,
@@ -643,6 +675,48 @@ export class Store {
       scopes: scopes.map((r) => r.scope as string),
       actors: actors.map((r) => r.actor as string),
     };
+  }
+
+  // --- notification channels ---
+
+  async createChannel(
+    input: Omit<NotificationChannel, "id" | "createdAt" | "enabled">,
+    now: Date,
+  ): Promise<NotificationChannel> {
+    const id = randomUUID();
+    await this.db.run(
+      `INSERT INTO notification_channels (id, name, kind, url, secret, events, repo_pattern, scope_pattern, enabled, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+      [
+        id,
+        input.name,
+        input.kind,
+        input.url,
+        input.secret,
+        input.events.join(","),
+        input.repoPattern,
+        input.scopePattern,
+        now.toISOString(),
+      ],
+    );
+    return (await this.getChannel(id)) as NotificationChannel;
+  }
+
+  async listChannels(): Promise<NotificationChannel[]> {
+    return (await this.db.all("SELECT * FROM notification_channels ORDER BY created_at, name")).map(toChannel);
+  }
+
+  async getChannel(id: string): Promise<NotificationChannel | undefined> {
+    const row = await this.db.get("SELECT * FROM notification_channels WHERE id = ?", [id]);
+    return row ? toChannel(row) : undefined;
+  }
+
+  async setChannelEnabled(id: string, enabled: boolean): Promise<void> {
+    await this.db.run("UPDATE notification_channels SET enabled = ? WHERE id = ?", [enabled ? 1 : 0, id]);
+  }
+
+  async deleteChannel(id: string): Promise<void> {
+    await this.db.run("DELETE FROM notification_channels WHERE id = ?", [id]);
   }
 
   // --- CI results ---

@@ -38,6 +38,7 @@ import type { AppContext } from "./context";
 import { recordCiResult, registerVersion, requestDeploy } from "./deploys";
 import { DokployError } from "./dokploy";
 import { ApiError } from "./errors";
+import { errorFields, logger } from "./log";
 import { type Target, tokenRole } from "./roles";
 import { type App, type DeployRecord, normalizeRepo, type Scope, type ScopeLockRecord } from "./store";
 import { bearerToken } from "./tokens";
@@ -161,7 +162,7 @@ export async function handle(fn: () => Promise<Response> | Response): Promise<Re
     if (error instanceof DokployError || (error instanceof Error && error.name === "DokployError")) {
       return Response.json({ error: error.message }, { status: 502 });
     }
-    console.error("[keel] error no controlado", error);
+    logger.error("error no controlado", errorFields(error));
     return Response.json({ error: "Error interno." }, { status: 500 });
   }
 }
@@ -234,6 +235,9 @@ export const handlers = {
         },
         ctx.now(),
       );
+      for (const d of updated) {
+        if (d.status === "ci_failed") ctx.notifier.notify({ event: "deploy.ci_failed", deploy: d });
+      }
       return Response.json({ ok: true, updated: updated.map(toPublic) });
     }),
 

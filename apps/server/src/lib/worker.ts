@@ -1,4 +1,7 @@
 import type { DokployClient, DokployDeploymentStatus, DokployTarget } from "./dokploy";
+import { logger } from "./log";
+import { metrics } from "./metrics";
+import type { DeployNotification, Notifier, NotifyEvent } from "./notify";
 import type { DeployRecord, Scope, Store } from "./store";
 
 export interface WorkerOptions {
@@ -7,7 +10,9 @@ export interface WorkerOptions {
   /** How long Dokploy may take to finish a deployment before it's marked failed. */
   deployTimeoutMinutes: number;
   now?: () => Date;
-  log?: (message: string) => void;
+  log?: (message: string, fields?: Record<string, unknown>) => void;
+  /** Where state changes are announced. Without one the worker stays quiet. */
+  notifier?: Notifier;
 }
 
 const minutes = (n: number) => n * 60_000;
@@ -22,7 +27,8 @@ const targetOf = (scope: Scope): DokployTarget => ({
 export class DeployWorker {
   private running = false;
   private readonly now: () => Date;
-  private readonly log: (message: string) => void;
+  private readonly log: (message: string, fields?: Record<string, unknown>) => void;
+  private readonly notifier: Notifier | undefined;
 
   constructor(
     private readonly store: Store,
@@ -30,19 +36,27 @@ export class DeployWorker {
     private readonly options: WorkerOptions,
   ) {
     this.now = options.now ?? (() => new Date());
-    this.log = options.log ?? ((m) => console.log(`[keel] ${m}`));
+    this.log = options.log ?? ((message, fields) => logger.info(message, fields));
+    this.notifier = options.notifier;
+  }
+
+  private announce(event: NotifyEvent, deploy: DeployRecord, extra: Partial<DeployNotification> = {}): void {
+    this.notifier?.notify({ event, deploy, ...extra });
   }
 
   async tick(): Promise<void> {
     if (this.running) return;
     this.running = true;
+    let ok = false;
     try {
       await this.expireWaiting();
       // Check first so a finished deploy frees its scope for the next queued one in the same tick.
       await this.checkDeploying();
       await this.startPassed();
+      ok = true;
     } finally {
       this.running = false;
+      metrics.workerTick(ok, this.now());
     }
   }
 
@@ -61,7 +75,11 @@ export class DeployWorker {
       const expired = await this.store.transition(d.id, "expired", this.now(), {
         error: `No llegó el resultado del CI en ${this.options.ciExpiryMinutes} min.`,
       });
-      if (expired) this.log(`deploy ${d.id} expirado`);
+      if (expired) {
+        this.log(`deploy ${d.id} expirado`, { deployId: d.id, repo: d.repo, scope: d.scope, tag: d.tag });
+        metrics.deployFinished("expired");
+        this.announce("deploy.expired", expired);
+      }
     }
   }
 
@@ -86,8 +104,14 @@ export class DeployWorker {
     }
     try {
       const change = await this.dokploy.deploy(targetOf(scope), d.tag);
-      this.log(`deploy ${d.id}: ${scope.alias} → ${change}`);
+      this.log(`deploy ${d.id}: ${scope.alias} → ${change}`, {
+        deployId: d.id,
+        repo: d.repo,
+        scope: d.scope,
+        tag: d.tag,
+      });
     } catch (error) {
+      metrics.dokployError("deploy");
       await this.fail(d, (error as Error).message);
     }
   }
@@ -106,11 +130,12 @@ export class DeployWorker {
         ({ status, message } = await this.dokploy.latestDeploymentStatus(targetOf(scope), startedAt));
       } catch (error) {
         // Transient: keep polling until the timeout below decides.
-        this.log(`deploy ${d.id}: no se pudo consultar Dokploy: ${(error as Error).message}`);
+        metrics.dokployError("status");
+        this.log(`deploy ${d.id}: no se pudo consultar Dokploy: ${(error as Error).message}`, { deployId: d.id });
         status = "running";
       }
       if (status === "done") {
-        if (await this.store.transition(d.id, "deployed", this.now())) this.log(`deploy ${d.id} completado`);
+        await this.succeed(d, startedAt);
       } else if (status === "error") {
         await this.fail(
           d,
@@ -122,9 +147,20 @@ export class DeployWorker {
     }
   }
 
-  private async fail(d: DeployRecord, error: string): Promise<void> {
-    if (await this.store.transition(d.id, "deploy_failed", this.now(), { error })) {
-      this.log(`deploy ${d.id} falló: ${error}`);
-    }
+  private async succeed(d: DeployRecord, startedAt: Date): Promise<void> {
+    const done = await this.store.transition(d.id, "deployed", this.now());
+    if (!done) return;
+    this.log(`deploy ${d.id} completado`, { deployId: d.id, repo: d.repo, scope: d.scope, tag: d.tag });
+    metrics.deployFinished("deployed", (this.now().getTime() - startedAt.getTime()) / 1000);
+    this.announce("deploy.deployed", done);
+  }
+
+  private async fail(d: DeployRecord, error: string): Promise<DeployRecord | undefined> {
+    const failed = await this.store.transition(d.id, "deploy_failed", this.now(), { error });
+    if (!failed) return undefined;
+    this.log(`deploy ${d.id} falló: ${error}`, { deployId: d.id, repo: d.repo, scope: d.scope, tag: d.tag });
+    metrics.deployFinished("deploy_failed");
+    this.announce("deploy.failed", failed);
+    return failed;
   }
 }

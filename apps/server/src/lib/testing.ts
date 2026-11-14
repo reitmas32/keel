@@ -12,6 +12,7 @@ import {
   type DokployTarget,
 } from "./dokploy";
 import type { Env } from "./env";
+import type { DeployNotification, Notifier } from "./notify";
 import { type Member, Store } from "./store";
 import { DeployWorker } from "./worker";
 
@@ -111,6 +112,18 @@ export class FakeDokploy implements DokployClient {
   }
 }
 
+/** Keeps what it was asked to notify instead of calling any webhook. */
+export class RecordingNotifier implements Notifier {
+  sent: DeployNotification[] = [];
+  notify(notification: DeployNotification) {
+    this.sent.push(notification);
+  }
+  /** The events notified so far, in order. */
+  get events() {
+    return this.sent.map((n) => n.event);
+  }
+}
+
 export async function createTestContext() {
   let now = new Date("2026-10-26T12:00:00Z");
   const clock = {
@@ -122,11 +135,13 @@ export async function createTestContext() {
   const { db, replica } = await openTestDb();
   const store = new Store(db);
   const dokploy = new FakeDokploy();
+  const notifier = new RecordingNotifier();
   const worker = new DeployWorker(store, dokploy, {
     ciExpiryMinutes: 60,
     deployTimeoutMinutes: 15,
     now: clock.now,
     log: () => {},
+    notifier,
   });
   const { app, ciToken } = await createApp(
     store,
@@ -143,8 +158,8 @@ export async function createTestContext() {
     clock.now(),
   );
   const env = { KEEL_API_AUTH: "optional", KEEL_ANONYMOUS_ROLE: "deployer" } as Env;
-  const ctx = { env, store, dokploy, worker, now: clock.now } as unknown as AppContext;
-  return { ctx, env, db, replica, store, dokploy, worker, clock, app, scope, ciToken };
+  const ctx = { env, store, dokploy, worker, notifier, now: clock.now } as unknown as AppContext;
+  return { ctx, env, db, replica, store, dokploy, worker, notifier, clock, app, scope, ciToken };
 }
 
 /** A request to an `/api` route, with an optional query string (`?a=b`), body and headers. */

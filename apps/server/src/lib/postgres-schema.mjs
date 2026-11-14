@@ -229,6 +229,25 @@ export const POSTGRES_MIGRATIONS = [
       renameConstraints("member_grants", "member_grants", "member_grants", { service_pattern: "scope_pattern" }),
     ],
   },
+  {
+    version: 4,
+    name: "canales de notificación",
+    statements: [
+      // `url` (and `secret`) are stored as given: keel needs them to call the webhook. The admin only shows them masked.
+      `CREATE TABLE IF NOT EXISTS notification_channels (
+        id            ${TEXT} PRIMARY KEY,
+        name          ${TEXT} NOT NULL,
+        kind          ${TEXT} NOT NULL,
+        url           ${TEXT} NOT NULL,
+        secret        ${TEXT},
+        events        ${TEXT} NOT NULL DEFAULT '*',
+        repo_pattern  ${TEXT} NOT NULL DEFAULT '*',
+        scope_pattern ${TEXT} NOT NULL DEFAULT '*',
+        enabled       INTEGER NOT NULL DEFAULT 1,
+        created_at    ${TEXT} NOT NULL
+      )`,
+    ],
+  },
 ];
 
 /**
@@ -257,6 +276,7 @@ export const TABLES = [
   "api_tokens",
   "scope_locks",
   "audit_log",
+  "notification_channels",
 ];
 
 /**

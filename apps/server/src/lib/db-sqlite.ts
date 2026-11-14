@@ -142,6 +142,20 @@ CREATE TABLE IF NOT EXISTS audit_log (
 
 CREATE INDEX IF NOT EXISTS audit_log_at ON audit_log (at);
 CREATE INDEX IF NOT EXISTS audit_log_repo ON audit_log (repo, at);
+
+-- v0.10.0: where keel sends deploy notifications (Slack, Discord or a generic webhook). The URL is a secret.
+CREATE TABLE IF NOT EXISTS notification_channels (
+  id            TEXT PRIMARY KEY,
+  name          TEXT NOT NULL,
+  kind          TEXT NOT NULL,
+  url           TEXT NOT NULL,
+  secret        TEXT,
+  events        TEXT NOT NULL DEFAULT '*',
+  repo_pattern  TEXT NOT NULL DEFAULT '*',
+  scope_pattern TEXT NOT NULL DEFAULT '*',
+  enabled       INTEGER NOT NULL DEFAULT 1,
+  created_at    TEXT NOT NULL
+);
 `;
 
 const tableExists = (db: DatabaseSync, table: string) =>

@@ -6,6 +6,7 @@ import { type ReactNode, useId, useRef, useState } from "react";
 import {
   IconApps,
   IconAudit,
+  IconBell,
   IconCheck,
   IconCopy,
   IconKey,
@@ -20,6 +21,7 @@ const NAV = [
   { href: "/apps", label: "Apps", icon: <IconApps /> },
   { href: "/tokens", label: "Tokens de API", icon: <IconKey /> },
   { href: "/members", label: "Miembros", icon: <IconUsers />, admin: true },
+  { href: "/notifications", label: "Notificaciones", icon: <IconBell />, admin: true },
   { href: "/audit", label: "Auditoría", icon: <IconAudit />, admin: true },
 ];
 
