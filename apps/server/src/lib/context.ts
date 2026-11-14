@@ -1,3 +1,4 @@
+import { type AccountsClient, accountsConfig, HttpAccountsClient } from "./accounts";
 import { openDb } from "./db";
 import { type DokployClient, HttpDokployClient } from "./dokploy";
 import { type Env, loadEnv } from "./env";
@@ -12,6 +13,8 @@ export interface AppContext {
   dokploy: DokployClient;
   worker: DeployWorker;
   notifier: Notifier;
+  /** Null unless ACCOUNTS_URL, ACCOUNTS_PUBLISHABLE_KEY and ACCOUNTS_APP_ID are set. */
+  accounts: AccountsClient | null;
   now: () => Date;
 }
 
@@ -35,7 +38,9 @@ async function createContext(): Promise<AppContext> {
     approvalExpiryMinutes: env.KEEL_APPROVAL_EXPIRY_MINUTES,
     notifier,
   });
-  return { env, store, dokploy, worker, notifier, now: () => new Date() };
+  const accountsSettings = accountsConfig(env);
+  const accounts = accountsSettings ? new HttpAccountsClient(accountsSettings) : null;
+  return { env, store, dokploy, worker, notifier, accounts, now: () => new Date() };
 }
 
 export function getContext(): Promise<AppContext> {
