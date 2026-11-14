@@ -278,6 +278,27 @@ async function channelOr404(store: Store, id: string): Promise<NotificationChann
   return channel;
 }
 
+/**
+ * Edits a channel. An empty `url` keeps the current one, and so does an empty `secret` while the channel stays a
+ * generic webhook: the admin only ever sees them masked, so it cannot send them back.
+ */
+export async function updateChannelAs(
+  store: Store,
+  p: Principal,
+  id: string,
+  input: Parameters<typeof parseChannelInput>[0],
+  now: Date,
+): Promise<NotificationChannel> {
+  requireAdmin(p, "configurar notificaciones");
+  const current = await channelOr404(store, id);
+  const parsed = parseChannelInput({ ...input, url: input.url.trim() || current.url });
+  if (parsed.kind === "webhook" && !input.secret?.trim()) parsed.secret = current.secret;
+  await store.updateChannel(id, parsed);
+  const channel = (await store.getChannel(id)) as NotificationChannel;
+  await record(store, actorOf(p), "channel.update", {}, channelDetails(channel), now);
+  return channel;
+}
+
 export async function setChannelEnabledAs(
   store: Store,
   p: Principal,
@@ -336,6 +357,22 @@ export async function createFreezeAs(
 async function freezeOr404(store: Store, id: string): Promise<FreezeWindow> {
   const window = await store.getFreeze(id);
   if (!window) throw new ApiError(404, "Ventana no encontrada.");
+  return window;
+}
+
+/** Edits a window's name, schedule, time zone or scopes. Its level (organization or app) never changes. */
+export async function updateFreezeAs(
+  store: Store,
+  p: Principal,
+  id: string,
+  input: FreezeInput,
+  now: Date,
+): Promise<FreezeWindow> {
+  const current = await freezeOr404(store, id);
+  const target = await freezeTarget(store, p, current.appId, "configurar ventanas de congelamiento");
+  await store.updateFreeze(id, parseFreezeInput(input));
+  const window = (await store.getFreeze(id)) as FreezeWindow;
+  await record(store, actorOf(p), "freeze.update", target ?? {}, freezeDetails(window), now);
   return window;
 }
 

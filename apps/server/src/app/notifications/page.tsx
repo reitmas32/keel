@@ -1,123 +1,161 @@
 import { getContext } from "@/lib/context";
-import { formatDate } from "@/lib/format";
-import { ALL_EVENTS, EVENT_LABELS, envChannels, maskUrl, NOTIFY_EVENTS, type NotifyEvent } from "@/lib/notify";
-import { IconBell, IconTrash } from "../icons";
+import { EVENT_LABELS, envChannels, maskUrl, NOTIFY_EVENTS, type NotifyEvent } from "@/lib/notify";
+import type { NotificationChannel } from "@/lib/store";
+import { IconBell } from "../icons";
 import { requireRole } from "../session";
-import { Card, EmptyState, Page, PageHeader, StatusBadge } from "../ui";
-import { ConfirmButton } from "../ui-client";
-import { deleteChannelAction, toggleChannelAction } from "./actions";
-import { CreateChannelForm, TestChannelButton } from "./components";
+import { EmptyState, Page, PageHeader, StatusBadge, When } from "../ui";
+import { toggleChannelAction } from "./actions";
+import { ChannelDrawer, type EditableChannel, TestChannelButton } from "./components";
+import { type ChannelKindName, ChannelLogo, KIND_LABEL } from "./logo";
+import { EVENT_PRESETS, presetOf } from "./presets";
 
-const KIND_LABEL = { slack: "Slack", discord: "Discord", webhook: "Webhook" } as const;
+const ENV_VAR: Record<ChannelKindName, string> = {
+  slack: "KEEL_SLACK_WEBHOOK_URL",
+  discord: "KEEL_DISCORD_WEBHOOK_URL",
+  webhook: "KEEL_WEBHOOK_URL",
+};
 
-const eventsLabel = (events: string[]) =>
-  events.includes(ALL_EVENTS) ? "Todos" : events.map((e) => EVENT_LABELS[e as NotifyEvent] ?? e).join(", ");
+const FAILURES: readonly string[] = EVENT_PRESETS.find((p) => p.id === "failures")?.events ?? [];
+
+/** Failures read red, approvals amber, a finished deploy green. */
+function eventTone(event: string): string {
+  if (event === "deploy.deployed") return "event-chip-done";
+  if (FAILURES.includes(event)) return "event-chip-error";
+  return "event-chip-running";
+}
+
+/** A channel's events as chips: the preset's name when they match one, the events one by one otherwise. */
+function EventChips({ events }: { events: string[] }) {
+  const preset = EVENT_PRESETS.find((p) => p.id === presetOf(events));
+  if (preset?.id === "all") return <span className="event-chip">Todos los eventos</span>;
+  if (preset) {
+    return (
+      <span className={`event-chip ${eventTone(preset.events[0])}`}>
+        {preset.label} ({preset.events.length})
+      </span>
+    );
+  }
+  return (
+    <>
+      {events.map((e) => (
+        <span key={e} className={`event-chip ${eventTone(e)}`}>
+          {EVENT_LABELS[e as NotifyEvent] ?? e}
+        </span>
+      ))}
+    </>
+  );
+}
+
+function AppliesTo({ repo, scope }: { repo: string; scope: string }) {
+  return (
+    <div className="channel-scope">
+      <span className="channel-section-label">Aplica a</span>
+      <span>
+        {repo === "*" ? <span className="muted">todos los repos</span> : <code>{repo}</code>}
+        <span className="muted"> · </span>
+        {scope === "*" ? <span className="muted">todos los scopes</span> : <code>{scope}</code>}
+      </span>
+    </div>
+  );
+}
+
+const editable = (c: NotificationChannel): EditableChannel => ({
+  id: c.id,
+  name: c.name,
+  kind: c.kind,
+  maskedUrl: maskUrl(c.url),
+  signed: Boolean(c.secret),
+  events: c.events,
+  repoPattern: c.repoPattern,
+  scopePattern: c.scopePattern,
+});
 
 export default async function NotificationsPage() {
   await requireRole("admin", undefined, { redirect: true });
   const { store, env } = await getContext();
   const channels = await store.listChannels();
   const fromEnv = envChannels(env);
+  const events = NOTIFY_EVENTS.map((name) => ({ name, label: EVENT_LABELS[name] }));
 
   return (
     <Page crumbs={[{ label: "Notificaciones" }]}>
       <PageHeader
         title="Notificaciones"
-        description="keel avisa de cada deploy que termina, falla, expira, se revierte o espera aprobación. Las URLs de webhook son secretos: aquí solo se ven enmascaradas."
+        description="Dónde avisa keel cuando un deploy termina, falla, expira, se revierte o espera aprobación. Las URLs de webhook son secretos: aquí solo se ven enmascaradas."
+        actions={<ChannelDrawer events={events} />}
       />
-      <div className="stack">
-        <Card
-          title="Canales"
-          description="Slack, Discord o cualquier servicio que acepte un POST con JSON. Cada canal puede limitarse a ciertos repos, scopes y eventos."
-          footer={<CreateChannelForm events={NOTIFY_EVENTS.map((name) => ({ name, label: EVENT_LABELS[name] }))} />}
-        >
-          {channels.length === 0 ? (
-            <EmptyState icon={<IconBell />} title="Sin canales">
-              Agrega uno abajo para recibir los avisos de deploys en Slack, Discord o tu propio servicio.
-            </EmptyState>
-          ) : (
-            <div className="table-wrap">
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Canal</th>
-                    <th>Webhook</th>
-                    <th>Aplica a</th>
-                    <th>Eventos</th>
-                    <th>Estado</th>
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {channels.map((c) => (
-                    <tr key={c.id}>
-                      <td>
-                        {c.name}
-                        <div className="sub">
-                          {KIND_LABEL[c.kind]} · {formatDate(c.createdAt)}
-                        </div>
-                      </td>
-                      <td>
-                        <code>{maskUrl(c.url)}</code>
-                        {c.secret && <div className="sub">firmado</div>}
-                      </td>
-                      <td>
-                        <code>{c.repoPattern}</code> / <code>{c.scopePattern}</code>
-                      </td>
-                      <td className="small">{eventsLabel(c.events)}</td>
-                      <td>
-                        <StatusBadge tone={c.enabled ? "done" : "idle"}>{c.enabled ? "Activo" : "Pausado"}</StatusBadge>
-                      </td>
-                      <td>
-                        <div className="row-actions">
-                          <TestChannelButton channelId={c.id} />
-                          <form action={toggleChannelAction}>
-                            <input type="hidden" name="channelId" value={c.id} />
-                            <input type="hidden" name="enabled" value={c.enabled ? "0" : "1"} />
-                            <button type="submit" className="btn btn-outline btn-sm">
-                              {c.enabled ? "Pausar" : "Activar"}
-                            </button>
-                          </form>
-                          <form action={deleteChannelAction}>
-                            <input type="hidden" name="channelId" value={c.id} />
-                            <ConfirmButton message={`¿Eliminar el canal ${c.name}? Deja de recibir notificaciones.`}>
-                              <IconTrash />
-                              Eliminar
-                            </ConfirmButton>
-                          </form>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Card>
-        <Card
-          title="Canales del entorno"
-          description={
-            <>
-              Definidos con <code>KEEL_SLACK_WEBHOOK_URL</code>, <code>KEEL_DISCORD_WEBHOOK_URL</code> y{" "}
-              <code>KEEL_WEBHOOK_URL</code>. Se suman a los de arriba y solo cambian en el Environment del servicio; si
-              la misma URL está en los dos sitios, recibe cada aviso una sola vez.
-            </>
-          }
-        >
-          {fromEnv.length === 0 ? (
-            <EmptyState title="Ninguno configurado" />
-          ) : (
-            <ul className="plain-list">
-              {fromEnv.map((c) => (
-                <li key={c.name}>
-                  {KIND_LABEL[c.kind]} · <code>{maskUrl(c.url)}</code> ·{" "}
-                  <span className="small">{eventsLabel(c.events)}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
-      </div>
+      {channels.length === 0 && fromEnv.length === 0 ? (
+        <div className="card">
+          <EmptyState icon={<IconBell />} title="Sin canales">
+            Agrega uno con «Nuevo canal» para recibir los avisos de deploys en Slack, Discord o tu propio servicio.
+          </EmptyState>
+        </div>
+      ) : (
+        <div className="channel-grid">
+          {channels.map((c) => (
+            <article key={c.id} className={`card channel-card${c.enabled ? "" : " is-paused"}`}>
+              <header className="channel-head">
+                <ChannelLogo kind={c.kind} />
+                <div className="channel-title">
+                  <h2>{c.name}</h2>
+                  <span className="mono muted channel-url">{maskUrl(c.url)}</span>
+                </div>
+                <StatusBadge tone={c.enabled ? "done" : "idle"}>{c.enabled ? "Activo" : "Pausado"}</StatusBadge>
+              </header>
+              <AppliesTo repo={c.repoPattern} scope={c.scopePattern} />
+              <div className="channel-events">
+                <EventChips events={c.events} />
+                {c.secret && <span className="event-chip">Firmado</span>}
+              </div>
+              <footer className="channel-foot">
+                <span className="small muted">
+                  {KIND_LABEL[c.kind]} · <When iso={c.createdAt} />
+                </span>
+                <div className="channel-actions">
+                  <TestChannelButton channelId={c.id} />
+                  <form action={toggleChannelAction}>
+                    <input type="hidden" name="channelId" value={c.id} />
+                    <input type="hidden" name="enabled" value={c.enabled ? "0" : "1"} />
+                    <button type="submit" className="btn btn-ghost btn-sm">
+                      {c.enabled ? "Pausar" : "Activar"}
+                    </button>
+                  </form>
+                  <ChannelDrawer channel={editable(c)} events={events} />
+                </div>
+              </footer>
+            </article>
+          ))}
+          {fromEnv.map((c) => (
+            <article key={c.name} className="card channel-card is-env">
+              <header className="channel-head">
+                <ChannelLogo kind={c.kind} />
+                <div className="channel-title">
+                  <h2>
+                    {KIND_LABEL[c.kind]} <span className="badge badge-outline">ENV</span>
+                  </h2>
+                  <span className="mono muted channel-url">{maskUrl(c.url)}</span>
+                </div>
+              </header>
+              <div className="channel-scope">
+                <span className="channel-section-label">Definido en</span>
+                <code>{ENV_VAR[c.kind]}</code>
+              </div>
+              <div className="channel-events">
+                <EventChips events={c.events} />
+              </div>
+              <footer className="channel-foot">
+                <span className="small muted">Solo cambia en el Environment del servicio</span>
+              </footer>
+            </article>
+          ))}
+        </div>
+      )}
+      {fromEnv.length > 0 && (
+        <p className="small muted channel-note">
+          Los canales <span className="badge badge-outline">ENV</span> se suman a los configurados aquí. Si la misma URL
+          está en los dos sitios, recibe cada aviso una sola vez.
+        </p>
+      )}
     </Page>
   );
 }

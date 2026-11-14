@@ -2,7 +2,8 @@
 
 import { HEALTH_CHECK_LIMITS, type HealthCheck, LOCK_REASON_MAX } from "@keel/shared";
 import Link from "next/link";
-import { useActionState, useEffect, useRef, useState } from "react";
+import { useActionState, useEffect, useId, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { IconLock, IconPlus, IconRefresh } from "../icons";
 import { ConfirmButton, TokenNotice } from "../ui-client";
 import {
@@ -12,7 +13,9 @@ import {
   type FormState,
   lockScopeAction,
   rotateTokenAction,
+  type ScopeSetting,
   setAppApprovalAction,
+  setScopeSettingAction,
   updateScopeAction,
 } from "./actions";
 
@@ -70,17 +73,38 @@ export function CreateAppForm() {
   );
 }
 
-export function AddScopeForm({ appId }: { appId: string }) {
+export function AddScopeForm({
+  appId,
+  compact = false,
+  onLinked,
+}: {
+  appId: string;
+  /** Inside the drawer: one column, no title (the drawer has it). */
+  compact?: boolean;
+  onLinked?: () => void;
+}) {
   const [state, action, pending] = useActionState<FormState, FormData>(addScopeAction.bind(null, appId), {});
   const [url, setUrl] = useState("");
+  const form = useRef<HTMLFormElement>(null);
+  // Only a new result runs this, not a new `onLinked` from a re-render (which would close the drawer again).
+  const linked = useRef(onLinked);
+  linked.current = onLinked;
+  useEffect(() => {
+    if (!state.ok) return;
+    form.current?.reset();
+    setUrl("");
+    linked.current?.();
+  }, [state]);
   const isCompose = /\/services\/compose\//.test(url);
   return (
-    <form action={action} className="form-panel">
-      <div className="form-panel-head">
-        <h3 className="form-panel-title">Vincular un scope</h3>
-        <p className="hint">Copia la URL del servicio desde el dashboard de Dokploy.</p>
-      </div>
-      <div className="form-grid">
+    <form ref={form} action={action} className="form-panel">
+      {!compact && (
+        <div className="form-panel-head">
+          <h3 className="form-panel-title">Vincular un scope</h3>
+          <p className="hint">Copia la URL del servicio desde el dashboard de Dokploy.</p>
+        </div>
+      )}
+      <div className={compact ? "form-stack" : "form-grid"}>
         <div className="field span-3">
           <label className="label" htmlFor="scope-alias">
             Nombre del scope
@@ -447,5 +471,162 @@ export function ApprovalButtons({ appId, deployId, label }: { appId: string; dep
         </form>
       </dialog>
     </div>
+  );
+}
+
+const SETTING_LABEL: Record<ScopeSetting, string> = {
+  healthEnabled: "el health check",
+  autoRollback: "el rollback automático",
+  requireApproval: "la aprobación",
+};
+
+/**
+ * One scope setting changed in place from the scopes table: a switch, or the three-way approval select. On a scope
+ * whose name says `prod` it asks first, so a stray click does not change production.
+ */
+export function InlineScopeSetting({
+  appId,
+  scopeId,
+  alias,
+  setting,
+  value,
+  appRequiresApproval = false,
+  disabledHint,
+}: {
+  appId: string;
+  scopeId: string;
+  alias: string;
+  setting: ScopeSetting;
+  /** "1"/"0" for switches; "", "1" or "0" for the approval. */
+  value: string;
+  appRequiresApproval?: boolean;
+  /** Shown instead of the control when it cannot be switched yet. */
+  disabledHint?: string;
+}) {
+  const [state, action, pending] = useActionState<FormState, FormData>(
+    setScopeSettingAction.bind(null, appId, scopeId, setting),
+    {},
+  );
+  const form = useRef<HTMLFormElement>(null);
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [next, setNext] = useState(value);
+  const id = useId();
+  const confirm = alias.includes("prod");
+  useEffect(() => setNext(value), [value]);
+
+  const change = (to: string) => {
+    // Render the hidden input with the new value before submitting, or the form would send the old one.
+    flushSync(() => setNext(to));
+    if (confirm) dialog.current?.showModal();
+    else form.current?.requestSubmit();
+  };
+  const describe = (v: string) =>
+    setting === "requireApproval"
+      ? v === ""
+        ? `como la app (${appRequiresApproval ? "obligatoria" : "no"})`
+        : v === "1"
+          ? "obligatoria"
+          : "no"
+      : v === "1"
+        ? "activado"
+        : "apagado";
+
+  if (disabledHint) return <span className="muted small">{disabledHint}</span>;
+  return (
+    <form ref={form} action={action} className="inline-setting">
+      <input type="hidden" name="value" value={next} />
+      {setting === "requireApproval" ? (
+        <select
+          className="input input-sm"
+          aria-label={`Aprobación de ${alias}`}
+          value={confirm ? value : next}
+          disabled={pending}
+          onChange={(e) => change(e.target.value)}
+        >
+          <option value="">Como la app ({appRequiresApproval ? "sí" : "no"})</option>
+          <option value="1">Obligatoria</option>
+          <option value="0">No</option>
+        </select>
+      ) : (
+        <button
+          type="button"
+          role="switch"
+          aria-checked={value === "1"}
+          aria-label={`${SETTING_LABEL[setting]} de ${alias}`}
+          className="switch"
+          disabled={pending}
+          onClick={() => change(value === "1" ? "0" : "1")}
+        />
+      )}
+      {state.error && (
+        <span className="error small" role="alert">
+          {state.error}
+        </span>
+      )}
+      {confirm && (
+        <dialog ref={dialog} className="dialog" aria-labelledby={`${id}-title`}>
+          <div className="dialog-header">
+            <h2 className="dialog-title" id={`${id}-title`}>
+              ¿Cambiar {alias}?
+            </h2>
+            <p className="muted">
+              {SETTING_LABEL[setting][0]?.toUpperCase()}
+              {SETTING_LABEL[setting].slice(1)} pasa a <strong>{describe(next)}</strong>. Aplica desde el próximo
+              deploy.
+            </p>
+          </div>
+          <div className="dialog-footer">
+            <button
+              type="button"
+              className="btn btn-outline"
+              onClick={() => {
+                setNext(value);
+                dialog.current?.close();
+              }}
+            >
+              Cancelar
+            </button>
+            <button type="submit" className="btn" onClick={() => dialog.current?.close()}>
+              Cambiar
+            </button>
+          </div>
+        </dialog>
+      )}
+    </form>
+  );
+}
+
+/** The link form in a side drawer, like the channels and freeze windows; it closes once the scope is linked. */
+export function LinkScopeDrawer({ appId }: { appId: string }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const id = useId();
+  return (
+    <>
+      <button type="button" className="btn" onClick={() => dialog.current?.showModal()}>
+        <IconPlus />
+        Vincular scope
+      </button>
+      <dialog ref={dialog} className="dialog drawer" aria-labelledby={`${id}-title`}>
+        <div className="drawer-head">
+          <div>
+            <h2 className="dialog-title" id={`${id}-title`}>
+              Vincular un scope
+            </h2>
+            <p className="hint">Copia la URL del servicio desde el dashboard de Dokploy.</p>
+          </div>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm drawer-close"
+            aria-label="Cerrar"
+            onClick={() => dialog.current?.close()}
+          >
+            ✕
+          </button>
+        </div>
+        <div className="drawer-body">
+          <AddScopeForm appId={appId} compact onLinked={() => dialog.current?.close()} />
+        </div>
+      </dialog>
+    </>
   );
 }

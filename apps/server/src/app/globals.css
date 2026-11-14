@@ -914,75 +914,6 @@ a.badge:hover {
   border: 1px solid hsl(var(--border));
 }
 
-/* ---------- scopes ---------- */
-
-.scope-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  border: 1px solid hsl(var(--border));
-  border-radius: var(--radius);
-}
-
-.scope-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.75rem 1.5rem;
-  padding: 1rem;
-  transition: background-color 0.15s;
-}
-
-.scope-row + .scope-row {
-  border-top: 1px solid hsl(var(--border));
-}
-
-.scope-row:hover {
-  background: hsl(var(--muted) / 0.4);
-}
-
-.scope-main {
-  display: flex;
-  flex-direction: column;
-  gap: 0.375rem;
-  flex: 1 1 16rem;
-  min-width: 0;
-}
-
-.scope-title {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem;
-  font-weight: 600;
-}
-
-.scope-title a {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.375rem;
-  text-decoration: none;
-}
-
-.scope-title a:hover {
-  text-decoration: underline;
-}
-
-.scope-lock {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  flex: 1 1 14rem;
-  min-width: 0;
-}
-
-.scope-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin-left: auto;
-}
-
 /* ---------- dialog ---------- */
 
 .dialog {
@@ -1740,4 +1671,566 @@ input[type="checkbox"]:focus-visible {
 .person:hover strong {
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+
+/* ---------- notification channels: cards, platform logos and the edit drawer ---------- */
+
+.channel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr));
+  gap: 1rem;
+}
+
+.channel-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+  padding: 1.125rem 1.25rem 0.875rem;
+}
+
+.channel-card.is-paused > :not(.channel-foot) {
+  opacity: 0.55;
+}
+
+.channel-card.is-env {
+  border-style: dashed;
+}
+
+.channel-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.channel-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.channel-title h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.channel-url {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.channel-scope {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.8125rem;
+}
+
+.channel-section-label {
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: hsl(var(--muted-foreground));
+}
+
+.channel-events {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+.event-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.0625rem 0.5rem;
+  border-radius: calc(var(--radius) - 3px);
+  background: hsl(var(--muted));
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.25rem;
+  color: hsl(var(--foreground));
+}
+
+.event-chip-done {
+  background: hsl(var(--done) / 0.13);
+  color: hsl(var(--done-text));
+}
+
+.event-chip-error {
+  background: hsl(var(--error) / 0.13);
+  color: hsl(var(--error-text));
+}
+
+.event-chip-running {
+  background: hsl(var(--running) / 0.13);
+  color: hsl(var(--running-text));
+}
+
+.channel-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: auto;
+  padding-top: 0.75rem;
+  border-top: 1px solid hsl(var(--border));
+}
+
+.channel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.125rem;
+  margin-left: auto;
+}
+
+.channel-actions .test-result {
+  order: -1;
+  flex-basis: 100%;
+  text-align: right;
+}
+
+.channel-note {
+  margin-top: 1rem;
+}
+
+/* A platform logo on its own tile: Slack on white, Discord on its blurple, a generic webhook on the muted surface. */
+.channel-logo {
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: calc(var(--radius) + 1px);
+  border: 1px solid hsl(var(--border));
+}
+
+.channel-logo .logo-svg {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+.channel-logo-sm {
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 0.3rem;
+}
+
+.channel-logo-sm .logo-svg {
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+.channel-logo-slack {
+  background: #fff;
+}
+
+.channel-logo-discord {
+  background: #5865f2;
+  border-color: #5865f2;
+}
+
+.channel-logo-webhook {
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
+}
+
+/* The edit panel: the same modal dialog, docked to the right edge. */
+.dialog.drawer {
+  width: min(30rem, 100vw);
+  max-width: 100vw;
+  height: 100dvh;
+  max-height: 100dvh;
+  margin: 0 0 0 auto;
+  padding: 0;
+  border-width: 0 0 0 1px;
+  border-radius: 0;
+  overflow: hidden;
+}
+
+.dialog.drawer[open] {
+  display: flex;
+  flex-direction: column;
+  animation: drawer-in 0.18s ease-out;
+}
+
+@keyframes drawer-in {
+  from {
+    transform: translateX(1.5rem);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dialog.drawer[open] {
+    animation: none;
+  }
+}
+
+.drawer-form {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.drawer-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.25rem 1.5rem 1rem;
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.drawer-head .hint {
+  margin-top: 0.25rem;
+}
+
+.drawer-close {
+  width: 2rem;
+  padding: 0;
+}
+
+.drawer-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1.25rem;
+  padding: 1.25rem 1.5rem;
+  overflow-y: auto;
+}
+
+.drawer-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+.drawer-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 1rem 1.5rem;
+  border-top: 1px solid hsl(var(--border));
+}
+
+.drawer-danger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.875rem 1.5rem;
+  border-top: 1px solid hsl(var(--border));
+  background: hsl(var(--muted) / 0.3);
+}
+
+.kind-picker label {
+  gap: 0.5rem;
+}
+
+.preset-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.preset-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.preset-option:hover {
+  border-color: hsl(var(--muted-foreground) / 0.5);
+}
+
+.preset-option:has(input:checked) {
+  border-color: hsl(var(--foreground));
+  background: hsl(var(--muted) / 0.35);
+}
+
+.preset-option input {
+  margin-top: 0.2rem;
+  accent-color: hsl(var(--foreground));
+}
+
+.preset-option .option-title,
+.preset-option .option-description {
+  display: block;
+}
+
+/* ---------- freeze windows: cards with a week strip, active ones in red ---------- */
+
+.freeze-icon {
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: calc(var(--radius) + 1px);
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+}
+
+.freeze-icon svg.icon {
+  width: 1.125rem;
+  height: 1.125rem;
+}
+
+.freeze-card.is-active {
+  border-color: hsl(var(--error) / 0.55);
+}
+
+.freeze-card.is-active .freeze-icon {
+  border-color: hsl(var(--error) / 0.4);
+  background: hsl(var(--error) / 0.13);
+  color: hsl(var(--error-text));
+}
+
+.freeze-now {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius);
+  background: hsl(var(--error) / 0.1);
+  font-size: 0.8125rem;
+  color: hsl(var(--error-text));
+}
+
+.freeze-schedule {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.875rem;
+  font-size: 0.875rem;
+}
+
+.week-strip {
+  display: inline-flex;
+  gap: 0.25rem;
+}
+
+.week-strip span {
+  display: inline-grid;
+  place-items: center;
+  width: 1.625rem;
+  height: 1.625rem;
+  border-radius: calc(var(--radius) - 3px);
+  border: 1px solid hsl(var(--border));
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: hsl(var(--muted-foreground) / 0.7);
+}
+
+.week-strip span.is-on {
+  border-color: hsl(var(--foreground));
+  background: hsl(var(--foreground));
+  color: hsl(var(--background));
+}
+
+.freeze-hours {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+}
+
+.freeze-date {
+  font-weight: 600;
+}
+
+.freeze-range {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+}
+
+.freeze-range > span {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.freeze-preview {
+  padding: 0.625rem 0.75rem;
+  border-radius: var(--radius);
+  background: hsl(var(--muted) / 0.4);
+}
+
+/* A link that leaves keel (GitHub Actions, Dokploy), with its arrow. */
+.external-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.8125rem;
+}
+
+.external-link svg.icon {
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+/* ---------- scopes: a protections table with switches and an expandable detail row ---------- */
+
+.table.scope-table tbody tr td {
+  vertical-align: middle;
+}
+
+.scope-alias {
+  font-weight: 600;
+}
+
+.scope-last {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+}
+
+/* The detail row opens when its row's checkbox is checked: no client code. */
+.scope-detail {
+  display: none;
+}
+
+.scope-table-row:has(.scope-expand:checked) + .scope-detail {
+  display: table-row;
+}
+
+.table.scope-table tbody .scope-detail > td {
+  padding-top: 0;
+  background: hsl(var(--muted) / 0.25);
+}
+
+.scope-table tbody .scope-detail:hover {
+  background: transparent;
+}
+
+.table.scope-table tbody .scope-table-row:has(.scope-expand:checked) td {
+  border-bottom-color: transparent;
+}
+
+.scope-expand-cell {
+  width: 2.5rem;
+  text-align: right;
+}
+
+.scope-expand {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.scope-expand-label {
+  width: 2rem;
+  padding: 0;
+}
+
+.scope-expand-label svg.icon {
+  transition: transform 0.15s;
+}
+
+.scope-expand:checked + .scope-expand-label svg.icon {
+  transform: rotate(90deg);
+}
+
+.scope-expand:focus-visible + .scope-expand-label {
+  box-shadow:
+    0 0 0 2px hsl(var(--background)),
+    0 0 0 4px hsl(var(--ring));
+}
+
+.scope-detail-grid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem 2rem;
+  padding: 1rem 0.25rem 0.5rem;
+}
+
+.scope-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.375rem 1rem;
+  margin: 0;
+  font-size: 0.8125rem;
+  white-space: normal;
+}
+
+.scope-facts dt {
+  color: hsl(var(--muted-foreground));
+}
+
+.scope-facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.scope-facts a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.scope-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.inline-setting {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+}
+
+/* A switch is a button with role="switch"; aria-checked draws it on or off. */
+button.switch {
+  position: relative;
+  width: 2.25rem;
+  height: 1.25rem;
+  padding: 0;
+  border-radius: 999px;
+  border: 0;
+  background: hsl(var(--input));
+  box-shadow: none;
+}
+
+button.switch:hover {
+  background: hsl(var(--muted-foreground) / 0.5);
+}
+
+button.switch::after {
+  content: "";
+  position: absolute;
+  top: 0.125rem;
+  left: 0.125rem;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 999px;
+  background: hsl(var(--background));
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.3);
+  transition: transform 0.15s;
+}
+
+button.switch[aria-checked="true"] {
+  background: hsl(var(--done));
+}
+
+button.switch[aria-checked="true"]::after {
+  transform: translateX(1rem);
 }

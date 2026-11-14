@@ -828,6 +828,24 @@ export class Store {
     return row ? toChannel(row) : undefined;
   }
 
+  async updateChannel(id: string, input: Omit<NotificationChannel, "id" | "createdAt" | "enabled">): Promise<void> {
+    await this.db.run(
+      `UPDATE notification_channels
+       SET name = ?, kind = ?, url = ?, secret = ?, events = ?, repo_pattern = ?, scope_pattern = ?
+       WHERE id = ?`,
+      [
+        input.name,
+        input.kind,
+        input.url,
+        input.secret,
+        input.events.join(","),
+        input.repoPattern,
+        input.scopePattern,
+        id,
+      ],
+    );
+  }
+
   async setChannelEnabled(id: string, enabled: boolean): Promise<void> {
     await this.db.run("UPDATE notification_channels SET enabled = ? WHERE id = ?", [enabled ? 1 : 0, id]);
   }
@@ -888,6 +906,27 @@ export class Store {
       [appId],
     );
     return rows.map(toFreeze);
+  }
+
+  async updateFreeze(id: string, input: Omit<FreezeWindow, "id" | "appId" | "enabled" | "createdBy" | "createdAt">) {
+    await this.db.run(
+      `UPDATE freeze_windows
+       SET name = ?, kind = ?, timezone = ?, starts_at = ?, ends_at = ?, days = ?, start_time = ?, end_time = ?,
+         scope_pattern = ?
+       WHERE id = ?`,
+      [
+        input.name,
+        input.kind,
+        input.timezone,
+        input.startsAt,
+        input.endsAt,
+        input.days.join(","),
+        input.startTime,
+        input.endTime,
+        input.scopePattern,
+        id,
+      ],
+    );
   }
 
   async setFreezeEnabled(id: string, enabled: boolean): Promise<void> {

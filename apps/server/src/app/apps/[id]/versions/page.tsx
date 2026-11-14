@@ -1,7 +1,7 @@
 import { getContext } from "@/lib/context";
-import { IconTag } from "../../../icons";
+import { IconExternal, IconTag } from "../../../icons";
 import { Card, EmptyState, StatusBadge, VERSION_LABEL, versionTone, When } from "../../../ui";
-import { AppPage, loadApp, none } from "../shared";
+import { AppPage, loadApp, none, pipelineUrl } from "../shared";
 
 const LIMIT = 50;
 
@@ -26,6 +26,7 @@ export default async function VersionsPage({ params }: { params: Promise<{ id: s
                   <th>Rama</th>
                   <th>Creada por</th>
                   <th>CI</th>
+                  <th>Pipeline</th>
                   <th>Creada</th>
                 </tr>
               </thead>
@@ -38,9 +39,23 @@ export default async function VersionsPage({ params }: { params: Promise<{ id: s
                     <td>{v.branch ? <code>{v.branch}</code> : none}</td>
                     <td>{v.createdByName ?? v.createdByEmail ?? none}</td>
                     <td>
-                      <StatusBadge tone={versionTone(v.ciStatus)} href={v.runUrl}>
-                        {VERSION_LABEL[v.ciStatus]}
-                      </StatusBadge>
+                      <StatusBadge tone={versionTone(v.ciStatus)}>{VERSION_LABEL[v.ciStatus]}</StatusBadge>
+                    </td>
+                    <td>
+                      <a
+                        className="link external-link"
+                        href={pipelineUrl(app.repo, v.tag, v.runUrl)}
+                        target="_blank"
+                        rel="noreferrer"
+                        title={
+                          v.runUrl
+                            ? "La ejecución del pipeline en GitHub Actions"
+                            : "Las ejecuciones de este tag en GitHub Actions"
+                        }
+                      >
+                        {v.runUrl ? "Ver ejecución" : "Buscar en Actions"}
+                        <IconExternal />
+                      </a>
                     </td>
                     <td className="muted nowrap">
                       <When iso={v.createdAt} />

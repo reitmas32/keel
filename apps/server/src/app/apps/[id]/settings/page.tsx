@@ -2,7 +2,7 @@ import { roleAtLeast } from "@keel/shared";
 import { headers } from "next/headers";
 import { getContext } from "@/lib/context";
 import { formatDate } from "@/lib/format";
-import { CreateFreezeForm } from "../../../freezes/components";
+import { FreezeDrawer } from "../../../freezes/components";
 import { FreezeList } from "../../../freezes/list";
 import { IconTrash } from "../../../icons";
 import { Card } from "../../../ui";
@@ -70,7 +70,7 @@ export default async function SettingsPage({ params }: { params: Promise<{ id: s
       <Card
         title="Ventanas de congelamiento"
         description="Mientras una está activa keel rechaza los deploys nuevos de esta app y retiene los que estaban en cola. Un maintainer puede forzarlas con keel deploy --force-freeze."
-        footer={canMaintain && <CreateFreezeForm appId={app.id} timezone={env.KEEL_TIMEZONE ?? "UTC"} />}
+        action={canMaintain && <FreezeDrawer appId={app.id} timezone={env.KEEL_TIMEZONE ?? "UTC"} />}
       >
         <FreezeList
           windows={appFreezes}

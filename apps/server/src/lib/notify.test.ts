@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createChannelAs, deleteChannelAs, setChannelEnabledAs } from "./admin";
+import { createChannelAs, deleteChannelAs, setChannelEnabledAs, updateChannelAs } from "./admin";
 import { recordCiResult, requestDeploy } from "./deploys";
 import { loadEnv } from "./env";
 import { handlers } from "./handlers";
@@ -144,6 +144,38 @@ describe("notification channels", () => {
     expect(maskUrl(SLACK)).toBe("https://hooks.slack.com/…cret");
   });
 
+  it("edits a channel and keeps the URL and secret it was not sent again", async () => {
+    const { store, clock } = await createTestContext();
+    const admin = await addMember(store, clock.now(), { role: "admin" });
+    const p = { member: admin, grants: [], maxRole: null, anonymousRole: null };
+    const hook = "https://example.com/hook";
+    const channel = await createChannelAs(
+      store,
+      p,
+      { name: "ops", kind: "webhook", url: hook, secret: "s3" },
+      clock.now(),
+    );
+
+    const edited = await updateChannelAs(
+      store,
+      p,
+      channel.id,
+      { name: "ops-prod", kind: "webhook", url: "", secret: "", events: ["deploy.failed"], scope: "prod*" },
+      clock.now(),
+    );
+    expect(edited).toMatchObject({ name: "ops-prod", url: hook, secret: "s3", events: ["deploy.failed"] });
+    expect(edited.scopePattern).toBe("prod*");
+    expect(edited.enabled).toBe(true);
+
+    // Switching to Slack drops the secret; a new URL replaces the old one.
+    const slack = await updateChannelAs(store, p, channel.id, { name: "ops", kind: "slack", url: SLACK }, clock.now());
+    expect(slack).toMatchObject({ kind: "slack", url: SLACK, secret: null, events: ["*"] });
+
+    const audit = JSON.stringify(await store.listAudit());
+    expect(audit).toContain("channel.update");
+    expect(audit).not.toContain("secretsecret");
+  });
+
   it("only lets global admins manage channels", async () => {
     const { store, clock } = await createTestContext();
     const maintainer = await addMember(store, clock.now(), { role: "maintainer" });
@@ -151,6 +183,9 @@ describe("notification channels", () => {
     await expect(createChannelAs(store, p, { name: "x", kind: "slack", url: SLACK }, clock.now())).rejects.toThrow(
       /no permite configurar notificaciones/,
     );
+    await expect(
+      updateChannelAs(store, p, "missing", { name: "x", kind: "slack", url: SLACK }, clock.now()),
+    ).rejects.toThrow(/no permite configurar notificaciones/);
   });
 
   it("validates channels and events", () => {

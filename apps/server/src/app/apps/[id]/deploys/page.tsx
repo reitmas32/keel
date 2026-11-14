@@ -3,10 +3,10 @@ import Link from "next/link";
 import { roleOn } from "@/lib/access";
 import { APPROVER_ROLE } from "@/lib/approvals";
 import { getContext } from "@/lib/context";
-import { IconRocket } from "../../../icons";
+import { IconExternal, IconRocket } from "../../../icons";
 import { Card, DeployBadge, EmptyState, StatusBadge, When } from "../../../ui";
 import { ApprovalButtons } from "../../components";
-import { AppPage, loadApp } from "../shared";
+import { AppPage, dokployDeploymentsUrl, loadApp } from "../shared";
 
 const LIMIT = 50;
 
@@ -27,6 +27,7 @@ export default async function DeploysPage({
     { limit: LIMIT, newestFirst: true },
   );
   const base = `/apps/${app.id}/deploys`;
+  const scopeById = new Map(scopes.map((s) => [s.id, s]));
 
   return (
     <AppPage app={app} appRole={appRole} section="Deploys">
@@ -65,6 +66,7 @@ export default async function DeploysPage({
                   <th>Estado</th>
                   <th>Pedido por</th>
                   <th>Creado</th>
+                  <th>Dokploy</th>
                 </tr>
               </thead>
               <tbody>
@@ -106,6 +108,25 @@ export default async function DeploysPage({
                     <td>{d.requestedBy ?? <span className="muted">sin token</span>}</td>
                     <td className="muted nowrap">
                       <When iso={d.createdAt} />
+                    </td>
+                    <td className="nowrap">
+                      {(() => {
+                        const scope = scopeById.get(d.scopeId);
+                        // Only a deploy keel handed to Dokploy has a deployment there.
+                        if (!scope || !d.deployStartedAt) return <span className="muted">—</span>;
+                        return (
+                          <a
+                            className="link external-link"
+                            href={dokployDeploymentsUrl(scope.dokployUrl)}
+                            target="_blank"
+                            rel="noreferrer"
+                            title={`Deployments de ${scope.alias} en Dokploy`}
+                          >
+                            Ver en Dokploy
+                            <IconExternal />
+                          </a>
+                        );
+                      })()}
                     </td>
                   </tr>
                 ))}
