@@ -3,9 +3,9 @@ import { tokenRoleChoices } from "@/lib/admin";
 import { API_TOKEN_NAME_MAX } from "@/lib/api-auth";
 import { getContext } from "@/lib/context";
 import { formatDate } from "@/lib/format";
-import { IconTrash } from "../icons";
+import { IconKey, IconTrash } from "../icons";
 import { requireMember, viewerIsAdmin } from "../session";
-import { Card, Page, PageHeader, RoleBadge, StatusBadge } from "../ui";
+import { Card, EmptyState, Page, PageHeader, RoleBadge, StatusBadge } from "../ui";
 import { ConfirmButton } from "../ui-client";
 import { revokeApiTokenAction } from "./actions";
 import { CreateApiTokenForm } from "./components";
@@ -55,7 +55,9 @@ export default async function TokensPage() {
           description="Revocar un token lo invalida al instante. Si se deshabilita a su dueño, deja de funcionar."
         >
           {tokens.length === 0 ? (
-            <p className="empty">Todavía no hay tokens.</p>
+            <EmptyState icon={<IconKey />} title="Sin tokens">
+              Crea uno arriba y úsalo con <code>keel login --token</code>.
+            </EmptyState>
           ) : (
             <div className="table-wrap">
               <table className="table">

@@ -1,8 +1,9 @@
 import Link from "next/link";
 import { getContext } from "@/lib/context";
-import { formatDate } from "@/lib/format";
+import { IconAudit } from "../icons";
 import { requireRole } from "../session";
-import { Card, Page, PageHeader } from "../ui";
+import { Card, EmptyState, Page, PageHeader, When } from "../ui";
+import { ACTION_LABEL, AuditDetails } from "./details";
 
 const PAGE_SIZE = 50;
 
@@ -99,7 +100,10 @@ export default async function AuditPage({ searchParams }: { searchParams: Search
         }
       >
         {entries.length === 0 ? (
-          <p className="empty">Sin entradas{repo || scope || actor ? " con estos filtros" : " todavía"}.</p>
+          <EmptyState
+            icon={<IconAudit />}
+            title={repo || scope || actor ? "Sin entradas con estos filtros" : "Sin entradas todavía"}
+          />
         ) : (
           <div className="table-wrap">
             <table className="table">
@@ -115,13 +119,21 @@ export default async function AuditPage({ searchParams }: { searchParams: Search
               <tbody>
                 {entries.map((e) => (
                   <tr key={e.id}>
-                    <td className="muted nowrap">{formatDate(e.at)}</td>
-                    <td>{e.actor}</td>
+                    <td className="muted nowrap">
+                      <When iso={e.at} />
+                    </td>
                     <td>
-                      <code>{e.action}</code>
+                      {e.actor}
+                      {typeof e.details?.via === "string" && <div className="sub">vía {e.details.via}</div>}
+                    </td>
+                    <td>
+                      {ACTION_LABEL[e.action] ?? e.action}
+                      <div className="sub">
+                        <code>{e.action}</code>
+                      </div>
                     </td>
                     <td>{e.repo ? <code>{e.scope ? `${e.repo}/${e.scope}` : e.repo}</code> : none}</td>
-                    <td>{e.details ? <div className="details">{JSON.stringify(e.details)}</div> : none}</td>
+                    <td>{e.details ? <AuditDetails details={e.details} /> : none}</td>
                   </tr>
                 ))}
               </tbody>

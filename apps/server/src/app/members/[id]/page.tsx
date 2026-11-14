@@ -2,8 +2,9 @@ import { notFound } from "next/navigation";
 import { getContext } from "@/lib/context";
 import { formatDate } from "@/lib/format";
 import { BOOTSTRAP_ADMIN } from "@/lib/postgres-schema.mjs";
+import { IconShield } from "../../icons";
 import { requireRole } from "../../session";
-import { Card, Page, PageHeader, RoleBadge, MEMBER_STATUS as STATUS, StatusBadge } from "../../ui";
+import { Card, EmptyState, Page, PageHeader, RoleBadge, MEMBER_STATUS as STATUS, StatusBadge } from "../../ui";
 import { AddGrantForm, ChangeRoleForm, RemoveGrantButton, ResendInviteForm, SetEnabledForm } from "../components";
 
 export default async function MemberPage({ params }: { params: Promise<{ id: string }> }) {
@@ -54,7 +55,9 @@ export default async function MemberPage({ params }: { params: Promise<{ id: str
           footer={<AddGrantForm memberId={member.id} />}
         >
           {grants.length === 0 ? (
-            <p className="empty">Sin permisos: aplica el rol base en todo.</p>
+            <EmptyState icon={<IconShield />} title="Sin permisos por repo">
+              Aplica su rol base en todas las apps.
+            </EmptyState>
           ) : (
             <div className="table-wrap">
               <table className="table">

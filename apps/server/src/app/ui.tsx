@@ -2,6 +2,7 @@ import type { DeployStatus, Role, VersionCiStatus } from "@keel/shared";
 import Link from "next/link";
 import { Fragment, type ReactNode } from "react";
 import { getContext } from "@/lib/context";
+import { formatDate, formatRelative } from "@/lib/format";
 import type { MemberStatus } from "@/lib/store";
 import { IconChevronRight, IconLogOut, KeelMark } from "./icons";
 import { logout } from "./login/actions";
@@ -135,7 +136,7 @@ export function Card({
       <div className="card-header">
         <div>
           <h2 className="card-title">{title}</h2>
-          {description && <p className="card-description">{description}</p>}
+          {description && <div className="card-description">{description}</div>}
         </div>
         {action}
       </div>
@@ -166,6 +167,63 @@ const VERSION_TONE: Record<VersionCiStatus, Tone> = {
 };
 
 export const deployTone = (status: DeployStatus) => DEPLOY_TONE[status];
+
+/** How the admin names each deploy status; the API name stays in the tooltip. */
+export const DEPLOY_LABEL: Record<DeployStatus, string> = {
+  waiting_ci: "Esperando CI",
+  ci_passed: "CI pasó",
+  deploying: "Desplegando",
+  deployed: "Desplegado",
+  ci_failed: "CI falló",
+  deploy_failed: "Falló",
+  expired: "Expiró",
+};
+
+export const VERSION_LABEL: Record<VersionCiStatus, string> = {
+  pending: "CI en curso",
+  success: "CI pasó",
+  failure: "CI falló",
+  cancelled: "Cancelado",
+  expired: "Sin resultado",
+};
+
+export function DeployBadge({ status, prefix }: { status: DeployStatus; prefix?: ReactNode }) {
+  return (
+    <span title={status}>
+      <StatusBadge tone={DEPLOY_TONE[status]}>
+        {prefix}
+        {prefix ? " · " : ""}
+        {DEPLOY_LABEL[status]}
+      </StatusBadge>
+    </span>
+  );
+}
+
+/** Initials in a circle, the same color for the same name. */
+export function Avatar({ name }: { name: string }) {
+  const initials =
+    name
+      .split(/[\s._@-]+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((w) => w[0]?.toUpperCase())
+      .join("") || "?";
+  const hue = [...name].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7);
+  return (
+    <span className="avatar" style={{ background: `hsl(${hue} 45% 30%)` }} aria-hidden="true">
+      {initials}
+    </span>
+  );
+}
+
+/** A date as "hace 5 min", with the exact date on hover. */
+export function When({ iso }: { iso: string }) {
+  return (
+    <time dateTime={iso} title={formatDate(iso)}>
+      {formatRelative(iso)}
+    </time>
+  );
+}
 export const versionTone = (status: VersionCiStatus) => VERSION_TONE[status];
 
 /** A status pill with a subtle tinted background: green done, yellow running, red error, gray idle. */

@@ -3,10 +3,10 @@ import Link from "next/link";
 import { roleOn } from "@/lib/access";
 import { APPROVER_ROLE } from "@/lib/approvals";
 import { getContext } from "@/lib/context";
-import { formatDate } from "@/lib/format";
-import { Card, deployTone, StatusBadge } from "../../../ui";
+import { IconRocket } from "../../../icons";
+import { Card, DeployBadge, EmptyState, StatusBadge, When } from "../../../ui";
 import { ApprovalButtons } from "../../components";
-import { AppPage, loadApp, none } from "../shared";
+import { AppPage, loadApp } from "../shared";
 
 const LIMIT = 50;
 
@@ -52,7 +52,9 @@ export default async function DeploysPage({
         description={`Los ${LIMIT} más recientes${selected ? "" : " de todos los scopes de la app"}.`}
       >
         {deploys.length === 0 ? (
-          <p className="empty">Sin deploys todavía.</p>
+          <EmptyState icon={<IconRocket />} title="Sin deploys todavía">
+            Aparecen al pedirlos con <code>keel deploy</code>.
+          </EmptyState>
         ) : (
           <div className="table-wrap">
             <table className="table">
@@ -70,14 +72,15 @@ export default async function DeploysPage({
                   <tr key={d.id}>
                     <td>
                       <code>{d.tag}</code>
+                      <div className="sub mono">{d.sha.slice(0, 7)}</div>
                     </td>
                     <td>{d.scope}</td>
                     <td>
-                      <StatusBadge tone={deployTone(d.status)}>{d.status}</StatusBadge>
+                      <DeployBadge status={d.status} />
                       {d.approval?.status === "pending" && !isTerminal(d.status) && (
                         <>
                           {" "}
-                          <StatusBadge tone="running">espera aprobación</StatusBadge>
+                          <StatusBadge tone="running">Espera aprobación</StatusBadge>
                           {d.requestedByMemberId !== viewer.member.id &&
                             roleAtLeast(roleOn(viewer, { repo: app.repo, scope: d.scope }), APPROVER_ROLE) && (
                               <div className="sub">
@@ -100,8 +103,10 @@ export default async function DeploysPage({
                       {/* A rejection's error repeats the approval line above. */}
                       {d.error && d.approval?.status !== "rejected" && <div className="sub">{d.error}</div>}
                     </td>
-                    <td>{d.requestedBy ?? none}</td>
-                    <td className="muted nowrap">{formatDate(d.createdAt)}</td>
+                    <td>{d.requestedBy ?? <span className="muted">sin token</span>}</td>
+                    <td className="muted nowrap">
+                      <When iso={d.createdAt} />
+                    </td>
                   </tr>
                 ))}
               </tbody>

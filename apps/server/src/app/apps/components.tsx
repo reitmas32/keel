@@ -72,12 +72,18 @@ export function CreateAppForm() {
 
 export function AddScopeForm({ appId }: { appId: string }) {
   const [state, action, pending] = useActionState<FormState, FormData>(addScopeAction.bind(null, appId), {});
+  const [url, setUrl] = useState("");
+  const isCompose = /\/services\/compose\//.test(url);
   return (
-    <>
-      <form action={action} className="form-row">
-        <div className="field narrow">
+    <form action={action} className="form-panel">
+      <div className="form-panel-head">
+        <h3 className="form-panel-title">Vincular un scope</h3>
+        <p className="hint">Copia la URL del servicio desde el dashboard de Dokploy.</p>
+      </div>
+      <div className="form-grid">
+        <div className="field span-3">
           <label className="label" htmlFor="scope-alias">
-            Scope
+            Nombre del scope
           </label>
           <input
             id="scope-alias"
@@ -87,8 +93,11 @@ export function AddScopeForm({ appId }: { appId: string }) {
             placeholder="prod"
             pattern="[a-z0-9][a-z0-9\-]*"
           />
+          <span className="field-hint">
+            Lo que eliges en <code>keel deploy -s</code>.
+          </span>
         </div>
-        <div className="field">
+        <div className="field span-6">
           <label className="label" htmlFor="scope-url">
             URL del servicio en Dokploy
           </label>
@@ -98,12 +107,19 @@ export function AddScopeForm({ appId }: { appId: string }) {
             name="dokployUrl"
             required
             type="url"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
             placeholder="https://dokploy…/dashboard/project/…/services/compose/…"
           />
+          <span className="field-hint">
+            {isCompose
+              ? "Compose: keel cambia la variable del tag en su Environment y lo redespliega."
+              : "Application: keel cambia el tag de su imagen Docker."}
+          </span>
         </div>
-        <div className="field narrow">
+        <div className="field span-3" hidden={!isCompose}>
           <label className="label" htmlFor="scope-tag">
-            Variable del tag (Compose)
+            Variable del tag
           </label>
           <input
             id="scope-tag"
@@ -112,14 +128,23 @@ export function AddScopeForm({ appId }: { appId: string }) {
             placeholder="DOCKER_TAG"
             pattern="[A-Za-z_][A-Za-z0-9_]*"
           />
+          <span className="field-hint">
+            La imagen debe usarla:{" "}
+            <code>
+              image: ${"{DOCKER_IMAGE}"}:${"{DOCKER_TAG}"}
+            </code>
+          </span>
         </div>
+      </div>
+      <div className="form-actions">
+        <span />
         <button type="submit" className="btn" disabled={pending}>
           <IconPlus />
-          {pending ? "Vinculando…" : "Vincular"}
+          {pending ? "Vinculando…" : "Vincular scope"}
         </button>
-      </form>
+      </div>
       <FormError error={state.error} />
-    </>
+    </form>
   );
 }
 
