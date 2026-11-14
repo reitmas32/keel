@@ -6,13 +6,14 @@ import {
   type UpdateScopeRequest,
   updateScopeRequestSchema,
 } from "@keel/shared";
-import { type AuditActor, actorOf, baseRole, isAdmin, type Principal, requireRoleOn } from "./access";
+import { type AuditActor, actorOf, baseRole, can, isAdmin, type Principal, requireRoleOn } from "./access";
 import { createApiToken } from "./api-auth";
 import { type ApprovalDecision, decideDeploy } from "./approvals";
 import { addScope, createApp, rotateCiToken, scopeSettingsDetails, updateScopeSettings } from "./apps";
+import { queueDeploy } from "./deploys";
 import { ApiError } from "./errors";
-import { type FreezeInput, type FreezeWindow, parseFreezeInput } from "./freeze";
-import { maskUrl, parseChannelInput } from "./notify";
+import { FORCE_ROLE, type FreezeInput, type FreezeWindow, parseFreezeInput } from "./freeze";
+import { maskUrl, type Notifier, parseChannelInput } from "./notify";
 import type { Target } from "./roles";
 import type { App, DeployRecord, NotificationChannel, Scope, Store } from "./store";
 
@@ -163,6 +164,68 @@ export async function decideDeployAs(
   const deploy = await store.getDeploy(deployId);
   if (deploy?.repo !== app.repo) throw new ApiError(404, "Deploy no encontrado.");
   return decideDeploy(store, p, actorOf(p), deploy, decision, { reason, via: "admin" }, now);
+}
+
+/**
+ * A deploy asked from the admin: a version of the app (its commit comes from the version) to one of its scopes. It
+ * goes through the same queue as `keel deploy` — locks, freeze windows, approvals and the in-flight check — and
+ * leaves the same audit entries and notifications.
+ */
+export async function requestDeployAs(
+  store: Store,
+  notifier: Notifier,
+  p: Principal,
+  appId: string,
+  input: { scopeId: string; tag: string; forceReason?: string },
+  now: Date,
+): Promise<{ deploy: DeployRecord; created: boolean }> {
+  const app = await appOr404(store, appId);
+  const scope = await scopeOr404(store, app, input.scopeId);
+  const target = { repo: app.repo, scope: scope.alias };
+  requireRoleOn(p, "deployer", "desplegar", target);
+  const tag = input.tag.trim();
+  if (!tag) throw new ApiError(400, "Elige la versión a desplegar.");
+  const version = await store.getVersion(app.repo, tag);
+  if (!version) throw new ApiError(404, `La versión ${tag} no existe en ${app.repo}.`);
+  const forceReason = input.forceReason?.trim() || undefined;
+
+  const actor = actorOf(p);
+  const { deploy, created } = await queueDeploy(
+    store,
+    { repo: app.repo, tag: version.tag, sha: version.sha, scope: scope.alias, ...(forceReason && { forceReason }) },
+    now,
+    actor.name,
+    p.member?.id ?? null,
+    { canForce: (level) => can(p, FORCE_ROLE[level], target) },
+  );
+  if (!created) return { deploy, created };
+
+  await record(
+    store,
+    actor,
+    "deploy.create",
+    target,
+    {
+      deployId: deploy.id,
+      tag: deploy.tag,
+      sha: deploy.sha,
+      status: deploy.status,
+      via: "admin",
+      ...(deploy.approval && { approval: deploy.approval.status }),
+    },
+    now,
+  );
+  if (deploy.forcedBy) {
+    await record(store, actor, "deploy.force", target, { deployId: deploy.id, reason: deploy.forcedReason }, now);
+    notifier.notify({
+      event: "deploy.forced",
+      deploy,
+      actor: deploy.forcedBy,
+      detail: `Motivo: ${deploy.forcedReason}`,
+    });
+  }
+  if (deploy.approval?.status === "pending") notifier.notify({ event: "deploy.approval_requested", deploy });
+  return { deploy, created };
 }
 
 /** Returns the new plaintext CI token, shown once. */

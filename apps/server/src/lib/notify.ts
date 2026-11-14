@@ -2,6 +2,7 @@ import { createHmac } from "node:crypto";
 import { type Env, SLACK_TOKEN } from "./env";
 import { ApiError } from "./errors";
 import { logger } from "./log";
+import { defaultMessage, type MessageData, renderMessage, TEMPLATE_MAX } from "./message-template";
 import { metrics } from "./metrics";
 import { type Dependency, tracedFetch } from "./outbound";
 import { globMatch, normalizeGrantPatterns } from "./roles";
@@ -54,7 +55,7 @@ export interface Notifier {
 /** A channel as the notifier uses it; the ones from the environment have no id. */
 type Target = Pick<
   NotificationChannel,
-  "name" | "kind" | "url" | "secret" | "target" | "events" | "repoPattern" | "scopePattern"
+  "name" | "kind" | "url" | "secret" | "target" | "template" | "events" | "repoPattern" | "scopePattern"
 >;
 
 /** Where a Slack bot posts. Its channels keep it as their `url`, so every channel has one. */
@@ -104,6 +105,8 @@ export function parseEvents(input: string | readonly string[] | undefined): stri
 export function envChannels(env: Partial<Env>): Target[] {
   const events = parseEvents(env.KEEL_NOTIFY_EVENTS);
   const base = { events, repoPattern: "*", scopePattern: "*" };
+  // One template for every channel of the environment; empty means keel's own message.
+  const template = env.KEEL_NOTIFY_TEMPLATE?.trim() || null;
   const channels: Target[] = [];
   if (env.KEEL_SLACK_WEBHOOK_URL) {
     channels.push({
@@ -113,6 +116,7 @@ export function envChannels(env: Partial<Env>): Target[] {
       url: env.KEEL_SLACK_WEBHOOK_URL,
       secret: null,
       target: null,
+      template,
     });
   }
   if (env.KEEL_SLACK_BOT_TOKEN && env.KEEL_SLACK_CHANNEL) {
@@ -123,6 +127,7 @@ export function envChannels(env: Partial<Env>): Target[] {
       url: SLACK_POST_URL,
       secret: env.KEEL_SLACK_BOT_TOKEN,
       target: env.KEEL_SLACK_CHANNEL,
+      template,
     });
   }
   if (env.KEEL_DISCORD_WEBHOOK_URL) {
@@ -133,6 +138,7 @@ export function envChannels(env: Partial<Env>): Target[] {
       url: env.KEEL_DISCORD_WEBHOOK_URL,
       secret: null,
       target: null,
+      template,
     });
   }
   if (env.KEEL_WEBHOOK_URL) {
@@ -143,6 +149,7 @@ export function envChannels(env: Partial<Env>): Target[] {
       url: env.KEEL_WEBHOOK_URL,
       secret: env.KEEL_WEBHOOK_SECRET ?? null,
       target: null,
+      template,
     });
   }
   return channels;
@@ -153,48 +160,31 @@ const wants = (channel: Target, n: DeployNotification) =>
   globMatch(channel.repoPattern, n.deploy.repo) &&
   globMatch(channel.scopePattern, n.deploy.scope);
 
-const ICONS: Record<NotifyEvent, string> = {
-  "deploy.deployed": "✅",
-  "deploy.failed": "❌",
-  "deploy.ci_failed": "❌",
-  "deploy.expired": "⌛",
-  "deploy.rollback": "↩️",
-  "deploy.approval_requested": "✋",
-  "deploy.approved": "👍",
-  "deploy.rejected": "🚫",
-  "deploy.forced": "⚠️",
-};
-
-/** One or two lines of plain text, in Spanish, for Slack and Discord. */
+/** One or two lines of plain text, in Spanish, for Slack and Discord: keel's own message. */
 export function formatMessage(n: DeployNotification, link?: string): string {
-  const { deploy: d } = n;
-  const where = `${d.repo} ${d.tag} → ${d.scope}`;
-  const by = d.requestedBy ? ` (pedido por ${d.requestedBy})` : "";
-  const headline: Record<NotifyEvent, string> = {
-    "deploy.deployed": `${where} desplegado${by}`,
-    "deploy.failed": `${where} falló${by}`,
-    "deploy.ci_failed": `${where}: el CI falló, no se despliega${by}`,
-    "deploy.expired": `${where} expiró${by}`,
-    "deploy.rollback": `${where}: rollback automático`,
-    "deploy.approval_requested": `${where} espera aprobación${by}`,
-    "deploy.approved": `${where} aprobado por ${n.actor ?? "alguien"}`,
-    "deploy.rejected": `${where} rechazado por ${n.actor ?? "alguien"}`,
-    "deploy.forced": `${where}: deploy forzoso durante una ventana de congelamiento, por ${n.actor ?? "alguien"}`,
-  };
-  const lines = [`${ICONS[n.event]} ${headline[n.event]}`];
-  const failed = n.event === "deploy.failed" || n.event === "deploy.expired" || n.event === "deploy.ci_failed";
-  if (failed && d.error) lines.push(d.error);
-  if (n.detail) lines.push(n.detail);
-  if (link) lines.push(link);
-  return lines.join("\n");
+  return defaultMessage(messageData(n, link));
 }
 
+/** A notification as the message templates see it. */
+const messageData = (n: DeployNotification, link?: string): MessageData => ({
+  event: n.event,
+  repo: n.deploy.repo,
+  tag: n.deploy.tag,
+  sha: n.deploy.sha,
+  scope: n.deploy.scope,
+  error: n.deploy.error,
+  requestedBy: n.deploy.requestedBy ?? null,
+  actor: n.actor ?? null,
+  detail: n.detail ?? null,
+  link: link ?? null,
+});
+
 function bodyFor(channel: Target, n: DeployNotification, at: string, link?: string): string {
-  if (channel.kind === "slack") return JSON.stringify({ text: formatMessage(n, link) });
-  if (channel.kind === "slack_bot") {
-    return JSON.stringify({ channel: channel.target, text: formatMessage(n, link), unfurl_links: false });
-  }
-  if (channel.kind === "discord") return JSON.stringify({ content: formatMessage(n, link).slice(0, 2000) });
+  // The channel's own template, or keel's message when it has none.
+  const text = renderMessage(channel.template, messageData(n, link));
+  if (channel.kind === "slack") return JSON.stringify({ text });
+  if (channel.kind === "slack_bot") return JSON.stringify({ channel: channel.target, text, unfurl_links: false });
+  if (channel.kind === "discord") return JSON.stringify({ content: text.slice(0, 2000) });
   return JSON.stringify({
     event: n.event,
     at,
@@ -211,7 +201,7 @@ function bodyFor(channel: Target, n: DeployNotification, at: string, link?: stri
     actor: n.actor ?? null,
     detail: n.detail ?? null,
     ...(link && { url: link }),
-    text: formatMessage(n),
+    text: renderMessage(channel.template, messageData(n)),
   });
 }
 
@@ -340,6 +330,8 @@ export function parseChannelInput(input: {
   token?: string;
   /** Slack bots: the channel id or #name. */
   channel?: string;
+  /** The message, with `{variables}`; empty means keel's own. */
+  template?: string;
   events?: string | readonly string[];
   repo?: string;
   scope?: string;
@@ -353,7 +345,11 @@ export function parseChannelInput(input: {
   }
   const kind = input.kind as ChannelKind;
   const { repoPattern, scopePattern } = normalizeGrantPatterns(input.repo ?? "", input.scope ?? "");
-  const common = { name, kind, events: parseEvents(input.events), repoPattern, scopePattern };
+  const template = input.template?.replace(/\r\n/g, "\n").trim() || null;
+  if (template && template.length > TEMPLATE_MAX) {
+    throw new ApiError(400, `El mensaje personalizado no puede pasar de ${TEMPLATE_MAX} caracteres.`);
+  }
+  const common = { name, kind, events: parseEvents(input.events), repoPattern, scopePattern, template };
 
   if (kind === "slack_bot") {
     const token = input.token?.trim() ?? "";

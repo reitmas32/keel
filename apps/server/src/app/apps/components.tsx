@@ -4,14 +4,15 @@ import { HEALTH_CHECK_LIMITS, type HealthCheck, LOCK_REASON_MAX } from "@keel/sh
 import Link from "next/link";
 import { useActionState, useEffect, useId, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { IconLock, IconPlus, IconRefresh } from "../icons";
-import { ConfirmButton, TokenNotice } from "../ui-client";
+import { IconLock, IconPlus, IconRefresh, IconRocket } from "../icons";
+import { ConfirmButton, TokenNotice, useBackdropClose } from "../ui-client";
 import {
   addScopeAction,
   createAppAction,
   decideDeployAction,
   type FormState,
   lockScopeAction,
+  requestDeployAction,
   rotateTokenAction,
   type ScopeSetting,
   setAppApprovalAction,
@@ -198,6 +199,7 @@ export function RotateTokenForm({ appId }: { appId: string }) {
 /** "Bloquear" opens a dialog that asks for the reason; new deploys of the scope then get a 423. */
 export function LockScopeButton({ appId, scopeId, alias }: { appId: string; scopeId: string; alias: string }) {
   const dialog = useRef<HTMLDialogElement>(null);
+  useBackdropClose(dialog);
   const [state, action, pending] = useActionState<FormState, FormData>(lockScopeAction.bind(null, appId, scopeId), {});
   useEffect(() => {
     if (state.ok) dialog.current?.close();
@@ -425,6 +427,7 @@ export function AppApprovalForm({ appId, requireApproval }: { appId: string; req
 /** "Aprobar" right away, or "Rechazar" with a reason in a dialog. */
 export function ApprovalButtons({ appId, deployId, label }: { appId: string; deployId: string; label: string }) {
   const dialog = useRef<HTMLDialogElement>(null);
+  useBackdropClose(dialog);
   const [state, action, pending] = useActionState<FormState, FormData>(
     decideDeployAction.bind(null, appId, deployId),
     {},
@@ -509,6 +512,7 @@ export function InlineScopeSetting({
   );
   const form = useRef<HTMLFormElement>(null);
   const dialog = useRef<HTMLDialogElement>(null);
+  useBackdropClose(dialog);
   const [next, setNext] = useState(value);
   const id = useId();
   const confirm = alias.includes("prod");
@@ -599,6 +603,7 @@ export function InlineScopeSetting({
 /** The link form in a side drawer, like the channels and freeze windows; it closes once the scope is linked. */
 export function LinkScopeDrawer({ appId }: { appId: string }) {
   const dialog = useRef<HTMLDialogElement>(null);
+  useBackdropClose(dialog);
   const id = useId();
   return (
     <>
@@ -628,5 +633,217 @@ export function LinkScopeDrawer({ appId }: { appId: string }) {
         </div>
       </dialog>
     </>
+  );
+}
+
+/** A scope as the deploy drawer offers it: what runs there now and what would stop or slow a deploy. */
+export interface DeployableScope {
+  id: string;
+  alias: string;
+  running: string | null;
+  needsApproval: boolean;
+  /** The lock's reason, when the scope is locked: nobody deploys until it is unlocked. */
+  locked: string | null;
+  /** The freeze window active right now, if any, and whether this member may force it. */
+  freeze: { name: string; level: string; until: string; canForce: boolean } | null;
+}
+
+export interface DeployableVersion {
+  tag: string;
+  /** "CI pasó", "CI en curso"… */
+  ciLabel: string;
+  /** Whether a deploy of it can go out: its CI passed or is still running. */
+  usable: boolean;
+  branch: string | null;
+}
+
+/**
+ * "Nuevo deploy": a scope and a version, and a reason when a freeze window has to be forced. The server decides the
+ * rest exactly as for `keel deploy`; the drawer only says beforehand what will happen.
+ */
+export function DeployDrawer({
+  appId,
+  scopes,
+  versions,
+  defaultScopeId,
+}: {
+  appId: string;
+  scopes: DeployableScope[];
+  versions: DeployableVersion[];
+  defaultScopeId?: string;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  useBackdropClose(dialog);
+  const form = useRef<HTMLFormElement>(null);
+  const uid = useId();
+  const [state, action, pending] = useActionState<FormState, FormData>(requestDeployAction.bind(null, appId), {});
+  const firstOpen = scopes.find((s) => !s.locked);
+  const [scopeId, setScopeId] = useState(
+    scopes.find((s) => s.id === defaultScopeId && !s.locked)?.id ?? firstOpen?.id ?? "",
+  );
+  const [tag, setTag] = useState(versions.find((v) => v.usable)?.tag ?? "");
+  useEffect(() => {
+    if (state.ok) dialog.current?.close();
+  }, [state]);
+
+  const scope = scopes.find((s) => s.id === scopeId);
+  const version = versions.find((v) => v.tag === tag);
+  const blockedByFreeze = Boolean(scope?.freeze && !scope.freeze.canForce);
+  const id = (name: string) => `${uid}-${name}`;
+
+  return (
+    <div className="deploy-launch">
+      {state.notice && (
+        <span className="small muted" role="status">
+          {state.notice}
+        </span>
+      )}
+      <button type="button" className="btn" onClick={() => dialog.current?.showModal()}>
+        <IconRocket />
+        Nuevo deploy
+      </button>
+      <dialog ref={dialog} className="dialog drawer" aria-labelledby={id("title")}>
+        <form ref={form} action={action} className="drawer-form">
+          <div className="drawer-head">
+            <div>
+              <h2 className="dialog-title" id={id("title")}>
+                Nuevo deploy
+              </h2>
+              <p className="hint">
+                Lo mismo que <code>keel deploy</code>: respeta bloqueos, ventanas de congelamiento y aprobaciones.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm drawer-close"
+              aria-label="Cerrar"
+              onClick={() => dialog.current?.close()}
+            >
+              ✕
+            </button>
+          </div>
+
+          <div className="drawer-body">
+            <fieldset className="field">
+              <legend className="label">Scope</legend>
+              {scopes.length === 0 ? (
+                <p className="hint">No puedes desplegar en ningún scope de esta app.</p>
+              ) : (
+                <div className="preset-list" role="radiogroup">
+                  {scopes.map((s) => (
+                    <label key={s.id} className={`preset-option${s.locked ? " is-disabled" : ""}`}>
+                      <input
+                        type="radio"
+                        name="scopeId"
+                        value={s.id}
+                        checked={scopeId === s.id}
+                        disabled={Boolean(s.locked)}
+                        onChange={() => setScopeId(s.id)}
+                      />
+                      <span>
+                        <span className="option-title">{s.alias}</span>
+                        <span className="option-description">
+                          {s.running ? `Corre ${s.running}` : "Sin deploys todavía"}
+                          {s.needsApproval && " · pide aprobación"}
+                          {s.locked && ` · bloqueado: ${s.locked}`}
+                          {s.freeze && ` · ventana «${s.freeze.name}» hasta ${s.freeze.until}`}
+                        </span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </fieldset>
+
+            <div className="field">
+              <label className="label" htmlFor={id("tag")}>
+                Versión
+              </label>
+              {versions.length === 0 ? (
+                <p className="hint">
+                  Esta app no tiene versiones todavía: créalas con <code>keel create-version</code>.
+                </p>
+              ) : (
+                <select
+                  id={id("tag")}
+                  className="input"
+                  name="tag"
+                  required
+                  value={tag}
+                  onChange={(e) => setTag(e.target.value)}
+                >
+                  {versions.map((v) => (
+                    <option key={v.tag} value={v.tag} disabled={!v.usable}>
+                      {v.tag} · {v.ciLabel}
+                      {v.branch ? ` · ${v.branch}` : ""}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <span className="field-hint">
+                Las 30 más recientes. Las que fallaron en el CI no se pueden desplegar.
+              </span>
+            </div>
+
+            {scope?.freeze && (
+              <div className="field">
+                <label className="label" htmlFor={id("reason")}>
+                  Motivo para forzar la ventana
+                </label>
+                {scope.freeze.canForce ? (
+                  <>
+                    <textarea
+                      id={id("reason")}
+                      className="input"
+                      name="forceReason"
+                      required
+                      maxLength={500}
+                      placeholder="Hotfix de pagos"
+                    />
+                    <span className="field-hint">Queda en la auditoría y se notifica como deploy forzoso.</span>
+                  </>
+                ) : (
+                  <p className="error">
+                    {scope.alias} está en la ventana «{scope.freeze.name}» ({scope.freeze.level}) y tu rol no puede
+                    forzarla.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {scope && version && (
+              <p className="preview freeze-preview" aria-live="polite">
+                <span>
+                  Desplegará <strong>{version.tag}</strong> en <strong>{scope.alias}</strong>
+                  {scope.running && scope.running !== version.tag ? ` (ahora corre ${scope.running})` : ""}
+                  {scope.running === version.tag ? " (ya es la que corre)" : ""}.
+                  {version.ciLabel !== "CI pasó" && version.usable && " Esperará a que termine su CI."}
+                  {scope.needsApproval && " Otro miembro tendrá que aprobarlo."}
+                </span>
+              </p>
+            )}
+            {state.error && (
+              <p className="error" role="alert">
+                {state.error}
+              </p>
+            )}
+          </div>
+
+          <div className="drawer-foot">
+            <button type="button" className="btn btn-outline" onClick={() => dialog.current?.close()}>
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              className="btn"
+              disabled={pending || !scope || !version || blockedByFreeze || scopes.length === 0}
+            >
+              <IconRocket />
+              {pending ? "Pidiendo…" : "Desplegar"}
+            </button>
+          </div>
+        </form>
+      </dialog>
+    </div>
   );
 }

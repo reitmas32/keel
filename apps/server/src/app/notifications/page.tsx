@@ -70,6 +70,7 @@ const editable = (c: NotificationChannel): EditableChannel => ({
   kind: c.kind,
   maskedUrl: maskUrl(c.url),
   target: c.target,
+  template: c.template,
   signed: Boolean(c.secret),
   events: c.events,
   repoPattern: c.repoPattern,
@@ -112,6 +113,7 @@ export default async function NotificationsPage() {
               <div className="channel-events">
                 <EventChips events={c.events} />
                 {c.secret && c.kind === "webhook" && <span className="event-chip">Firmado</span>}
+                {c.template && <span className="event-chip">Mensaje propio</span>}
               </div>
               <footer className="channel-foot">
                 <span className="small muted">

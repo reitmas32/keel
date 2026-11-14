@@ -3,7 +3,7 @@
 import { useActionState, useEffect, useId, useRef, useState } from "react";
 import type { FreezeWindow } from "@/lib/freeze";
 import { IconPencil, IconPlus, IconTrash } from "../icons";
-import { ConfirmButton } from "../ui-client";
+import { ConfirmButton, useBackdropClose } from "../ui-client";
 import { deleteFreezeAction, type FreezeFormState, saveFreezeAction } from "./actions";
 
 const DAYS = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
@@ -70,6 +70,7 @@ export function FreezeDrawer({
   window?: FreezeWindow;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
+  useBackdropClose(dialog);
   const form = useRef<HTMLFormElement>(null);
   const uid = useId();
   const [state, action, pending] = useActionState<FreezeFormState, FormData>(saveFreezeAction.bind(null, appId), {});

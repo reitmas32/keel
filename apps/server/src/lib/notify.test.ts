@@ -232,6 +232,7 @@ describe("notification channels", () => {
         url: SLACK_POST_URL,
         secret: TOKEN,
         target: "#deploys",
+        template: null,
         events: ["*"],
         repoPattern: "*",
         scopePattern: "*",
