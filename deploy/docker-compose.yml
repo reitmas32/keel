@@ -17,6 +17,19 @@ services:
       # optional: la API acepta llamadas sin token, con el rol KEEL_ANONYMOUS_ROLE. required: siempre pide token.
       KEEL_API_AUTH: ${KEEL_API_AUTH:-optional}
       KEEL_ANONYMOUS_ROLE: ${KEEL_ANONYMOUS_ROLE:-deployer}
+      # Opcionales (v0.10.0). Vacías = valor por defecto o desactivado.
+      KEEL_PUBLIC_URL: ${KEEL_PUBLIC_URL:-}
+      KEEL_TIMEZONE: ${KEEL_TIMEZONE:-UTC}
+      KEEL_APPROVAL_EXPIRY_MINUTES: ${KEEL_APPROVAL_EXPIRY_MINUTES:-1440}
+      # Notificaciones: se suman a los canales del admin. Las URLs son secretos.
+      KEEL_SLACK_WEBHOOK_URL: ${KEEL_SLACK_WEBHOOK_URL:-}
+      KEEL_DISCORD_WEBHOOK_URL: ${KEEL_DISCORD_WEBHOOK_URL:-}
+      KEEL_WEBHOOK_URL: ${KEEL_WEBHOOK_URL:-}
+      KEEL_WEBHOOK_SECRET: ${KEEL_WEBHOOK_SECRET:-}
+      KEEL_NOTIFY_EVENTS: ${KEEL_NOTIFY_EVENTS:-}
+      # Métricas en /api/metrics (apagadas sin token) y formato de logs.
+      KEEL_METRICS_TOKEN: ${KEEL_METRICS_TOKEN:-}
+      KEEL_LOG_FORMAT: ${KEEL_LOG_FORMAT:-json}
       # Base de datos: SQLite en el volumen /data por defecto. Para Postgres (p.ej. varias réplicas de keel),
       # descomenta estas dos líneas y define POSTGRES_DSN en el Environment.
       # DB_ENGINE: postgres
