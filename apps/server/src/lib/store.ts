@@ -1122,15 +1122,20 @@ export class Store {
    * Moves a deploy to `to` only if the state machine allows it; returns the updated record or undefined.
    * The UPDATE only matches while the deploy is still in the state it was read in, so when two callers race
    * (two replicas, or the worker and a CI result), exactly one wins and the other gets undefined.
+   *
+   * `from` is the state the caller decided on. Pass it whenever the decision depends on that state: some states can
+   * be reached from each other (`waiting_ci` → `ci_passed` → `expired`), so without it a caller that read `waiting_ci`
+   * could expire a deploy whose CI passed a moment ago.
    */
   async transition(
     id: string,
     to: DeployStatus,
     now: Date,
-    extra: { error?: string; deployStartedAt?: Date; healthStatus?: HealthStatus } = {},
+    extra: { error?: string; deployStartedAt?: Date; healthStatus?: HealthStatus; from?: DeployStatus } = {},
   ): Promise<DeployRecord | undefined> {
     const current = await this.getDeploy(id);
     if (!current || !canTransition(current.status, to)) return undefined;
+    if (extra.from !== undefined && current.status !== extra.from) return undefined;
     const result = await this.db.run(
       `UPDATE deploys SET status = ?, error = ?, deploy_started_at = COALESCE(?, deploy_started_at),
          health_status = COALESCE(?, health_status),

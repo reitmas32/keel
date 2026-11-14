@@ -26,21 +26,31 @@ async function twoReplicas() {
 describe("several replicas on one database", () => {
   it("lets exactly one of two racing transitions win", async () => {
     const { store, other, clock } = await twoReplicas();
-    // No CI result yet: the deploy is waiting_ci. Every transition below leaves from waiting_ci and none can follow
-    // another (ci_passed can't go to ci_failed or expired, which are final), so exactly one may win in any order.
+    // No CI result yet: the deploy is waiting_ci. Every caller below decided from waiting_ci (as the worker and a CI
+    // result do), so exactly one may win in any order, even though ci_passed can later move on to expired.
     // On real Postgres the calls run on separate connections: a loser either read waiting_ci and its conditional
     // UPDATE matched no row once the winner committed, or read the new state and was refused by the state machine.
     const { id } = await requestDeploy(store, deployReq, clock.now());
 
+    const from = "waiting_ci" as const;
     const results = await Promise.all([
-      store.transition(id, "ci_passed", clock.now()),
-      other.transition(id, "ci_passed", clock.now()),
-      other.transition(id, "ci_failed", clock.now(), { error: "x" }),
-      store.transition(id, "expired", clock.now(), { error: "x" }),
+      store.transition(id, "ci_passed", clock.now(), { from }),
+      other.transition(id, "ci_passed", clock.now(), { from }),
+      other.transition(id, "ci_failed", clock.now(), { error: "x", from }),
+      store.transition(id, "expired", clock.now(), { error: "x", from }),
     ]);
     const winners = results.filter(Boolean);
     expect(winners).toHaveLength(1);
     expect((await store.getDeploy(id))?.status).toBe(winners[0]?.status);
+  });
+
+  it("doesn't expire a deploy whose CI passed after the worker listed it as waiting", async () => {
+    const { store, other, clock, ciToken } = await twoReplicas();
+    const { id } = await requestDeploy(store, deployReq, clock.now());
+    // The CI result lands between the worker's read (waiting_ci) and its write.
+    await recordCiResult(other, ciReq, ciToken, clock.now());
+    expect(await store.transition(id, "expired", clock.now(), { error: "x", from: "waiting_ci" })).toBeUndefined();
+    expect((await store.getDeploy(id))?.status).toBe("ci_passed");
   });
 
   it("lets only one of two replicas move a deploy out of the state both read", async () => {

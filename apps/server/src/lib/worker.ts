@@ -111,6 +111,8 @@ export class DeployWorker {
       if (Date.parse(d.createdAt) >= cutoff) continue;
       const expired = await this.store.transition(d.id, "expired", this.now(), {
         error: `No llegó el resultado del CI en ${this.options.ciExpiryMinutes} min.`,
+        // Its CI may have reported since it was listed: then it is no longer waiting and must not expire.
+        from: "waiting_ci",
       });
       if (expired) {
         this.log(`deploy ${d.id} expirado`, { deployId: d.id, repo: d.repo, scope: d.scope, tag: d.tag });
@@ -132,6 +134,7 @@ export class DeployWorker {
       const hours = Math.round((this.options.approvalExpiryMinutes ?? 24 * 60) / 6) / 10;
       const expired = await this.store.transition(d.id, "expired", this.now(), {
         error: `Nadie aprobó el deploy en ${hours} h.`,
+        from: "ci_passed",
       });
       if (expired) {
         this.log(`deploy ${d.id} expirado sin aprobación`, { deployId: d.id, repo: d.repo, scope: d.scope });
@@ -159,6 +162,7 @@ export class DeployWorker {
     if (this.now().getTime() - since > minutes(this.options.ciExpiryMinutes)) {
       const expired = await this.store.transition(d.id, "expired", this.now(), {
         error: `La ventana de congelamiento «${freeze.window.name}» no terminó en ${this.options.ciExpiryMinutes} min; pide el deploy de nuevo.`,
+        from: "ci_passed",
       });
       if (expired) {
         metrics.deployFinished("expired");
@@ -290,8 +294,10 @@ export class DeployWorker {
 
   /** Fails a deploy. With `scope` (a deploy that reached Dokploy), also starts its automatic rollback. */
   private async fail(d: DeployRecord, error: string, scope?: Scope, healthStatus?: "failed"): Promise<void> {
+    // The worker only fails deploys it started: never one still waiting (a rejection does that, not the worker).
     const failed = await this.store.transition(d.id, "deploy_failed", this.now(), {
       error,
+      from: "deploying",
       ...(healthStatus && { healthStatus }),
     });
     if (!failed) return;
