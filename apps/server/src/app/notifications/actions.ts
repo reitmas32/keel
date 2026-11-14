@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { createChannelAs, deleteChannelAs, requireAdmin, setChannelEnabledAs } from "@/lib/admin";
+import { createChannelAs, deleteChannelAs, requireAdmin, setChannelEnabledAs, updateChannelAs } from "@/lib/admin";
 import { getContext } from "@/lib/context";
 import { ApiError } from "@/lib/errors";
 import { WebhookNotifier } from "@/lib/notify";
@@ -16,24 +16,23 @@ export interface ChannelFormState {
 
 const field = (form: FormData, name: string) => String(form.get(name) ?? "").trim();
 
-export async function createChannelAction(_state: ChannelFormState, form: FormData): Promise<ChannelFormState> {
+/** Creates a channel, or edits the one named by `channelId`. */
+export async function saveChannelAction(_state: ChannelFormState, form: FormData): Promise<ChannelFormState> {
   const viewer = await requireMember();
   try {
     const { store, now } = await getContext();
-    await createChannelAs(
-      store,
-      viewer,
-      {
-        name: field(form, "name"),
-        kind: field(form, "kind"),
-        url: field(form, "url"),
-        secret: field(form, "secret"),
-        events: form.getAll("events").map(String),
-        repo: field(form, "repo"),
-        scope: field(form, "scope"),
-      },
-      now(),
-    );
+    const input = {
+      name: field(form, "name"),
+      kind: field(form, "kind"),
+      url: field(form, "url"),
+      secret: field(form, "secret"),
+      events: form.getAll("events").map(String),
+      repo: field(form, "repo"),
+      scope: field(form, "scope"),
+    };
+    const id = field(form, "channelId");
+    if (id) await updateChannelAs(store, viewer, id, input, now());
+    else await createChannelAs(store, viewer, input, now());
     revalidatePath("/notifications");
     return { ok: true };
   } catch (error) {

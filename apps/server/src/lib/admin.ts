@@ -278,6 +278,27 @@ async function channelOr404(store: Store, id: string): Promise<NotificationChann
   return channel;
 }
 
+/**
+ * Edits a channel. An empty `url` keeps the current one, and so does an empty `secret` while the channel stays a
+ * generic webhook: the admin only ever sees them masked, so it cannot send them back.
+ */
+export async function updateChannelAs(
+  store: Store,
+  p: Principal,
+  id: string,
+  input: Parameters<typeof parseChannelInput>[0],
+  now: Date,
+): Promise<NotificationChannel> {
+  requireAdmin(p, "configurar notificaciones");
+  const current = await channelOr404(store, id);
+  const parsed = parseChannelInput({ ...input, url: input.url.trim() || current.url });
+  if (parsed.kind === "webhook" && !input.secret?.trim()) parsed.secret = current.secret;
+  await store.updateChannel(id, parsed);
+  const channel = (await store.getChannel(id)) as NotificationChannel;
+  await record(store, actorOf(p), "channel.update", {}, channelDetails(channel), now);
+  return channel;
+}
+
 export async function setChannelEnabledAs(
   store: Store,
   p: Principal,

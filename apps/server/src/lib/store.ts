@@ -828,6 +828,24 @@ export class Store {
     return row ? toChannel(row) : undefined;
   }
 
+  async updateChannel(id: string, input: Omit<NotificationChannel, "id" | "createdAt" | "enabled">): Promise<void> {
+    await this.db.run(
+      `UPDATE notification_channels
+       SET name = ?, kind = ?, url = ?, secret = ?, events = ?, repo_pattern = ?, scope_pattern = ?
+       WHERE id = ?`,
+      [
+        input.name,
+        input.kind,
+        input.url,
+        input.secret,
+        input.events.join(","),
+        input.repoPattern,
+        input.scopePattern,
+        id,
+      ],
+    );
+  }
+
   async setChannelEnabled(id: string, enabled: boolean): Promise<void> {
     await this.db.run("UPDATE notification_channels SET enabled = ? WHERE id = ?", [enabled ? 1 : 0, id]);
   }

@@ -28,6 +28,7 @@ export const ACTION_LABEL: Record<string, string> = {
   "member.disable": "Deshabilitó a un miembro",
   "member.enable": "Habilitó a un miembro",
   "channel.create": "Creó un canal",
+  "channel.update": "Editó un canal",
   "channel.enable": "Activó un canal",
   "channel.disable": "Pausó un canal",
   "channel.delete": "Eliminó un canal",
