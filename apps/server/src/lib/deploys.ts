@@ -134,7 +134,7 @@ export async function recordCiResult(
     const updated: DeployRecord[] = [];
     for (const d of await tx.listDeploys({ repo: req.repo, sha: req.sha, status: "waiting_ci" })) {
       const error = to === "ci_failed" ? { error: `El CI de ${req.tag} terminó con ${req.status}.` } : {};
-      const next = await tx.transition(d.id, to, now, error);
+      const next = await tx.transition(d.id, to, now, { ...error, from: "waiting_ci" });
       if (next) updated.push(next);
     }
     return { updated };
