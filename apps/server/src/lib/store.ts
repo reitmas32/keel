@@ -908,6 +908,27 @@ export class Store {
     return rows.map(toFreeze);
   }
 
+  async updateFreeze(id: string, input: Omit<FreezeWindow, "id" | "appId" | "enabled" | "createdBy" | "createdAt">) {
+    await this.db.run(
+      `UPDATE freeze_windows
+       SET name = ?, kind = ?, timezone = ?, starts_at = ?, ends_at = ?, days = ?, start_time = ?, end_time = ?,
+         scope_pattern = ?
+       WHERE id = ?`,
+      [
+        input.name,
+        input.kind,
+        input.timezone,
+        input.startsAt,
+        input.endsAt,
+        input.days.join(","),
+        input.startTime,
+        input.endTime,
+        input.scopePattern,
+        id,
+      ],
+    );
+  }
+
   async setFreezeEnabled(id: string, enabled: boolean): Promise<void> {
     await this.db.run("UPDATE freeze_windows SET enabled = ? WHERE id = ?", [enabled ? 1 : 0, id]);
   }

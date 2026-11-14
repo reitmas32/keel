@@ -2040,3 +2040,100 @@ input[type="checkbox"]:focus-visible {
 .preset-option .option-description {
   display: block;
 }
+
+/* ---------- freeze windows: cards with a week strip, active ones in red ---------- */
+
+.freeze-icon {
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: calc(var(--radius) + 1px);
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+}
+
+.freeze-icon svg.icon {
+  width: 1.125rem;
+  height: 1.125rem;
+}
+
+.freeze-card.is-active {
+  border-color: hsl(var(--error) / 0.55);
+}
+
+.freeze-card.is-active .freeze-icon {
+  border-color: hsl(var(--error) / 0.4);
+  background: hsl(var(--error) / 0.13);
+  color: hsl(var(--error-text));
+}
+
+.freeze-now {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius);
+  background: hsl(var(--error) / 0.1);
+  font-size: 0.8125rem;
+  color: hsl(var(--error-text));
+}
+
+.freeze-schedule {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.875rem;
+  font-size: 0.875rem;
+}
+
+.week-strip {
+  display: inline-flex;
+  gap: 0.25rem;
+}
+
+.week-strip span {
+  display: inline-grid;
+  place-items: center;
+  width: 1.625rem;
+  height: 1.625rem;
+  border-radius: calc(var(--radius) - 3px);
+  border: 1px solid hsl(var(--border));
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: hsl(var(--muted-foreground) / 0.7);
+}
+
+.week-strip span.is-on {
+  border-color: hsl(var(--foreground));
+  background: hsl(var(--foreground));
+  color: hsl(var(--background));
+}
+
+.freeze-hours {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+}
+
+.freeze-date {
+  font-weight: 600;
+}
+
+.freeze-range {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+}
+
+.freeze-range > span {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.freeze-preview {
+  padding: 0.625rem 0.75rem;
+  border-radius: var(--radius);
+  background: hsl(var(--muted) / 0.4);
+}

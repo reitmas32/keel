@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { createFreezeAs, deleteFreezeAs, setFreezeEnabledAs } from "@/lib/admin";
+import { createFreezeAs, deleteFreezeAs, setFreezeEnabledAs, updateFreezeAs } from "@/lib/admin";
 import { getContext } from "@/lib/context";
 import { ApiError } from "@/lib/errors";
 import { requireMember } from "../session";
@@ -19,8 +19,8 @@ function revalidate(appId: string | null) {
   if (appId) revalidatePath(`/apps/${appId}`, "layout");
 }
 
-/** Creates a window for the organization (`appId` null) or for one app. */
-export async function createFreezeAction(
+/** Creates a window for the organization (`appId` null) or for one app, or edits the one named by `freezeId`. */
+export async function saveFreezeAction(
   appId: string | null,
   _state: FreezeFormState,
   form: FormData,
@@ -28,23 +28,20 @@ export async function createFreezeAction(
   const viewer = await requireMember();
   try {
     const { store, now } = await getContext();
-    await createFreezeAs(
-      store,
-      viewer,
-      appId,
-      {
-        name: field(form, "name"),
-        kind: field(form, "kind"),
-        timezone: field(form, "timezone"),
-        startsAt: field(form, field(form, "kind") === "date" ? "date" : "startsAt"),
-        endsAt: field(form, "endsAt"),
-        days: form.getAll("days").map(String),
-        startTime: field(form, "startTime"),
-        endTime: field(form, "endTime"),
-        scope: field(form, "scope"),
-      },
-      now(),
-    );
+    const input = {
+      name: field(form, "name"),
+      kind: field(form, "kind"),
+      timezone: field(form, "timezone"),
+      startsAt: field(form, field(form, "kind") === "date" ? "date" : "startsAt"),
+      endsAt: field(form, "endsAt"),
+      days: form.getAll("days").map(String),
+      startTime: field(form, "startTime"),
+      endTime: field(form, "endTime"),
+      scope: field(form, "scope"),
+    };
+    const id = field(form, "freezeId");
+    if (id) await updateFreezeAs(store, viewer, id, input, now());
+    else await createFreezeAs(store, viewer, appId, input, now());
     revalidate(appId);
     return { ok: true };
   } catch (error) {

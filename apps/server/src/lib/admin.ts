@@ -360,6 +360,22 @@ async function freezeOr404(store: Store, id: string): Promise<FreezeWindow> {
   return window;
 }
 
+/** Edits a window's name, schedule, time zone or scopes. Its level (organization or app) never changes. */
+export async function updateFreezeAs(
+  store: Store,
+  p: Principal,
+  id: string,
+  input: FreezeInput,
+  now: Date,
+): Promise<FreezeWindow> {
+  const current = await freezeOr404(store, id);
+  const target = await freezeTarget(store, p, current.appId, "configurar ventanas de congelamiento");
+  await store.updateFreeze(id, parseFreezeInput(input));
+  const window = (await store.getFreeze(id)) as FreezeWindow;
+  await record(store, actorOf(p), "freeze.update", target ?? {}, freezeDetails(window), now);
+  return window;
+}
+
 export async function setFreezeEnabledAs(
   store: Store,
   p: Principal,

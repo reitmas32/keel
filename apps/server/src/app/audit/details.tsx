@@ -33,6 +33,7 @@ export const ACTION_LABEL: Record<string, string> = {
   "channel.disable": "Pausó un canal",
   "channel.delete": "Eliminó un canal",
   "freeze.create": "Creó una ventana",
+  "freeze.update": "Editó una ventana",
   "freeze.enable": "Activó una ventana",
   "freeze.disable": "Pausó una ventana",
   "freeze.delete": "Eliminó una ventana",

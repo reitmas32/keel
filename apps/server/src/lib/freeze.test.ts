@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createFreezeAs, deleteFreezeAs, setFreezeEnabledAs } from "./admin";
+import { createFreezeAs, deleteFreezeAs, setFreezeEnabledAs, updateFreezeAs } from "./admin";
 import { recordCiResult, requestDeploy } from "./deploys";
 import { activeFreeze, activeUntil, describeWindow, type FreezeWindow, parseFreezeInput, wallClock } from "./freeze";
 import { handlers } from "./handlers";
@@ -194,6 +194,34 @@ describe("deploys during a freeze", () => {
     await deleteFreezeAs(t.store, asAdmin, freeze.id, t.clock.now());
     expect((await t.store.listAudit()).map((a) => a.action)).toEqual(
       expect.arrayContaining(["freeze.create", "freeze.disable", "freeze.delete"]),
+    );
+  });
+
+  it("edits a window in place, keeping its level, author and state", async () => {
+    const { store, clock, app, asAdmin, freeze, post, maintainer } = await setup("app");
+    const edited = await updateFreezeAs(
+      store,
+      asAdmin,
+      freeze.id,
+      { name: "fin de semana", kind: "weekly", days: ["6", "7"], startTime: "00:00", endTime: "00:00", timezone: MX },
+      clock.now(),
+    );
+    expect(edited).toMatchObject({ name: "fin de semana", days: [6, 7], appId: app.id, enabled: true });
+    expect(edited.createdBy).toBe(freeze.createdBy);
+    // Monday is no longer frozen.
+    expect((await post({}, maintainer.headers)).status).toBe(202);
+    expect((await store.listAudit()).map((a) => a.action)).toContain("freeze.update");
+    await expect(
+      updateFreezeAs(store, asAdmin, freeze.id, { name: "x", kind: "weekly", timezone: MX }, clock.now()),
+    ).rejects.toThrow(/al menos un día/);
+  });
+
+  it("only lets who could create a window edit it", async () => {
+    const { store, clock, freeze } = await setup("org");
+    const maintainer = await addMember(store, clock.now(), { role: "maintainer" });
+    const p = { member: maintainer, grants: [], maxRole: null, anonymousRole: null };
+    await expect(updateFreezeAs(store, p, freeze.id, { ...weekdays, name: "otra" }, clock.now())).rejects.toThrow(
+      /no permite configurar ventanas de congelamiento/,
     );
   });
 
