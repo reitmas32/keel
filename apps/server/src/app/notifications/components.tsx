@@ -4,7 +4,7 @@ import { useActionState, useEffect, useId, useRef, useState } from "react";
 import { IconPencil, IconPlus, IconTrash } from "../icons";
 import { ConfirmButton } from "../ui-client";
 import { type ChannelFormState, deleteChannelAction, saveChannelAction, testChannelAction } from "./actions";
-import { type ChannelKindName, ChannelLogo, KIND_LABEL } from "./logo";
+import { type ChannelKindName, ChannelLogo, KIND_LABEL, platformOf } from "./logo";
 import { EVENT_PRESETS, type PresetId, presetOf } from "./presets";
 
 const KINDS = [
@@ -20,12 +20,14 @@ const PRESET_OPTIONS: { id: PresetId; label: string; hint: string }[] = [
   { id: "custom", label: "Personalizado", hint: "Elige los eventos uno a uno" },
 ];
 
-/** What the drawer needs of a channel it edits. Never the URL or the secret: only their masked hint. */
+/** What the drawer needs of a channel it edits. Never the URL, secret or token: only their masked hint. */
 export interface EditableChannel {
   id: string;
   name: string;
   kind: ChannelKindName;
   maskedUrl: string;
+  /** Slack bots: the channel they post to. */
+  target: string | null;
   signed: boolean;
   events: string[];
   repoPattern: string;
@@ -51,6 +53,10 @@ export function ChannelDrawer({
   const uid = useId();
   const [state, action, pending] = useActionState<ChannelFormState, FormData>(saveChannelAction, {});
   const [kind, setKind] = useState<ChannelKindName>(channel?.kind ?? "slack");
+  // Which Slack mode the Slack button brings back after picking another platform.
+  const [slackMode, setSlackMode] = useState<"slack" | "slack_bot">(
+    channel?.kind === "slack_bot" ? "slack_bot" : "slack",
+  );
   const [preset, setPreset] = useState<PresetId>(channel ? presetOf(channel.events) : "all");
   const [picked, setPicked] = useState<string[]>(channel?.events.filter((e) => e !== "*") ?? []);
 
@@ -60,12 +66,16 @@ export function ChannelDrawer({
     if (!channel) {
       form.current?.reset();
       setKind("slack");
+      setSlackMode("slack");
       setPreset("all");
       setPicked([]);
     }
   }, [state, channel]);
 
-  const current = KINDS.find((k) => k.value === kind) ?? KINDS[0];
+  const platform = platformOf(kind);
+  const current = KINDS.find((k) => k.value === platform) ?? KINDS[0];
+  // Editing within the same kind, an empty URL or token keeps the saved one; switching kind needs a new one.
+  const sameKind = channel?.kind === kind;
   const toggle = (name: string) => setPicked((p) => (p.includes(name) ? p.filter((x) => x !== name) : [...p, name]));
   const choosePreset = (id: PresetId) => {
     setPreset(id);
@@ -96,8 +106,8 @@ export function ChannelDrawer({
               </h2>
               <p className="hint">
                 {channel
-                  ? "Deja la URL vacía para conservar la actual."
-                  : "La URL del webhook es un secreto: después solo se verá enmascarada."}
+                  ? `Deja ${kind === "slack_bot" ? "el token" : "la URL"} vacío para conservar el actual.`
+                  : "La URL del webhook y el token del bot son secretos: después solo se verán enmascarados."}
               </p>
             </div>
             <button
@@ -112,6 +122,7 @@ export function ChannelDrawer({
 
           <div className="drawer-body">
             {channel && <input type="hidden" name="channelId" value={channel.id} />}
+            <input type="hidden" name="kind" value={kind} />
             <fieldset className="field">
               <legend className="label">Tipo</legend>
               <div className="segmented kind-picker" role="radiogroup">
@@ -119,10 +130,9 @@ export function ChannelDrawer({
                   <label key={k.value}>
                     <input
                       type="radio"
-                      name="kind"
-                      value={k.value}
-                      checked={kind === k.value}
-                      onChange={() => setKind(k.value)}
+                      name={`${uid}-platform`}
+                      checked={platform === k.value}
+                      onChange={() => setKind(k.value === "slack" ? slackMode : k.value)}
                     />
                     <ChannelLogo kind={k.value} size="sm" />
                     {KIND_LABEL[k.value]}
@@ -130,6 +140,44 @@ export function ChannelDrawer({
                 ))}
               </div>
             </fieldset>
+
+            {platform === "slack" && (
+              <fieldset className="field">
+                <legend className="label">Cómo envía</legend>
+                <div className="preset-list slack-mode" role="radiogroup">
+                  {(
+                    [
+                      {
+                        value: "slack",
+                        label: "Webhook entrante",
+                        hint: "Una URL de hooks.slack.com, fija a un canal.",
+                      },
+                      {
+                        value: "slack_bot",
+                        label: "Bot con token",
+                        hint: "El token de una app de Slack (xoxb-…) y el canal; el bot debe estar en el canal.",
+                      },
+                    ] as const
+                  ).map((m) => (
+                    <label key={m.value} className="preset-option">
+                      <input
+                        type="radio"
+                        name={`${uid}-slack-mode`}
+                        checked={kind === m.value}
+                        onChange={() => {
+                          setKind(m.value);
+                          setSlackMode(m.value);
+                        }}
+                      />
+                      <span>
+                        <span className="option-title">{m.label}</span>
+                        <span className="option-description">{m.hint}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+            )}
 
             <div className="field">
               <label className="label" htmlFor={id("name")}>
@@ -146,20 +194,60 @@ export function ChannelDrawer({
               />
             </div>
 
-            <div className="field">
-              <label className="label" htmlFor={id("url")}>
-                URL del webhook
-              </label>
-              <input
-                id={id("url")}
-                className="input"
-                name="url"
-                type="url"
-                required={!channel}
-                autoComplete="off"
-                placeholder={channel ? channel.maskedUrl : current.placeholder}
-              />
-            </div>
+            {kind === "slack_bot" ? (
+              <>
+                <div className="field">
+                  <label className="label" htmlFor={id("token")}>
+                    Token del bot
+                  </label>
+                  <input
+                    id={id("token")}
+                    className="input"
+                    name="token"
+                    type="password"
+                    required={!sameKind}
+                    autoComplete="off"
+                    placeholder={sameKind ? "xoxb-•••••••• (sin cambios)" : "xoxb-…"}
+                  />
+                  <span className="field-hint">
+                    En api.slack.com/apps → OAuth &amp; Permissions, con el scope <code>chat:write</code>.
+                  </span>
+                </div>
+                <div className="field">
+                  <label className="label" htmlFor={id("channel")}>
+                    Canal
+                  </label>
+                  <input
+                    id={id("channel")}
+                    className="input"
+                    name="channel"
+                    required
+                    autoComplete="off"
+                    placeholder="C0123ABCD o #deploys"
+                    defaultValue={channel?.target ?? undefined}
+                  />
+                  <span className="field-hint">
+                    Mejor su id (clic derecho en el canal → Copiar enlace): sobrevive a un cambio de nombre. Invita al
+                    bot con <code>/invite @bot</code>.
+                  </span>
+                </div>
+              </>
+            ) : (
+              <div className="field">
+                <label className="label" htmlFor={id("url")}>
+                  URL del webhook
+                </label>
+                <input
+                  id={id("url")}
+                  className="input"
+                  name="url"
+                  type="url"
+                  required={!sameKind}
+                  autoComplete="off"
+                  placeholder={sameKind && channel ? channel.maskedUrl : current.placeholder}
+                />
+              </div>
+            )}
 
             {kind === "webhook" && (
               <div className="field">

@@ -26,6 +26,8 @@ export async function saveChannelAction(_state: ChannelFormState, form: FormData
       kind: field(form, "kind"),
       url: field(form, "url"),
       secret: field(form, "secret"),
+      token: field(form, "token"),
+      channel: field(form, "channel"),
       events: form.getAll("events").map(String),
       repo: field(form, "repo"),
       scope: field(form, "scope"),

@@ -11,6 +11,7 @@ import { EVENT_PRESETS, presetOf } from "./presets";
 
 const ENV_VAR: Record<ChannelKindName, string> = {
   slack: "KEEL_SLACK_WEBHOOK_URL",
+  slack_bot: "KEEL_SLACK_BOT_TOKEN",
   discord: "KEEL_DISCORD_WEBHOOK_URL",
   webhook: "KEEL_WEBHOOK_URL",
 };
@@ -59,11 +60,16 @@ function AppliesTo({ repo, scope }: { repo: string; scope: string }) {
   );
 }
 
+/** Where a channel posts, safe to show: a Slack bot's channel, or a webhook's masked URL. */
+const destination = (c: Pick<NotificationChannel, "kind" | "url" | "target">) =>
+  c.kind === "slack_bot" ? `${c.target} · bot` : maskUrl(c.url);
+
 const editable = (c: NotificationChannel): EditableChannel => ({
   id: c.id,
   name: c.name,
   kind: c.kind,
   maskedUrl: maskUrl(c.url),
+  target: c.target,
   signed: Boolean(c.secret),
   events: c.events,
   repoPattern: c.repoPattern,
@@ -98,14 +104,14 @@ export default async function NotificationsPage() {
                 <ChannelLogo kind={c.kind} />
                 <div className="channel-title">
                   <h2>{c.name}</h2>
-                  <span className="mono muted channel-url">{maskUrl(c.url)}</span>
+                  <span className="mono muted channel-url">{destination(c)}</span>
                 </div>
                 <StatusBadge tone={c.enabled ? "done" : "idle"}>{c.enabled ? "Activo" : "Pausado"}</StatusBadge>
               </header>
               <AppliesTo repo={c.repoPattern} scope={c.scopePattern} />
               <div className="channel-events">
                 <EventChips events={c.events} />
-                {c.secret && <span className="event-chip">Firmado</span>}
+                {c.secret && c.kind === "webhook" && <span className="event-chip">Firmado</span>}
               </div>
               <footer className="channel-foot">
                 <span className="small muted">
@@ -133,12 +139,18 @@ export default async function NotificationsPage() {
                   <h2>
                     {KIND_LABEL[c.kind]} <span className="badge badge-outline">ENV</span>
                   </h2>
-                  <span className="mono muted channel-url">{maskUrl(c.url)}</span>
+                  <span className="mono muted channel-url">{destination(c)}</span>
                 </div>
               </header>
               <div className="channel-scope">
                 <span className="channel-section-label">Definido en</span>
                 <code>{ENV_VAR[c.kind]}</code>
+                {c.kind === "slack_bot" && (
+                  <>
+                    {" "}
+                    y <code>KEEL_SLACK_CHANNEL</code>
+                  </>
+                )}
               </div>
               <div className="channel-events">
                 <EventChips events={c.events} />

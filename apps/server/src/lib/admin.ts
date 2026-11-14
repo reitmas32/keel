@@ -255,6 +255,7 @@ const channelDetails = (c: NotificationChannel) => ({
   name: c.name,
   kind: c.kind,
   url: maskUrl(c.url),
+  ...(c.target && { channel: c.target }),
   events: c.events,
   repo: c.repoPattern,
   scope: c.scopePattern,
@@ -279,8 +280,8 @@ async function channelOr404(store: Store, id: string): Promise<NotificationChann
 }
 
 /**
- * Edits a channel. An empty `url` keeps the current one, and so does an empty `secret` while the channel stays a
- * generic webhook: the admin only ever sees them masked, so it cannot send them back.
+ * Edits a channel. An empty `url` keeps the current one, an empty `token` keeps a Slack bot's, and an empty `secret`
+ * keeps a generic webhook's: the admin only ever sees them masked, so it cannot send them back.
  */
 export async function updateChannelAs(
   store: Store,
@@ -291,7 +292,14 @@ export async function updateChannelAs(
 ): Promise<NotificationChannel> {
   requireAdmin(p, "configurar notificaciones");
   const current = await channelOr404(store, id);
-  const parsed = parseChannelInput({ ...input, url: input.url.trim() || current.url });
+  // The admin only ever sees the URL and the token masked, so an empty field means "keep what it has".
+  const keepToken = current.kind === "slack_bot" ? (current.secret ?? "") : "";
+  const parsed = parseChannelInput({
+    ...input,
+    // Only within the same kind: a Slack bot's url is the Slack API, never a webhook to keep.
+    url: input.url?.trim() || (input.kind === current.kind ? current.url : ""),
+    token: input.token?.trim() || keepToken,
+  });
   if (parsed.kind === "webhook" && !input.secret?.trim()) parsed.secret = current.secret;
   await store.updateChannel(id, parsed);
   const channel = (await store.getChannel(id)) as NotificationChannel;
