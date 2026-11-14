@@ -4,6 +4,7 @@ import { type DokployClient, HttpDokployClient } from "./dokploy";
 import { type Env, loadEnv } from "./env";
 import { errorFields, logger } from "./log";
 import { type Notifier, WebhookNotifier } from "./notify";
+import { tracedFetch } from "./outbound";
 import { Store } from "./store";
 import { DeployWorker } from "./worker";
 
@@ -30,7 +31,8 @@ async function createContext(): Promise<AppContext> {
   const env = loadEnv();
   // Opening the database also applies its pending migrations, so nothing queries an outdated schema.
   const store = new Store(await openDb(env));
-  const dokploy = new HttpDokployClient(env.DOKPLOY_URL, env.DOKPLOY_API_KEY);
+  // Every call to Dokploy and Accounts leaves a line: dependency.call at debug, dependency.failed when it fails.
+  const dokploy = new HttpDokployClient(env.DOKPLOY_URL, env.DOKPLOY_API_KEY, tracedFetch("dokploy"));
   const notifier = new WebhookNotifier(store, env);
   const worker = new DeployWorker(store, dokploy, {
     ciExpiryMinutes: env.KEEL_CI_EXPIRY_MINUTES,
@@ -39,7 +41,7 @@ async function createContext(): Promise<AppContext> {
     notifier,
   });
   const accountsSettings = accountsConfig(env);
-  const accounts = accountsSettings ? new HttpAccountsClient(accountsSettings) : null;
+  const accounts = accountsSettings ? new HttpAccountsClient(accountsSettings, tracedFetch("accounts")) : null;
   return { env, store, dokploy, worker, notifier, accounts, now: () => new Date() };
 }
 

@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createFreezeAs, deleteFreezeAs, setFreezeEnabledAs, updateFreezeAs } from "@/lib/admin";
 import { getContext } from "@/lib/context";
 import { ApiError } from "@/lib/errors";
+import { rejectedAction } from "@/lib/log";
 import { requireMember } from "../session";
 
 export interface FreezeFormState {
@@ -45,7 +46,7 @@ export async function saveFreezeAction(
     revalidate(appId);
     return { ok: true };
   } catch (error) {
-    if (error instanceof ApiError) return { error: error.message };
+    if (error instanceof ApiError) return rejectedAction("freezes", error);
     throw error;
   }
 }

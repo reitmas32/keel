@@ -3,6 +3,7 @@ import { type Env, SLACK_TOKEN } from "./env";
 import { ApiError } from "./errors";
 import { logger } from "./log";
 import { metrics } from "./metrics";
+import { type Dependency, tracedFetch } from "./outbound";
 import { globMatch, normalizeGrantPatterns } from "./roles";
 import { CHANNEL_KINDS, type ChannelKind, type DeployRecord, type NotificationChannel, type Store } from "./store";
 
@@ -295,7 +296,10 @@ export class WebhookNotifier implements Notifier {
     }
     let failure: string | undefined;
     try {
-      const response = await (this.options.fetch ?? fetch)(channel.url, {
+      // A webhook's URL is a secret: its line shows the masked one.
+      const dependency: Dependency = channel.kind === "slack_bot" || channel.kind === "slack" ? "slack" : channel.kind;
+      const traced = tracedFetch(dependency, this.options.fetch ?? fetch, () => maskUrl(channel.url));
+      const response = await traced(channel.url, {
         method: "POST",
         headers,
         body,

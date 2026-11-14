@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import type { AccountsClient, AccountsFailureReason } from "./accounts";
 import { checkPassword } from "./auth";
+import { logger } from "./log";
 import { loginBreakGlass, loginWithAccounts, loginWithPassword } from "./members";
 import { type Member, normalizeEmail, type Store } from "./store";
 
@@ -38,6 +39,10 @@ export async function passwordLogin(deps: LoginDeps, rawEmail: string, password:
     const member = checkPassword(password, deps.adminPassword)
       ? await loginBreakGlass(deps.store, deps.now)
       : undefined;
+    logger.log(member ? "info" : "warn", member ? "auth.login.succeeded" : "auth.login.failed", {
+      method: "break_glass",
+      ...(member && { memberId: member.id }),
+    });
     return member ? { ok: true, member } : { ok: false, error: "Contraseña incorrecta." };
   }
 
@@ -46,16 +51,31 @@ export async function passwordLogin(deps: LoginDeps, rawEmail: string, password:
     const result = await deps.accounts.signIn(email, password);
     if (result.ok) {
       const member = await loginWithAccounts(deps.store, result, "accounts_password", deps.now);
-      if (member) return { ok: true, member };
+      if (member) {
+        logger.info("auth.login.succeeded", { method: "accounts_password", email, memberId: member.id });
+        return { ok: true, member };
+      }
       accountsError = NOT_A_MEMBER;
-    } else if (result.reason === "mfa" || result.reason === "try_later" || result.reason === "unavailable") {
-      accountsError = MESSAGES[result.reason];
+      logger.warn("auth.login.failed", { method: "accounts_password", email, reason: "not_a_member" });
+    } else {
+      logger.info("auth.accounts.rejected", { method: "accounts_password", email, reason: result.reason });
+      if (result.reason === "mfa" || result.reason === "try_later" || result.reason === "unavailable") {
+        accountsError = MESSAGES[result.reason];
+      }
     }
   }
 
   // Fallback: keel's own password (also the only way without Accounts).
   const local = await loginWithPassword(deps.store, email, password, deps.now);
-  if (local) return { ok: true, member: local };
+  if (local) {
+    logger.info("auth.login.succeeded", { method: "password", email, memberId: local.id });
+    return { ok: true, member: local };
+  }
+  logger.warn("auth.login.failed", {
+    method: "password",
+    email,
+    reason: accountsError ? "accounts" : "bad_credentials",
+  });
   return { ok: false, error: accountsError ?? BAD_CREDENTIALS };
 }
 
@@ -71,10 +91,20 @@ export async function requestLoginCode(
   const email = normalizeEmail(rawEmail);
   if (!/^[^\s@]+@[^\s@]+$/.test(email)) return { ok: false, error: "Escribe tu email." };
   const member = await deps.store.getMemberByEmail(email);
-  if (!member || member.status === "disabled")
+  if (!member || member.status === "disabled") {
+    // The page answers as if it sent it, so whoever asks can't tell members apart; the log says why nothing arrives.
+    logger.info("auth.email_code.skipped", {
+      email,
+      reason: member ? "member_disabled" : "not_a_member",
+    });
     return { ok: true, challengeId: `none_${randomBytes(16).toString("hex")}` };
+  }
   const result = await deps.accounts.requestEmailCode(email);
-  if (!result.ok) return { ok: false, error: MESSAGES[result.reason] ?? "No se pudo enviar el código." };
+  if (!result.ok) {
+    logger.warn("auth.email_code.failed", { email, memberId: member.id, reason: result.reason });
+    return { ok: false, error: MESSAGES[result.reason] ?? "No se pudo enviar el código." };
+  }
+  logger.info("auth.email_code.requested", { email, memberId: member.id });
   return { ok: true, challengeId: result.challengeId };
 }
 
@@ -82,9 +112,13 @@ export async function claimLoginCode(deps: LoginDeps, challengeId: string, rawCo
   if (!deps.accounts) return { ok: false, error: "El acceso con código por correo no está configurado." };
   const code = rawCode.replace(/\s+/g, "");
   if (!challengeId || !code) return { ok: false, error: "Escribe el código que te llegó por correo." };
-  if (challengeId.startsWith("none_")) return { ok: false, error: MESSAGES.invalid_code as string };
+  if (challengeId.startsWith("none_")) {
+    logger.warn("auth.login.failed", { method: "accounts_email_code", reason: "code_never_sent" });
+    return { ok: false, error: MESSAGES.invalid_code as string };
+  }
   const result = await deps.accounts.claimEmailCode(challengeId, code);
   if (!result.ok) {
+    logger.warn("auth.login.failed", { method: "accounts_email_code", reason: result.reason });
     const left = result.remainingAttempts;
     const base = MESSAGES[result.reason] ?? "No se pudo entrar con ese código.";
     return {
@@ -93,5 +127,9 @@ export async function claimLoginCode(deps: LoginDeps, challengeId: string, rawCo
     };
   }
   const member = await loginWithAccounts(deps.store, result, "accounts_email_code", deps.now);
+  logger.log(member ? "info" : "warn", member ? "auth.login.succeeded" : "auth.login.failed", {
+    method: "accounts_email_code",
+    ...(member ? { memberId: member.id } : { reason: "not_a_member" }),
+  });
   return member ? { ok: true, member } : { ok: false, error: NOT_A_MEMBER };
 }

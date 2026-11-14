@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createChannelAs, deleteChannelAs, requireAdmin, setChannelEnabledAs, updateChannelAs } from "@/lib/admin";
 import { getContext } from "@/lib/context";
 import { ApiError } from "@/lib/errors";
+import { rejectedAction } from "@/lib/log";
 import { WebhookNotifier } from "@/lib/notify";
 import { requireMember } from "../session";
 
@@ -38,7 +39,7 @@ export async function saveChannelAction(_state: ChannelFormState, form: FormData
     revalidatePath("/notifications");
     return { ok: true };
   } catch (error) {
-    if (error instanceof ApiError) return { error: error.message };
+    if (error instanceof ApiError) return rejectedAction("notifications", error);
     throw error;
   }
 }
@@ -85,7 +86,7 @@ export async function testChannelAction(channelId: string, _state: ChannelFormSt
     );
     return failure ? { error: `El webhook ${failure}.` } : { message: "Enviado." };
   } catch (error) {
-    if (error instanceof ApiError) return { error: error.message };
+    if (error instanceof ApiError) return rejectedAction("notifications", error);
     throw error;
   }
 }

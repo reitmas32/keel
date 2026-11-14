@@ -4,6 +4,7 @@ import { activeFreeze } from "./freeze";
 import { logger } from "./log";
 import { metrics } from "./metrics";
 import type { DeployNotification, Notifier, NotifyEvent } from "./notify";
+import { tracedFetch } from "./outbound";
 import type { DeployRecord, Scope, Store } from "./store";
 
 export interface WorkerOptions {
@@ -34,7 +35,7 @@ export const ROLLBACK_ACTOR = "keel (rollback automático)";
 /** `GET check.url`: healthy when it answers `expectedStatus`, or any 2xx without one, within the timeout. */
 export const probeHealth: HealthProbe = async (check) => {
   try {
-    const response = await fetch(check.url, {
+    const response = await tracedFetch("health_check")(check.url, {
       method: "GET",
       headers: { "user-agent": "keel-health-check" },
       signal: AbortSignal.timeout(check.timeoutSeconds * 1000),

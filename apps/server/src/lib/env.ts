@@ -67,6 +67,8 @@ const envSchema = z
     // json (default): one JSON object per log line. text: `[keel] mensaje`, for reading by eye.
     KEEL_LOG_FORMAT: optional(z.enum(["json", "text"]).default("json")),
     KEEL_LOG_LEVEL: optional(z.enum(["debug", "info", "warn", "error"]).default("info")),
+    // With KEEL_LOG_LEVEL=debug, also the headers and bodies (2 KB, redacted) of every API request and response.
+    KEEL_LOG_BODIES: optional(z.enum(["true", "false"]).default("false")),
     // Default time zone (IANA) of new freeze windows in the admin, e.g. America/Mexico_City.
     KEEL_TIMEZONE: optional(
       z

@@ -33,6 +33,10 @@ services:
       # Métricas en /api/metrics (apagadas sin token) y formato de logs.
       KEEL_METRICS_TOKEN: ${KEEL_METRICS_TOKEN:-}
       KEEL_LOG_FORMAT: ${KEEL_LOG_FORMAT:-json}
+      # info (por defecto) o debug para ver cada llamada a Dokploy, Accounts y Slack; con debug,
+      # KEEL_LOG_BODIES=true vuelca también los cuerpos de la API (2 KB, redactados).
+      KEEL_LOG_LEVEL: ${KEEL_LOG_LEVEL:-info}
+      KEEL_LOG_BODIES: ${KEEL_LOG_BODIES:-false}
       # Login con Foundathyon Accounts (v0.11.0): las tres o ninguna. Para entrar hay que ser miembro de keel.
       ACCOUNTS_URL: ${ACCOUNTS_URL:-}
       ACCOUNTS_PUBLISHABLE_KEY: ${ACCOUNTS_PUBLISHABLE_KEY:-}

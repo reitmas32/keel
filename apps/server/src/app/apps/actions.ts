@@ -16,6 +16,7 @@ import {
 } from "@/lib/admin";
 import { getContext } from "@/lib/context";
 import { ApiError } from "@/lib/errors";
+import { rejectedAction } from "@/lib/log";
 import { requireMember, type Viewer } from "../session";
 
 export interface FormState {
@@ -39,7 +40,7 @@ async function attempt(fn: (viewer: Viewer) => FormState | Promise<FormState>): 
   try {
     return await fn(viewer);
   } catch (error) {
-    if (error instanceof ApiError) return { error: error.message };
+    if (error instanceof ApiError) return rejectedAction("apps", error);
     throw error;
   }
 }

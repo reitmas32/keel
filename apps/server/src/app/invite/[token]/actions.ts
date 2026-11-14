@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation";
 import { getContext } from "@/lib/context";
 import { ApiError } from "@/lib/errors";
+import { rejectedAction } from "@/lib/log";
 import { acceptInvite } from "@/lib/members";
 import { startSession } from "../../session";
 
@@ -22,7 +23,7 @@ export async function acceptInviteAction(token: string, _state: InviteState, for
     );
     memberId = member.id;
   } catch (error) {
-    if (error instanceof ApiError) return { error: error.message };
+    if (error instanceof ApiError) return rejectedAction("invite", error);
     throw error;
   }
   await startSession(memberId);
