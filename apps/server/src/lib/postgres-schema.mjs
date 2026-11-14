@@ -310,6 +310,11 @@ export const POSTGRES_MIGRATIONS = [
       `ALTER TABLE notification_channels ADD COLUMN IF NOT EXISTS target ${TEXT}`,
     ],
   },
+  {
+    version: 9,
+    name: "mensaje personalizado por canal",
+    statements: [`ALTER TABLE notification_channels ADD COLUMN IF NOT EXISTS template ${TEXT}`],
+  },
 ];
 
 /**

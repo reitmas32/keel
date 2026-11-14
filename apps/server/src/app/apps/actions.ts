@@ -8,6 +8,7 @@ import {
   deleteAppAs,
   linkScopeAs,
   lockScopeAs,
+  requestDeployAs,
   rotateCiTokenAs,
   setAppRequireApprovalAs,
   unlinkScopeAs,
@@ -27,6 +28,8 @@ export interface FormState {
   repo?: string;
   /** Set when the action succeeded and has nothing else to show (e.g. to close a dialog). */
   ok?: boolean;
+  /** What happened, in a sentence, when it is worth saying (e.g. a deploy that now waits for an approval). */
+  notice?: string;
 }
 
 const field = (form: FormData, name: string) => String(form.get(name) ?? "").trim();
@@ -226,5 +229,30 @@ export async function setScopeSettingAction(
     await updateScopeAs(store, viewer, appId, scopeId, change, now());
     revalidatePath(`/apps/${appId}`, "layout");
     return { ok: true };
+  });
+}
+
+/** A deploy of a version to a scope, asked from the Deploys page. */
+export async function requestDeployAction(appId: string, _state: FormState, form: FormData): Promise<FormState> {
+  return attempt(async (viewer) => {
+    const { store, notifier, now } = await getContext();
+    const { deploy, created } = await requestDeployAs(
+      store,
+      notifier,
+      viewer,
+      appId,
+      { scopeId: field(form, "scopeId"), tag: field(form, "tag"), forceReason: field(form, "forceReason") },
+      now(),
+    );
+    revalidatePath(`/apps/${appId}`, "layout");
+    const what = `${deploy.tag} → ${deploy.scope}`;
+    if (!created) return { ok: true, notice: `${what} ya estaba en curso; no se duplicó.` };
+    if (deploy.approval?.status === "pending")
+      return { ok: true, notice: `${what} espera la aprobación de otro miembro.` };
+    if (deploy.status === "waiting_ci")
+      return { ok: true, notice: `${what} espera a que termine el CI de la versión.` };
+    if (deploy.status === "ci_failed")
+      return { ok: true, notice: `${what} no se despliega: el CI de la versión falló.` };
+    return { ok: true, notice: `${what} en cola.` };
   });
 }

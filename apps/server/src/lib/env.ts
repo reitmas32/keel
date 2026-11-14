@@ -103,6 +103,8 @@ const envSchema = z
     KEEL_SLACK_CHANNEL: optional(z.string().trim().min(1).optional()),
     // Signs generic webhook bodies: `X-Keel-Signature: sha256=<hmac>`.
     KEEL_WEBHOOK_SECRET: optional(z.string().min(1).optional()),
+    // The message of the environment channels, with {variables} like {icon} {repo} {tag} {scope}; empty: keel's own.
+    KEEL_NOTIFY_TEMPLATE: optional(z.string().max(1000).optional()),
     // Comma-separated events the environment channels receive; empty or `*` means all of them.
     KEEL_NOTIFY_EVENTS: optional(z.string().trim().optional()),
   })

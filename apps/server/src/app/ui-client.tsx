@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { type ReactNode, useId, useRef, useState } from "react";
+import { type ReactNode, type RefObject, useEffect, useId, useRef, useState } from "react";
 import {
   IconApps,
   IconAudit,
@@ -189,4 +189,25 @@ export function ConfirmButton({
       </dialog>
     </>
   );
+}
+
+/**
+ * Closes a modal `<dialog>` when a click lands on its backdrop, outside the panel; Escape already closes it. A click
+ * on the backdrop reaches the dialog itself as its target, so it is told apart by where it fell: clicks inside, and
+ * those of a dialog nested in it (a confirmation), never close it.
+ */
+export function useBackdropClose(dialog: RefObject<HTMLDialogElement | null>) {
+  useEffect(() => {
+    const el = dialog.current;
+    if (!el) return;
+    const onClick = (event: globalThis.MouseEvent) => {
+      if (event.target !== el) return;
+      const r = el.getBoundingClientRect();
+      const outside =
+        event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom;
+      if (outside) el.close();
+    };
+    el.addEventListener("click", onClick);
+    return () => el.removeEventListener("click", onClick);
+  }, [dialog]);
 }

@@ -30,6 +30,8 @@ services:
       KEEL_WEBHOOK_URL: ${KEEL_WEBHOOK_URL:-}
       KEEL_WEBHOOK_SECRET: ${KEEL_WEBHOOK_SECRET:-}
       KEEL_NOTIFY_EVENTS: ${KEEL_NOTIFY_EVENTS:-}
+      # Mensaje de esos canales con {variables} (v0.15.0); vacío = el de keel.
+      KEEL_NOTIFY_TEMPLATE: ${KEEL_NOTIFY_TEMPLATE:-}
       # Métricas en /api/metrics (apagadas sin token) y formato de logs.
       KEEL_METRICS_TOKEN: ${KEEL_METRICS_TOKEN:-}
       KEEL_LOG_FORMAT: ${KEEL_LOG_FORMAT:-json}

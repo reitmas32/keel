@@ -1,8 +1,9 @@
 "use client";
 
 import { useActionState, useEffect, useId, useRef, useState } from "react";
+import { renderMessage, SAMPLE_MESSAGE, TEMPLATE_MAX, TEMPLATE_VARIABLES } from "@/lib/message-template";
 import { IconPencil, IconPlus, IconTrash } from "../icons";
-import { ConfirmButton } from "../ui-client";
+import { ConfirmButton, useBackdropClose } from "../ui-client";
 import { type ChannelFormState, deleteChannelAction, saveChannelAction, testChannelAction } from "./actions";
 import { type ChannelKindName, ChannelLogo, KIND_LABEL, platformOf } from "./logo";
 import { EVENT_PRESETS, type PresetId, presetOf } from "./presets";
@@ -28,6 +29,8 @@ export interface EditableChannel {
   maskedUrl: string;
   /** Slack bots: the channel they post to. */
   target: string | null;
+  /** Its own message, or null for keel's. */
+  template: string | null;
   signed: boolean;
   events: string[];
   repoPattern: string;
@@ -49,6 +52,7 @@ export function ChannelDrawer({
   events: { name: string; label: string }[];
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
+  useBackdropClose(dialog);
   const form = useRef<HTMLFormElement>(null);
   const uid = useId();
   const [state, action, pending] = useActionState<ChannelFormState, FormData>(saveChannelAction, {});
@@ -83,6 +87,20 @@ export function ChannelDrawer({
     if (id !== "custom") setPicked(presetEvents(id).filter((e) => e !== "*"));
   };
   const id = (name: string) => `${uid}-${name}`;
+  const [template, setTemplate] = useState(channel?.template ?? "");
+  const [customMessage, setCustomMessage] = useState(Boolean(channel?.template));
+  const templateBox = useRef<HTMLTextAreaElement>(null);
+  /** Puts `{name}` where the cursor is, so the variables are a click away. */
+  const insertVariable = (name: string) => {
+    const box = templateBox.current;
+    const at = box?.selectionStart ?? template.length;
+    const next = `${template.slice(0, at)}{${name}}${template.slice(box?.selectionEnd ?? at)}`;
+    setTemplate(next);
+    requestAnimationFrame(() => {
+      box?.focus();
+      box?.setSelectionRange(at + name.length + 2, at + name.length + 2);
+    });
+  };
 
   return (
     <>
@@ -353,6 +371,75 @@ export function ChannelDrawer({
               ) : (
                 presetEvents(preset).map((e) => <input key={e} type="hidden" name="events" value={e} />)
               )}
+            </fieldset>
+
+            <fieldset className="field">
+              <legend className="label">Mensaje</legend>
+              <div className="preset-list" role="radiogroup">
+                {[
+                  {
+                    custom: false,
+                    label: "El de keel",
+                    hint: "Icono, repo, versión y scope, el error si falló y el link.",
+                  },
+                  { custom: true, label: "Personalizado", hint: "Tu texto, con variables como {repo} o {tag}." },
+                ].map((o) => (
+                  <label key={o.label} className="preset-option">
+                    <input
+                      type="radio"
+                      name={`${uid}-message`}
+                      checked={customMessage === o.custom}
+                      onChange={() => {
+                        setCustomMessage(o.custom);
+                        // Start from keel's message as variables, so it is a tweak and not a blank box.
+                        if (o.custom && !template)
+                          setTemplate("{icon} {repo} {tag} → {scope}: {event}\n{error}\n{link}");
+                      }}
+                    />
+                    <span>
+                      <span className="option-title">{o.label}</span>
+                      <span className="option-description">{o.hint}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+              {/* Empty means keel's own message, also when switching back after writing one. */}
+              <input type="hidden" name="template" value={customMessage ? template : ""} />
+              {customMessage && (
+                <>
+                  <textarea
+                    ref={templateBox}
+                    id={id("template")}
+                    aria-label="Mensaje personalizado"
+                    className="input template-input"
+                    rows={4}
+                    maxLength={TEMPLATE_MAX}
+                    value={template}
+                    onChange={(e) => setTemplate(e.target.value)}
+                  />
+                  <fieldset className="template-vars" aria-label="Variables">
+                    {TEMPLATE_VARIABLES.map((v) => (
+                      <button
+                        key={v.name}
+                        type="button"
+                        className="template-var"
+                        title={v.label}
+                        onClick={() => insertVariable(v.name)}
+                      >
+                        {`{${v.name}}`}
+                      </button>
+                    ))}
+                  </fieldset>
+                  <span className="field-hint">
+                    Una variable sin valor en ese evento queda vacía y su línea desaparece. Slack admite *negrita*,
+                    _cursiva_ y menciones como &lt;!here&gt;; Discord, **negrita** y @here.
+                  </span>
+                </>
+              )}
+              <div className="message-preview">
+                <span className="channel-section-label">Así se verá un deploy fallido</span>
+                <pre>{renderMessage(customMessage ? template : null, SAMPLE_MESSAGE)}</pre>
+              </div>
             </fieldset>
             {state.error && (
               <p className="error" role="alert">

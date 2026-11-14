@@ -167,6 +167,8 @@ export interface NotificationChannel {
   secret: string | null;
   /** Slack bots only: the channel to post to (an id like C0123ABCD, or #name). */
   target: string | null;
+  /** The message with `{variables}` (see message-template.ts); null for keel's own. */
+  template: string | null;
   /** Event names, or `["*"]` for all. */
   events: string[];
   repoPattern: string;
@@ -182,6 +184,7 @@ const toChannel = (r: Row): NotificationChannel => ({
   url: r.url as string,
   secret: (r.secret as string | null) ?? null,
   target: (r.target as string | null) ?? null,
+  template: (r.template as string | null) ?? null,
   events: (r.events as string).split(",").filter(Boolean),
   repoPattern: r.repo_pattern as string,
   scopePattern: r.scope_pattern as string,
@@ -805,9 +808,9 @@ export class Store {
   ): Promise<NotificationChannel> {
     const id = randomUUID();
     await this.db.run(
-      `INSERT INTO notification_channels (id, name, kind, url, secret, target, events, repo_pattern, scope_pattern, enabled,
-         created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+      `INSERT INTO notification_channels (id, name, kind, url, secret, target, template, events, repo_pattern,
+         scope_pattern, enabled, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
       [
         id,
         input.name,
@@ -815,6 +818,7 @@ export class Store {
         input.url,
         input.secret,
         input.target,
+        input.template,
         input.events.join(","),
         input.repoPattern,
         input.scopePattern,
@@ -836,7 +840,8 @@ export class Store {
   async updateChannel(id: string, input: Omit<NotificationChannel, "id" | "createdAt" | "enabled">): Promise<void> {
     await this.db.run(
       `UPDATE notification_channels
-       SET name = ?, kind = ?, url = ?, secret = ?, target = ?, events = ?, repo_pattern = ?, scope_pattern = ?
+       SET name = ?, kind = ?, url = ?, secret = ?, target = ?, template = ?, events = ?, repo_pattern = ?,
+         scope_pattern = ?
        WHERE id = ?`,
       [
         input.name,
@@ -844,6 +849,7 @@ export class Store {
         input.url,
         input.secret,
         input.target,
+        input.template,
         input.events.join(","),
         input.repoPattern,
         input.scopePattern,

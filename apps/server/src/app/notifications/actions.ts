@@ -29,6 +29,7 @@ export async function saveChannelAction(_state: ChannelFormState, form: FormData
       secret: field(form, "secret"),
       token: field(form, "token"),
       channel: field(form, "channel"),
+      template: String(form.get("template") ?? ""),
       events: form.getAll("events").map(String),
       repo: field(form, "repo"),
       scope: field(form, "scope"),

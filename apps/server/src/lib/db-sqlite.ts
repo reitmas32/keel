@@ -279,7 +279,7 @@ function migrate(db: DatabaseSync): void {
   });
   addColumns("apps", { require_approval: "INTEGER NOT NULL DEFAULT 0" });
   // v0.14.0: Slack bot channels post to a channel with a token instead of a webhook URL.
-  addColumns("notification_channels", { target: "TEXT" });
+  addColumns("notification_channels", { target: "TEXT", template: "TEXT" });
   addColumns("deploys", {
     health_status: "TEXT",
     health_attempts: "INTEGER NOT NULL DEFAULT 0",

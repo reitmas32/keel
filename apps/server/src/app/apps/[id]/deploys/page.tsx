@@ -1,11 +1,13 @@
 import { isTerminal, roleAtLeast } from "@keel/shared";
 import Link from "next/link";
-import { roleOn } from "@/lib/access";
+import { can, roleOn } from "@/lib/access";
 import { APPROVER_ROLE } from "@/lib/approvals";
 import { getContext } from "@/lib/context";
+import { activeFreeze, FORCE_ROLE, LEVEL_LABEL } from "@/lib/freeze";
+import { approvalRequired } from "@/lib/store";
 import { IconExternal, IconRocket } from "../../../icons";
-import { Card, DeployBadge, EmptyState, StatusBadge, When } from "../../../ui";
-import { ApprovalButtons } from "../../components";
+import { Card, DeployBadge, EmptyState, StatusBadge, VERSION_LABEL, When } from "../../../ui";
+import { ApprovalButtons, type DeployableScope, type DeployableVersion, DeployDrawer } from "../../components";
 import { AppPage, dokployDeploymentsUrl, loadApp } from "../shared";
 
 const LIMIT = 50;
@@ -18,7 +20,7 @@ export default async function DeploysPage({
   searchParams: Promise<{ scope?: string }>;
 }) {
   const { viewer, app, appRole } = await loadApp(params);
-  const { store } = await getContext();
+  const { store, now } = await getContext();
   const scopes = await store.listScopes(app.id);
   const wanted = (await searchParams).scope;
   const selected = scopes.find((s) => s.alias === wanted);
@@ -28,6 +30,45 @@ export default async function DeploysPage({
   );
   const base = `/apps/${app.id}/deploys`;
   const scopeById = new Map(scopes.map((s) => [s.id, s]));
+
+  // What the "Nuevo deploy" drawer offers: the scopes this member can deploy to, with what would stop or slow it.
+  const freezes = await store.freezesFor(app.id);
+  const deployable: DeployableScope[] = await Promise.all(
+    scopes
+      .filter((s) => can(viewer, "deployer", { repo: app.repo, scope: s.alias }))
+      .map(async (s) => {
+        const [running] = await store.listDeploys(
+          { scopeId: s.id, status: "deployed" },
+          { limit: 1, newestFirst: true },
+        );
+        const lock = await store.getScopeLock(s.id);
+        const freeze = activeFreeze(freezes, { appId: app.id, scope: s.alias }, now());
+        return {
+          id: s.id,
+          alias: s.alias,
+          running: running?.tag ?? null,
+          needsApproval: approvalRequired(app, s),
+          locked: lock?.reason ?? null,
+          freeze: freeze
+            ? {
+                name: freeze.window.name,
+                level: LEVEL_LABEL[freeze.level],
+                until: freeze.until,
+                canForce: can(viewer, FORCE_ROLE[freeze.level], { repo: app.repo, scope: s.alias }),
+              }
+            : null,
+        };
+      }),
+  );
+  const versions: DeployableVersion[] =
+    deployable.length > 0
+      ? (await store.listVersions(app.repo, { limit: 30 })).map((v) => ({
+          tag: v.tag,
+          ciLabel: VERSION_LABEL[v.ciStatus],
+          usable: v.ciStatus === "success" || v.ciStatus === "pending",
+          branch: v.branch,
+        }))
+      : [];
 
   return (
     <AppPage app={app} appRole={appRole} section="Deploys">
@@ -51,10 +92,15 @@ export default async function DeploysPage({
       <Card
         title={selected ? `Deploys de ${selected.alias}` : "Deploys"}
         description={`Los ${LIMIT} más recientes${selected ? "" : " de todos los scopes de la app"}.`}
+        action={
+          deployable.length > 0 && (
+            <DeployDrawer appId={app.id} scopes={deployable} versions={versions} defaultScopeId={selected?.id} />
+          )
+        }
       >
         {deploys.length === 0 ? (
           <EmptyState icon={<IconRocket />} title="Sin deploys todavía">
-            Aparecen al pedirlos con <code>keel deploy</code>.
+            Aparecen al pedirlos con <code>keel deploy</code> o con «Nuevo deploy».
           </EmptyState>
         ) : (
           <div className="table-wrap">
