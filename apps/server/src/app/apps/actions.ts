@@ -69,7 +69,7 @@ export async function addScopeAction(appId: string, _state: FormState, form: For
       now(),
     );
     revalidatePath(`/apps/${appId}`, "layout");
-    return {};
+    return { ok: true };
   });
 }
 
@@ -196,4 +196,34 @@ export async function deleteAppAction(form: FormData): Promise<void> {
   await deleteAppAs(store, viewer, field(form, "appId"), now());
   revalidatePath("/apps");
   redirect("/apps");
+}
+
+export type ScopeSetting = "healthEnabled" | "autoRollback" | "requireApproval";
+
+/**
+ * One setting of a scope, changed from its row in the scopes table. Sends only that field, so the others stay as
+ * they are; the health check can only be switched once it has a URL.
+ */
+export async function setScopeSettingAction(
+  appId: string,
+  scopeId: string,
+  setting: ScopeSetting,
+  _state: FormState,
+  form: FormData,
+): Promise<FormState> {
+  return attempt(async (viewer) => {
+    const { store, now } = await getContext();
+    const value = field(form, "value");
+    let change: Record<string, unknown>;
+    if (setting === "autoRollback") change = { autoRollback: value === "1" };
+    else if (setting === "requireApproval") change = { requireApproval: value === "" ? null : value === "1" };
+    else {
+      const scope = await store.getScope(scopeId);
+      if (!scope?.healthCheck?.url) throw new ApiError(400, "Configura primero la URL del health check.");
+      change = { healthCheck: { ...scope.healthCheck, enabled: value === "1" } };
+    }
+    await updateScopeAs(store, viewer, appId, scopeId, change, now());
+    revalidatePath(`/apps/${appId}`, "layout");
+    return { ok: true };
+  });
 }
