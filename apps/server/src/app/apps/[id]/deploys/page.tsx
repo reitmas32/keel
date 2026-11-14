@@ -92,6 +92,11 @@ export default async function DeploysPage({
                           {d.approval.reason && `: ${d.approval.reason}`}
                         </div>
                       )}
+                      {d.forcedBy && (
+                        <div className="sub">
+                          Forzado en una ventana de congelamiento por {d.forcedBy}: {d.forcedReason}
+                        </div>
+                      )}
                       {d.error && <div className="sub">{d.error}</div>}
                     </td>
                     <td>{d.requestedBy ?? none}</td>

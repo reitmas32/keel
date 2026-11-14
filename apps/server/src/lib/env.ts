@@ -64,6 +64,23 @@ const envSchema = z
     // json (default): one JSON object per log line. text: `[keel] mensaje`, for reading by eye.
     KEEL_LOG_FORMAT: optional(z.enum(["json", "text"]).default("json")),
     KEEL_LOG_LEVEL: optional(z.enum(["debug", "info", "warn", "error"]).default("info")),
+    // Default time zone (IANA) of new freeze windows in the admin, e.g. America/Mexico_City.
+    KEEL_TIMEZONE: optional(
+      z
+        .string()
+        .refine(
+          (tz) => {
+            try {
+              new Intl.DateTimeFormat("en-US", { timeZone: tz });
+              return true;
+            } catch {
+              return false;
+            }
+          },
+          { error: "debe ser una zona horaria IANA, p.ej. America/Mexico_City." },
+        )
+        .default("UTC"),
+    ),
     // Public origin of this keel (https://keel.example.com), for links in notifications.
     KEEL_PUBLIC_URL: optional(z.url().optional()),
     // Outgoing notifications configured by environment. They add to the channels created in the admin.

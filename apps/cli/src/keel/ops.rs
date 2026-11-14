@@ -301,6 +301,7 @@ pub async fn promote(ctx: &Ctx, args: PromoteArgs) -> Result<()> {
             tag: &version.tag,
             sha: &version.sha,
             scope: &args.to,
+            force_reason: None,
         })
         .await?;
     let waits = args.wait || args.rollback_on_failure;

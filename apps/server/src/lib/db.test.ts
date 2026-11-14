@@ -219,6 +219,7 @@ describe.runIf(TEST_DB_ENGINE === "postgres")("Postgres schema", () => {
       "audit_log",
       "ci_results",
       "deploys",
+      "freeze_windows",
       "invites",
       "member_grants",
       "members",

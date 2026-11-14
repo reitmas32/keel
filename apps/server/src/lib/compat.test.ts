@@ -78,6 +78,7 @@ describe("API names before v0.7.0", () => {
       "healthCheck",
       "autoRollback",
       "requireApproval",
+      "freeze",
     ]);
     expect(body.scopes[0].last).toMatchObject({ scope: "api-prod", service: "api-prod" });
 

@@ -13,6 +13,7 @@ import {
   IconLayers,
   IconRocket,
   IconSettings,
+  IconSnowflake,
   IconTag,
   IconUsers,
 } from "./icons";
@@ -21,6 +22,7 @@ const NAV = [
   { href: "/apps", label: "Apps", icon: <IconApps /> },
   { href: "/tokens", label: "Tokens de API", icon: <IconKey /> },
   { href: "/members", label: "Miembros", icon: <IconUsers />, admin: true },
+  { href: "/freezes", label: "Congelamientos", icon: <IconSnowflake />, admin: true },
   { href: "/notifications", label: "Notificaciones", icon: <IconBell />, admin: true },
   { href: "/audit", label: "Auditoría", icon: <IconAudit />, admin: true },
 ];

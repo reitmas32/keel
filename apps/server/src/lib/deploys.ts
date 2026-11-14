@@ -8,6 +8,7 @@ import {
 } from "@keel/shared";
 import { ApiError } from "./errors";
 import { formatDate } from "./format";
+import { type ActiveFreeze, activeFreeze, FORCE_ROLE, type FreezeLevel, frozenError } from "./freeze";
 import { approvalRequired, type DeployRecord, type Scope, type ScopeLockRecord, type Store } from "./store";
 import { verifyToken } from "./tokens";
 
@@ -33,6 +34,14 @@ export async function requestDeploy(
   return (await queueDeploy(store, req, now, requestedBy, requestedByMemberId)).deploy;
 }
 
+/** How a request may go through a freeze window: whether the caller has the role to force one of that level. */
+export interface FreezePolicy {
+  canForce: (level: FreezeLevel) => boolean;
+}
+
+/** Without a policy nobody can force: a request with `forceReason` into a window gets the 403. */
+const NO_FORCE: FreezePolicy = { canForce: () => false };
+
 /** Like `requestDeploy`, also saying whether the deploy is new or one already in flight for that commit and scope. */
 export async function queueDeploy(
   store: Store,
@@ -40,7 +49,8 @@ export async function queueDeploy(
   now: Date,
   requestedBy: string | null = null,
   requestedByMemberId: string | null = null,
-): Promise<{ deploy: DeployRecord; created: boolean }> {
+  policy: FreezePolicy = NO_FORCE,
+): Promise<{ deploy: DeployRecord; created: boolean; freeze?: ActiveFreeze }> {
   const app = await store.getAppByRepo(req.repo);
   if (!app) throw new ApiError(404, `El repo ${req.repo} no está vinculado a ninguna app de keel.`);
 
@@ -66,6 +76,17 @@ export async function queueDeploy(
     );
     if (inFlight) return { deploy: inFlight, created: false };
 
+    const freeze = activeFreeze(await tx.freezesFor(app.id), { appId: app.id, scope: scope.alias }, now);
+    if (freeze && !req.forceReason) throw frozenError(freeze, scope.alias);
+    if (freeze && !policy.canForce(freeze.level)) {
+      throw new ApiError(
+        403,
+        `Forzar la ventana «${freeze.window.name}» necesita rol ${FORCE_ROLE[freeze.level]} en ${req.repo}/${scope.alias}.`,
+      );
+    }
+    // Forcing only means something while a window is active; otherwise it is an ordinary deploy.
+    const forced = freeze && req.forceReason ? { by: requestedBy ?? "anónimo", reason: req.forceReason } : null;
+
     const ci = await tx.getCiResult(req.repo, req.sha);
     const status = ci ? ciOutcome(ci.status) : "waiting_ci";
     const deploy = await tx.insertDeploy(
@@ -78,11 +99,12 @@ export async function queueDeploy(
         requestedBy,
         requestedByMemberId,
         needsApproval: approvalRequired(app, scope),
+        forced,
         ...(status === "ci_failed" && { error: `El CI de ${req.tag} terminó con ${ci?.status}.` }),
       },
       now,
     );
-    return { deploy, created: true };
+    return { deploy, created: true, ...(freeze && { freeze }) };
   });
 }
 

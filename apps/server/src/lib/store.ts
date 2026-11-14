@@ -13,6 +13,7 @@ import {
   type VersionCiStatus,
 } from "@keel/shared";
 import type { Db, Row, SqlValue } from "./db";
+import type { FreezeWindow } from "./freeze";
 import { BOOTSTRAP_ADMIN } from "./postgres-schema.mjs";
 
 export interface App {
@@ -68,6 +69,8 @@ export interface DeployRecord extends Omit<Deploy, "service"> {
   healthAttempts: number;
   healthCheckedAt: string | null;
   requestedByMemberId: string | null;
+  forcedBy: string | null;
+  forcedReason: string | null;
   approval: {
     status: ApprovalStatus;
     by: string | null;
@@ -183,6 +186,23 @@ const toChannel = (r: Row): NotificationChannel => ({
   createdAt: r.created_at as string,
 });
 
+const toFreeze = (r: Row): FreezeWindow => ({
+  id: r.id as string,
+  appId: (r.app_id as string | null) ?? null,
+  name: r.name as string,
+  kind: r.kind as FreezeWindow["kind"],
+  timezone: r.timezone as string,
+  startsAt: (r.starts_at as string | null) ?? null,
+  endsAt: (r.ends_at as string | null) ?? null,
+  days: (r.days as string).split(",").filter(Boolean).map(Number),
+  startTime: (r.start_time as string | null) ?? null,
+  endTime: (r.end_time as string | null) ?? null,
+  scopePattern: r.scope_pattern as string,
+  enabled: Number(r.enabled) === 1,
+  createdBy: (r.created_by as string | null) ?? null,
+  createdAt: r.created_at as string,
+});
+
 const toApp = (r: Row): App => ({
   id: r.id as string,
   name: r.name as string,
@@ -234,6 +254,8 @@ const toDeploy = (r: Row): DeployRecord => ({
   healthAttempts: Number(r.health_attempts ?? 0),
   healthCheckedAt: (r.health_checked_at as string | null) ?? null,
   requestedByMemberId: (r.requested_by_member_id as string | null) ?? null,
+  forcedBy: (r.forced_by as string | null) ?? null,
+  forcedReason: (r.forced_reason as string | null) ?? null,
   approval: r.approval_status
     ? {
         status: r.approval_status as ApprovalStatus,
@@ -814,6 +836,68 @@ export class Store {
     await this.db.run("DELETE FROM notification_channels WHERE id = ?", [id]);
   }
 
+  // --- freeze windows ---
+
+  async createFreeze(input: Omit<FreezeWindow, "id" | "enabled" | "createdAt">, now: Date): Promise<FreezeWindow> {
+    const id = randomUUID();
+    await this.db.run(
+      `INSERT INTO freeze_windows (id, app_id, name, kind, timezone, starts_at, ends_at, days, start_time, end_time,
+         scope_pattern, enabled, created_by, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+      [
+        id,
+        input.appId,
+        input.name,
+        input.kind,
+        input.timezone,
+        input.startsAt,
+        input.endsAt,
+        input.days.join(","),
+        input.startTime,
+        input.endTime,
+        input.scopePattern,
+        input.createdBy,
+        now.toISOString(),
+      ],
+    );
+    return (await this.getFreeze(id)) as FreezeWindow;
+  }
+
+  async getFreeze(id: string): Promise<FreezeWindow | undefined> {
+    const row = await this.db.get("SELECT * FROM freeze_windows WHERE id = ?", [id]);
+    return row ? toFreeze(row) : undefined;
+  }
+
+  /** The organization's windows (`appId` null), one app's, or with `all` every window. */
+  async listFreezes(filter: { appId: string | null } | { all: true }): Promise<FreezeWindow[]> {
+    const rows =
+      "all" in filter
+        ? await this.db.all("SELECT * FROM freeze_windows ORDER BY created_at, name")
+        : filter.appId === null
+          ? await this.db.all("SELECT * FROM freeze_windows WHERE app_id IS NULL ORDER BY created_at, name")
+          : await this.db.all("SELECT * FROM freeze_windows WHERE app_id = ? ORDER BY created_at, name", [
+              filter.appId,
+            ]);
+    return rows.map(toFreeze);
+  }
+
+  /** The windows that can apply to an app: the organization's and its own, enabled. */
+  async freezesFor(appId: string): Promise<FreezeWindow[]> {
+    const rows = await this.db.all(
+      "SELECT * FROM freeze_windows WHERE enabled = 1 AND (app_id IS NULL OR app_id = ?) ORDER BY created_at",
+      [appId],
+    );
+    return rows.map(toFreeze);
+  }
+
+  async setFreezeEnabled(id: string, enabled: boolean): Promise<void> {
+    await this.db.run("UPDATE freeze_windows SET enabled = ? WHERE id = ?", [enabled ? 1 : 0, id]);
+  }
+
+  async deleteFreeze(id: string): Promise<void> {
+    await this.db.run("DELETE FROM freeze_windows WHERE id = ?", [id]);
+  }
+
   // --- CI results ---
 
   async upsertCiResult(result: CiResult): Promise<void> {
@@ -944,6 +1028,8 @@ export class Store {
       rollbackOf?: string | null;
       /** The deploy waits for a second member's approval before it starts. */
       needsApproval?: boolean;
+      /** Forced through an active freeze window. */
+      forced?: { by: string; reason: string } | null;
     },
     now: Date,
   ): Promise<DeployRecord> {
@@ -951,8 +1037,9 @@ export class Store {
     const ts = now.toISOString();
     await this.db.run(
       `INSERT INTO deploys (id, repo, tag, sha, scope_id, scope_alias, status, error, ci_passed_at, finished_at,
-         requested_by, requested_by_member_id, rollback_of, approval_status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         requested_by, requested_by_member_id, rollback_of, approval_status, forced_by, forced_reason,
+         created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         normalizeRepo(input.repo),
@@ -969,6 +1056,8 @@ export class Store {
         input.requestedByMemberId ?? null,
         input.rollbackOf ?? null,
         input.needsApproval && !isTerminal(input.status) ? "pending" : null,
+        input.forced?.by ?? null,
+        input.forced?.reason ?? null,
         ts,
         ts,
       ],

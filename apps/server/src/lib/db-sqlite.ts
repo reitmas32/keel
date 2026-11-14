@@ -70,7 +70,10 @@ CREATE TABLE IF NOT EXISTS deploys (
   approval_by       TEXT,
   approval_by_member_id TEXT,
   approval_at       TEXT,
-  approval_reason   TEXT
+  approval_reason   TEXT,
+  -- v0.10.0: who forced it through a freeze window, and why.
+  forced_by         TEXT,
+  forced_reason     TEXT
 );
 
 CREATE INDEX IF NOT EXISTS deploys_status ON deploys (status, created_at);
@@ -161,6 +164,27 @@ CREATE TABLE IF NOT EXISTS audit_log (
 
 CREATE INDEX IF NOT EXISTS audit_log_at ON audit_log (at);
 CREATE INDEX IF NOT EXISTS audit_log_repo ON audit_log (repo, at);
+
+-- v0.10.0: while a window is active keel refuses deploys (app_id NULL: the whole organization). Wall-clock times in
+-- \`timezone\`.
+CREATE TABLE IF NOT EXISTS freeze_windows (
+  id            TEXT PRIMARY KEY,
+  app_id        TEXT REFERENCES apps(id) ON DELETE CASCADE,
+  name          TEXT NOT NULL,
+  kind          TEXT NOT NULL,
+  timezone      TEXT NOT NULL,
+  starts_at     TEXT,
+  ends_at       TEXT,
+  days          TEXT NOT NULL DEFAULT '',
+  start_time    TEXT,
+  end_time      TEXT,
+  scope_pattern TEXT NOT NULL DEFAULT '*',
+  enabled       INTEGER NOT NULL DEFAULT 1,
+  created_by    TEXT,
+  created_at    TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS freeze_windows_app ON freeze_windows (app_id);
 
 -- v0.10.0: where keel sends deploy notifications (Slack, Discord or a generic webhook). The URL is a secret.
 CREATE TABLE IF NOT EXISTS notification_channels (
@@ -265,6 +289,8 @@ function migrate(db: DatabaseSync): void {
     approval_by_member_id: "TEXT",
     approval_at: "TEXT",
     approval_reason: "TEXT",
+    forced_by: "TEXT",
+    forced_reason: "TEXT",
   });
 
   const tokenColumns = columnsOf(db, "api_tokens");

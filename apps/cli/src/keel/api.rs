@@ -66,6 +66,11 @@ pub struct Deploy {
     /// Name of the personal token that asked for it (servers with API tokens).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requested_by: Option<String>,
+    /// Who forced it through a freeze window, and why (servers from v0.10.0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forced_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forced_reason: Option<String>,
     /// Its approval, when the scope requires one (servers from v0.10.0).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval: Option<Approval>,
@@ -236,15 +241,21 @@ pub struct CreateDeploy<'a> {
     pub tag: &'a str,
     pub sha: &'a str,
     pub scope: &'a str,
+    /// Deploys inside a freeze window, with this reason (servers from v0.10.0).
+    pub force_reason: Option<&'a str>,
 }
 
 impl CreateDeploy<'_> {
     /// The body: the scope goes as `scope` and, for servers before v0.7.0, as `service`.
     fn body(&self) -> Value {
-        serde_json::json!({
+        let mut body = serde_json::json!({
             "repo": self.repo, "tag": self.tag, "sha": self.sha,
             "scope": self.scope, "service": self.scope,
-        })
+        });
+        if let Some(reason) = self.force_reason {
+            body["forceReason"] = Value::from(reason);
+        }
+        body
     }
 }
 
@@ -906,6 +917,25 @@ fn encode(value: &str) -> String {
 }
 
 #[cfg(test)]
+mod create_deploy_tests {
+    use super::CreateDeploy;
+
+    #[test]
+    fn sends_force_reason_only_when_given() {
+        let mut request = CreateDeploy {
+            repo: "a/b",
+            tag: "v1",
+            sha: "abcdef0",
+            scope: "prod",
+            force_reason: None,
+        };
+        assert!(request.body().get("forceReason").is_none());
+        request.force_reason = Some("hotfix");
+        assert_eq!(request.body()["forceReason"], "hotfix");
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use wiremock::matchers::{method, path};
@@ -967,6 +997,7 @@ mod tests {
                 tag: "v1.0.0",
                 sha: "abcdef0",
                 scope: "prod",
+                force_reason: None,
             })
             .await
             .unwrap_err();
@@ -1003,6 +1034,7 @@ mod tests {
                 tag: "v1.0.0",
                 sha: "abcdef0",
                 scope: "prod",
+                force_reason: None,
             })
             .await
             .unwrap_err();
@@ -1118,6 +1150,7 @@ mod tests {
                 tag: "v1.0.0",
                 sha: "abcdef0",
                 scope: "x",
+                force_reason: None,
             })
             .await
             .unwrap_err();

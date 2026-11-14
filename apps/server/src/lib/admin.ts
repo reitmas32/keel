@@ -11,6 +11,7 @@ import { createApiToken } from "./api-auth";
 import { type ApprovalDecision, decideDeploy } from "./approvals";
 import { addScope, createApp, rotateCiToken, scopeSettingsDetails, updateScopeSettings } from "./apps";
 import { ApiError } from "./errors";
+import { type FreezeInput, type FreezeWindow, parseFreezeInput } from "./freeze";
 import { maskUrl, parseChannelInput } from "./notify";
 import type { Target } from "./roles";
 import type { App, DeployRecord, NotificationChannel, Scope, Store } from "./store";
@@ -296,4 +297,72 @@ export async function deleteChannelAs(store: Store, p: Principal, id: string, no
   const channel = await channelOr404(store, id);
   await store.deleteChannel(id);
   await record(store, actorOf(p), "channel.delete", {}, channelDetails(channel), now);
+}
+
+// --- freeze windows: the organization's need a global admin; an app's, a maintainer of the app ---
+
+async function freezeTarget(store: Store, p: Principal, appId: string | null, action: string): Promise<Target | null> {
+  if (appId === null) {
+    requireAdmin(p, action);
+    return null;
+  }
+  const app = await appOr404(store, appId);
+  requireRoleOn(p, "maintainer", action, { repo: app.repo });
+  return { repo: app.repo };
+}
+
+const freezeDetails = (w: FreezeWindow) => ({
+  freezeId: w.id,
+  name: w.name,
+  kind: w.kind,
+  timezone: w.timezone,
+  level: w.appId ? "app" : "org",
+  ...(w.scopePattern !== "*" && { scope: w.scopePattern }),
+});
+
+export async function createFreezeAs(
+  store: Store,
+  p: Principal,
+  appId: string | null,
+  input: FreezeInput,
+  now: Date,
+): Promise<FreezeWindow> {
+  const target = await freezeTarget(store, p, appId, "configurar ventanas de congelamiento");
+  const window = await store.createFreeze({ ...parseFreezeInput(input), appId, createdBy: actorOf(p).name }, now);
+  await record(store, actorOf(p), "freeze.create", target ?? {}, freezeDetails(window), now);
+  return window;
+}
+
+async function freezeOr404(store: Store, id: string): Promise<FreezeWindow> {
+  const window = await store.getFreeze(id);
+  if (!window) throw new ApiError(404, "Ventana no encontrada.");
+  return window;
+}
+
+export async function setFreezeEnabledAs(
+  store: Store,
+  p: Principal,
+  id: string,
+  enabled: boolean,
+  now: Date,
+): Promise<void> {
+  const window = await freezeOr404(store, id);
+  const target = await freezeTarget(store, p, window.appId, "configurar ventanas de congelamiento");
+  if (window.enabled === enabled) return;
+  await store.setFreezeEnabled(id, enabled);
+  await record(
+    store,
+    actorOf(p),
+    enabled ? "freeze.enable" : "freeze.disable",
+    target ?? {},
+    freezeDetails(window),
+    now,
+  );
+}
+
+export async function deleteFreezeAs(store: Store, p: Principal, id: string, now: Date): Promise<void> {
+  const window = await freezeOr404(store, id);
+  const target = await freezeTarget(store, p, window.appId, "configurar ventanas de congelamiento");
+  await store.deleteFreeze(id);
+  await record(store, actorOf(p), "freeze.delete", target ?? {}, freezeDetails(window), now);
 }

@@ -1,5 +1,6 @@
 import type { HealthCheck } from "@keel/shared";
 import type { DokployClient, DokployDeploymentStatus, DokployTarget } from "./dokploy";
+import { activeFreeze } from "./freeze";
 import { logger } from "./log";
 import { metrics } from "./metrics";
 import type { DeployNotification, Notifier, NotifyEvent } from "./notify";
@@ -140,6 +141,33 @@ export class DeployWorker {
     }
   }
 
+  /**
+   * Whether a deploy queued before a freeze window must wait for it to end. Forced deploys and automatic rollbacks
+   * don't. One held longer than the CI expiry expires instead of going out by surprise much later.
+   */
+  private async heldByFreeze(d: DeployRecord): Promise<boolean> {
+    if (d.forcedBy || d.rollbackOf) return false;
+    const scope = await this.store.getScope(d.scopeId);
+    if (!scope) return false;
+    const freeze = activeFreeze(
+      await this.store.freezesFor(scope.appId),
+      { appId: scope.appId, scope: d.scope },
+      this.now(),
+    );
+    if (!freeze) return false;
+    const since = Date.parse(d.ciPassedAt ?? d.createdAt);
+    if (this.now().getTime() - since > minutes(this.options.ciExpiryMinutes)) {
+      const expired = await this.store.transition(d.id, "expired", this.now(), {
+        error: `La ventana de congelamiento «${freeze.window.name}» no terminó en ${this.options.ciExpiryMinutes} min; pide el deploy de nuevo.`,
+      });
+      if (expired) {
+        metrics.deployFinished("expired");
+        this.announce("deploy.expired", expired);
+      }
+    }
+    return true;
+  }
+
   private async startPassed(): Promise<void> {
     // One deploy at a time per scope, oldest first; the rest wait for the next tick.
     const busy = new Set((await this.store.listDeploys({ status: "deploying" })).map((d) => d.scopeId));
@@ -147,6 +175,7 @@ export class DeployWorker {
       // Waits for a second member; it doesn't hold the scope for the deploys queued after it.
       if (d.approval?.status === "pending") continue;
       if (busy.has(d.scopeId)) continue;
+      if (await this.heldByFreeze(d)) continue;
       busy.add(d.scopeId);
       await this.start(d);
     }

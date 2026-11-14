@@ -276,6 +276,32 @@ export const POSTGRES_MIGRATIONS = [
       `ALTER TABLE deploys ADD COLUMN IF NOT EXISTS approval_reason ${TEXT}`,
     ],
   },
+  {
+    version: 7,
+    name: "ventanas de congelamiento y deploys forzosos",
+    statements: [
+      // app_id NULL: the whole organization. Times are wall-clock times in \`timezone\`.
+      `CREATE TABLE IF NOT EXISTS freeze_windows (
+        id            ${TEXT} PRIMARY KEY,
+        app_id        ${TEXT} REFERENCES apps(id) ON DELETE CASCADE,
+        name          ${TEXT} NOT NULL,
+        kind          ${TEXT} NOT NULL,
+        timezone      ${TEXT} NOT NULL,
+        starts_at     ${TEXT},
+        ends_at       ${TEXT},
+        days          ${TEXT} NOT NULL DEFAULT '',
+        start_time    ${TEXT},
+        end_time      ${TEXT},
+        scope_pattern ${TEXT} NOT NULL DEFAULT '*',
+        enabled       INTEGER NOT NULL DEFAULT 1,
+        created_by    ${TEXT},
+        created_at    ${TEXT} NOT NULL
+      )`,
+      "CREATE INDEX IF NOT EXISTS freeze_windows_app ON freeze_windows (app_id)",
+      `ALTER TABLE deploys ADD COLUMN IF NOT EXISTS forced_by ${TEXT}`,
+      `ALTER TABLE deploys ADD COLUMN IF NOT EXISTS forced_reason ${TEXT}`,
+    ],
+  },
 ];
 
 /**
@@ -305,6 +331,7 @@ export const TABLES = [
   "scope_locks",
   "audit_log",
   "notification_channels",
+  "freeze_windows",
 ];
 
 /**

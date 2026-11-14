@@ -25,7 +25,7 @@ import {
   type WhoamiResponse,
 } from "@keel/shared";
 import type { z } from "zod";
-import { actorOf, baseRole, CI_ACTOR, type Principal, requireRoleOn } from "./access";
+import { actorOf, baseRole, CI_ACTOR, can, type Principal, requireRoleOn } from "./access";
 import { authenticate, type Caller } from "./api-auth";
 import { type ApprovalDecision, decideDeploy } from "./approvals";
 import {
@@ -43,6 +43,7 @@ import type { AppContext } from "./context";
 import { queueDeploy, recordCiResult, registerVersion } from "./deploys";
 import { DokployError } from "./dokploy";
 import { ApiError } from "./errors";
+import { activeFreeze, FORCE_ROLE } from "./freeze";
 import { errorFields, logger } from "./log";
 import { type Target, tokenRole } from "./roles";
 import {
@@ -62,11 +63,15 @@ const toPublic = ({
   healthCheckedAt: _c,
   requestedByMemberId: _m,
   approval,
+  forcedBy,
+  forcedReason,
   ...deploy
 }: DeployRecord): Deploy => ({
   ...deploy,
   service: deploy.scope,
   approval: approval && { status: approval.status, by: approval.by, at: approval.at, reason: approval.reason },
+  forcedBy,
+  forcedReason,
 });
 
 const toLockInfo = ({ reason, lockedBy, createdAt }: ScopeLockRecord): ScopeLockInfo => ({
@@ -117,6 +122,10 @@ const toAppInfo = ({ id, name, repo, createdAt }: App): AppInfo => ({ id, name, 
 /** A scope as `GET …/scopes` lists it: with its Dokploy name, current and last deploy, and lock. */
 async function scopeSummary(ctx: AppContext, s: Scope): Promise<ScopeSummary> {
   const app = await ctx.store.getApp(s.appId);
+  const freeze = activeFreeze(await ctx.store.freezesFor(s.appId), { appId: s.appId, scope: s.alias }, ctx.now());
+  const freezeInfo = freeze
+    ? { name: freeze.window.name, level: freeze.level, until: freeze.until, timezone: freeze.window.timezone }
+    : null;
   const [current] = await ctx.store.listDeploys({ scopeId: s.id, status: "deployed" }, { limit: 1, newestFirst: true });
   const [last] = await ctx.store.listDeploys({ scopeId: s.id }, { limit: 1, newestFirst: true });
   const lock = await ctx.store.getScopeLock(s.id);
@@ -133,6 +142,7 @@ async function scopeSummary(ctx: AppContext, s: Scope): Promise<ScopeSummary> {
     healthCheck: s.healthCheck,
     autoRollback: s.autoRollback,
     requireApproval: app ? approvalRequired(app, s) : false,
+    freeze: freezeInfo,
   };
 }
 
@@ -243,7 +253,17 @@ export const handlers = {
       const body = await parseBody(request, createDeployRequestSchema);
       const target = { repo: normalizeRepo(body.repo), scope: body.scope };
       requireRoleOn(caller, "deployer", "desplegar", target);
-      const { deploy, created } = await queueDeploy(ctx.store, body, ctx.now(), caller.name, caller.member?.id ?? null);
+      const { deploy, created } = await queueDeploy(
+        ctx.store,
+        body,
+        ctx.now(),
+        caller.name,
+        caller.member?.id ?? null,
+        {
+          // An app's window can be forced by a maintainer; the organization's only by an admin.
+          canForce: (level) => can(caller, FORCE_ROLE[level], target),
+        },
+      );
       await audit(ctx, caller, "deploy.create", target, {
         deployId: deploy.id,
         tag: deploy.tag,
@@ -251,6 +271,15 @@ export const handlers = {
         status: deploy.status,
         ...(deploy.approval && { approval: deploy.approval.status }),
       });
+      if (created && deploy.forcedBy) {
+        await audit(ctx, caller, "deploy.force", target, { deployId: deploy.id, reason: deploy.forcedReason });
+        ctx.notifier.notify({
+          event: "deploy.forced",
+          deploy,
+          actor: deploy.forcedBy,
+          detail: `Motivo: ${deploy.forcedReason}`,
+        });
+      }
       if (created && deploy.approval?.status === "pending") {
         ctx.notifier.notify({ event: "deploy.approval_requested", deploy });
       }

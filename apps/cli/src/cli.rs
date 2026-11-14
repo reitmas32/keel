@@ -126,6 +126,11 @@ pub enum Command {
         /// (implica --wait). Sale con código 28 aunque el rollback funcione.
         #[arg(long)]
         rollback_on_failure: bool,
+        /// Despliega aunque haya una ventana de congelamiento activa, con este motivo
+        /// (queda en la auditoría y se notifica). Necesita maintainer, o admin si la
+        /// ventana es de la organización.
+        #[arg(long, value_name = "MOTIVO")]
+        force_freeze: Option<String>,
     },
     /// Vuelve un scope a la versión que tenía antes (o a --to, ya desplegada ahí).
     Rollback {
@@ -478,6 +483,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             latest_ready,
             wait,
             rollback_on_failure,
+            force_freeze,
         } => {
             kc::deploy(
                 &ctx,
@@ -488,6 +494,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                     latest_ready,
                     wait,
                     rollback_on_failure,
+                    force_freeze,
                 },
             )
             .await

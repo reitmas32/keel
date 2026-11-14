@@ -877,6 +877,8 @@ mod tests {
             deploy_started_at: None,
             finished_at: None,
             requested_by: None,
+            forced_by: None,
+            forced_reason: None,
             approval: None,
         }
     }

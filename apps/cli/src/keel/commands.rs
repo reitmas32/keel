@@ -377,6 +377,7 @@ pub async fn create_version(
                 tag: version,
                 sha: &sha,
                 scope,
+                force_reason: None,
             })
             .await
         {
@@ -449,6 +450,8 @@ pub struct DeployArgs {
     pub latest_ready: bool,
     pub wait: bool,
     pub rollback_on_failure: bool,
+    /// Deploy even inside a freeze window, with this reason.
+    pub force_freeze: Option<String>,
 }
 
 /// Which tag `deploy` picks, given the remote tags and what keel knows.
@@ -629,6 +632,11 @@ pub async fn deploy(ctx: &Ctx, args: DeployArgs) -> Result<()> {
             tag: &tag,
             sha,
             scope: &target,
+            force_reason: args
+                .force_freeze
+                .as_deref()
+                .map(str::trim)
+                .filter(|r| !r.is_empty()),
         })
         .await?;
     let waits = args.wait || args.rollback_on_failure;
@@ -653,6 +661,11 @@ pub async fn deploy(ctx: &Ctx, args: DeployArgs) -> Result<()> {
             created.scope,
             status_name(created.status)
         ));
+        if let (Some(by), Some(reason)) = (&created.forced_by, &created.forced_reason) {
+            ui::warn(&format!(
+                "Forzado dentro de una ventana de congelamiento por {by}: {reason}. Queda en la auditoría."
+            ));
+        }
         if created.awaiting_approval() {
             ui::info(&format!(
                 "Este scope pide aprobación: otro maintainer debe correr `keel approve {}` (o aprobarlo en el admin).",
@@ -802,6 +815,7 @@ pub(crate) async fn watch(
             tag: &previous.tag,
             sha: &previous.sha,
             scope: &done.scope,
+            force_reason: None,
         })
         .await?;
     let rollback = wait_until_done(ctx, repo, rollback).await?;
@@ -960,6 +974,7 @@ pub async fn rollback(
             tag: &previous.tag,
             sha: &previous.sha,
             scope: &target,
+            force_reason: None,
         })
         .await?;
     if ctx.json {
@@ -1345,6 +1360,8 @@ mod tests {
             deploy_started_at: None,
             finished_at: None,
             requested_by: None,
+            forced_by: None,
+            forced_reason: None,
             approval: None,
         }
     }

@@ -4,6 +4,12 @@ import { ANONYMOUS_ROLES, ROLES } from "./roles";
 
 export const CI_STATUSES = ["success", "failure", "cancelled"] as const;
 
+/** Kinds of freeze window: a date-time range, weekdays with hours, or one date. */
+export const FREEZE_KINDS = ["range", "weekly", "date"] as const;
+export type FreezeKind = (typeof FREEZE_KINDS)[number];
+
+export const FORCE_REASON_MAX = 500;
+
 /**
  * `POST /deploys`. The deploy target is `scope`; clients before v0.7.0 send it as `service`, which is still accepted.
  * At least one is required, and when both come they must match. Parsing leaves only `scope`.
@@ -16,6 +22,11 @@ export const createDeployRequestSchema = z
     scope: z.string().min(1).optional(),
     /** Deprecated: the name of `scope` before v0.7.0. */
     service: z.string().min(1).optional(),
+    /**
+     * Deploy even inside a freeze window, with this reason (audited and notified). Needs maintainer for an app's
+     * window and admin for the organization's. Servers before v0.10.0 ignore it.
+     */
+    forceReason: z.string().trim().min(1).max(FORCE_REASON_MAX).optional(),
   })
   .superRefine((body, ctx) => {
     if (body.scope === undefined && body.service === undefined) {
@@ -118,8 +129,20 @@ export const deploySchema = z.object({
   healthStatus: z.enum(HEALTH_STATUSES).nullable().optional(),
   // Null when the scope didn't require an approval. Optional: servers before v0.10.0.
   approval: deployApprovalSchema.nullable().optional(),
+  // Set when it was forced through a freeze window: who and why. Optional: servers before v0.10.0.
+  forcedBy: z.string().nullable().optional(),
+  forcedReason: z.string().nullable().optional(),
 });
 export type Deploy = z.infer<typeof deploySchema>;
+
+/** The freeze window blocking a scope right now. `until` is a wall-clock time in `timezone`. */
+export const activeFreezeSchema = z.object({
+  name: z.string(),
+  level: z.enum(["org", "app"]),
+  until: z.string(),
+  timezone: z.string(),
+});
+export type ActiveFreezeInfo = z.infer<typeof activeFreezeSchema>;
 
 export const HEALTH_CHECK_LIMITS = {
   retries: { min: 1, max: 30, default: 5 },
@@ -262,6 +285,8 @@ export const scopeSummarySchema = z.object({
   autoRollback: z.boolean().optional(),
   /** Whether its deploys need an approval, with the app's setting applied. */
   requireApproval: z.boolean().optional(),
+  /** The freeze window active for it now, if any. */
+  freeze: activeFreezeSchema.nullable().optional(),
 });
 export type ScopeSummary = z.infer<typeof scopeSummarySchema>;
 
