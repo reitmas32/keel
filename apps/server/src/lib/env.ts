@@ -59,6 +59,11 @@ const envSchema = z
         .enum(ANONYMOUS_ROLES, { error: "debe ser none, viewer, publisher o deployer (por defecto deployer)." })
         .default("deployer"),
     ),
+    // Bearer token Prometheus sends to GET /api/metrics. Without it /api/metrics is off (404).
+    KEEL_METRICS_TOKEN: optional(z.string().min(16, { error: "debe tener al menos 16 caracteres." }).optional()),
+    // json (default): one JSON object per log line. text: `[keel] mensaje`, for reading by eye.
+    KEEL_LOG_FORMAT: optional(z.enum(["json", "text"]).default("json")),
+    KEEL_LOG_LEVEL: optional(z.enum(["debug", "info", "warn", "error"]).default("info")),
     // Public origin of this keel (https://keel.example.com), for links in notifications.
     KEEL_PUBLIC_URL: optional(z.url().optional()),
     // Outgoing notifications configured by environment. They add to the channels created in the admin.

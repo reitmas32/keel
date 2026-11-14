@@ -1000,6 +1000,25 @@ export class Store {
     return (await this.db.all(sql, [...params, limit])).map(toDeploy);
   }
 
+  /** How many deploys are in each status, for /metrics. */
+  async countDeploysByStatus(): Promise<Record<string, number>> {
+    const rows = await this.db.all("SELECT status, count(*) AS n FROM deploys GROUP BY status");
+    return Object.fromEntries(rows.map((r) => [r.status as string, Number(r.n)]));
+  }
+
+  /** Deploys still waiting for an approval. */
+  async countPendingApprovals(): Promise<number> {
+    const row = await this.db.get(
+      "SELECT count(*) AS n FROM deploys WHERE approval_status = 'pending' AND status IN ('waiting_ci', 'ci_passed')",
+    );
+    return Number(row?.n ?? 0);
+  }
+
+  /** A trivial query: throws when the database can't answer. */
+  async ping(): Promise<void> {
+    await this.db.get("SELECT 1 AS ok");
+  }
+
   /** Deploys of a repo whose id starts with `prefix`, like git's short commit hashes. */
   async findDeploysByPrefix(repo: string, prefix: string): Promise<DeployRecord[]> {
     // Without LIKE's wildcards (and Postgres's default escape character) the prefix matches literally in both engines.
