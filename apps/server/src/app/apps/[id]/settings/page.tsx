@@ -1,15 +1,23 @@
 import { roleAtLeast } from "@keel/shared";
 import { headers } from "next/headers";
+import { getContext } from "@/lib/context";
 import { formatDate } from "@/lib/format";
+import { CreateFreezeForm } from "../../../freezes/components";
+import { FreezeList } from "../../../freezes/list";
 import { IconTrash } from "../../../icons";
 import { Card } from "../../../ui";
 import { ConfirmButton } from "../../../ui-client";
 import { deleteAppAction } from "../../actions";
-import { RotateTokenForm } from "../../components";
+import { AppApprovalForm, RotateTokenForm } from "../../components";
 import { AppPage, loadApp } from "../shared";
 
 export default async function SettingsPage({ params }: { params: Promise<{ id: string }> }) {
   const { app, appRole, canMaintain } = await loadApp(params);
+  const { store, env, now } = await getContext();
+  const [appFreezes, orgFreezes] = await Promise.all([
+    store.listFreezes({ appId: app.id }),
+    store.listFreezes({ appId: null }),
+  ]);
   const canDelete = roleAtLeast(appRole, "admin");
   const h = await headers();
   const apiUrl = `${h.get("x-forwarded-proto") ?? "http"}://${h.get("host")}/api`;
@@ -45,6 +53,33 @@ export default async function SettingsPage({ params }: { params: Promise<{ id: s
           <RotateTokenForm appId={app.id} />
         ) : (
           <p className="hint">Solo un maintainer de esta app puede generar un nuevo token de CI.</p>
+        )}
+      </Card>
+      <Card
+        title="Aprobaciones"
+        description="Con esto activo, cada deploy espera a que otro miembro con rol maintainer lo apruebe (en Deploys o con keel approve). Cada scope puede cambiarlo en su configuración."
+      >
+        {canDelete ? (
+          <AppApprovalForm key={String(app.requireApproval)} appId={app.id} requireApproval={app.requireApproval} />
+        ) : (
+          <p className="hint">
+            {app.requireApproval ? "Activadas" : "Desactivadas"}. Solo un admin de esta app puede cambiarlo.
+          </p>
+        )}
+      </Card>
+      <Card
+        title="Ventanas de congelamiento"
+        description="Mientras una está activa keel rechaza los deploys nuevos de esta app y retiene los que estaban en cola. Un maintainer puede forzarlas con keel deploy --force-freeze."
+        footer={canMaintain && <CreateFreezeForm appId={app.id} timezone={env.KEEL_TIMEZONE ?? "UTC"} />}
+      >
+        <FreezeList windows={appFreezes} now={now()} canEdit={canMaintain} />
+        {orgFreezes.length > 0 && (
+          <>
+            <p className="hint">
+              Además aplican las de la organización, que pesan más (solo un admin puede forzarlas):
+            </p>
+            <FreezeList windows={orgFreezes} now={now()} canEdit={false} />
+          </>
         )}
       </Card>
       {canDelete && (

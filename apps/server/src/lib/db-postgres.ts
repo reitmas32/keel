@@ -1,5 +1,6 @@
 import pg from "pg";
 import type { Db, Row, SqlValue } from "./db";
+import { logger } from "./log";
 import { applyPostgresMigrations } from "./postgres-schema.mjs";
 
 /** What keel uses of a node-postgres connection. */
@@ -116,7 +117,7 @@ export class PostgresDb extends PostgresConnection {
 export async function openPostgresDb(dsn: string): Promise<PostgresDb> {
   const pool = new pg.Pool({ connectionString: dsn, max: 10 });
   // An idle connection dropped by the server must not crash the process; the pool replaces it.
-  pool.on("error", (error) => console.error("[keel] conexión a Postgres perdida", error.message));
+  pool.on("error", (error) => logger.error("conexión a Postgres perdida", { error: error.message }));
   return PostgresDb.open({
     query: (text, values) => pool.query(text, values),
     connect: () => pool.connect(),

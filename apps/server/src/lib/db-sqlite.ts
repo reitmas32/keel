@@ -11,7 +11,9 @@ CREATE TABLE IF NOT EXISTS apps (
   name          TEXT NOT NULL,
   repo          TEXT NOT NULL UNIQUE,
   ci_token_hash TEXT NOT NULL,
-  created_at    TEXT NOT NULL
+  created_at    TEXT NOT NULL,
+  -- v0.10.0: a second member must approve each deploy (scopes can override it).
+  require_approval INTEGER NOT NULL DEFAULT 0
 );
 
 -- v0.7.0: a scope is a deploy target of an app, pointing at a Dokploy application or compose (the \`services\` table
@@ -25,6 +27,11 @@ CREATE TABLE IF NOT EXISTS scopes (
   dokploy_id   TEXT NOT NULL,
   tag_variable TEXT,
   created_at   TEXT NOT NULL,
+  -- v0.10.0: JSON { enabled, url, expectedStatus, retries, intervalSeconds, timeoutSeconds }; NULL: no health check.
+  health_check TEXT,
+  auto_rollback INTEGER NOT NULL DEFAULT 0,
+  -- NULL: what the app says.
+  require_approval INTEGER,
   UNIQUE (app_id, alias)
 );
 
@@ -51,7 +58,22 @@ CREATE TABLE IF NOT EXISTS deploys (
   finished_at       TEXT,
   requested_by      TEXT,
   created_at        TEXT NOT NULL,
-  updated_at        TEXT NOT NULL
+  updated_at        TEXT NOT NULL,
+  -- v0.10.0: the scope's health check after Dokploy finished, and the failed deploy an automatic rollback undoes.
+  health_status     TEXT,
+  health_attempts   INTEGER NOT NULL DEFAULT 0,
+  health_checked_at TEXT,
+  rollback_of       TEXT,
+  -- v0.10.0: who asked (as a member) and the approval, when the scope requires one.
+  requested_by_member_id TEXT,
+  approval_status   TEXT,
+  approval_by       TEXT,
+  approval_by_member_id TEXT,
+  approval_at       TEXT,
+  approval_reason   TEXT,
+  -- v0.10.0: who forced it through a freeze window, and why.
+  forced_by         TEXT,
+  forced_reason     TEXT
 );
 
 CREATE INDEX IF NOT EXISTS deploys_status ON deploys (status, created_at);
@@ -142,6 +164,41 @@ CREATE TABLE IF NOT EXISTS audit_log (
 
 CREATE INDEX IF NOT EXISTS audit_log_at ON audit_log (at);
 CREATE INDEX IF NOT EXISTS audit_log_repo ON audit_log (repo, at);
+
+-- v0.10.0: while a window is active keel refuses deploys (app_id NULL: the whole organization). Wall-clock times in
+-- \`timezone\`.
+CREATE TABLE IF NOT EXISTS freeze_windows (
+  id            TEXT PRIMARY KEY,
+  app_id        TEXT REFERENCES apps(id) ON DELETE CASCADE,
+  name          TEXT NOT NULL,
+  kind          TEXT NOT NULL,
+  timezone      TEXT NOT NULL,
+  starts_at     TEXT,
+  ends_at       TEXT,
+  days          TEXT NOT NULL DEFAULT '',
+  start_time    TEXT,
+  end_time      TEXT,
+  scope_pattern TEXT NOT NULL DEFAULT '*',
+  enabled       INTEGER NOT NULL DEFAULT 1,
+  created_by    TEXT,
+  created_at    TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS freeze_windows_app ON freeze_windows (app_id);
+
+-- v0.10.0: where keel sends deploy notifications (Slack, Discord or a generic webhook). The URL is a secret.
+CREATE TABLE IF NOT EXISTS notification_channels (
+  id            TEXT PRIMARY KEY,
+  name          TEXT NOT NULL,
+  kind          TEXT NOT NULL,
+  url           TEXT NOT NULL,
+  secret        TEXT,
+  events        TEXT NOT NULL DEFAULT '*',
+  repo_pattern  TEXT NOT NULL DEFAULT '*',
+  scope_pattern TEXT NOT NULL DEFAULT '*',
+  enabled       INTEGER NOT NULL DEFAULT 1,
+  created_at    TEXT NOT NULL
+);
 `;
 
 const tableExists = (db: DatabaseSync, table: string) =>
@@ -207,6 +264,34 @@ function migrate(db: DatabaseSync): void {
   }
   // v0.6.0: the API token name that asked for the deploy.
   if (!deployColumns.includes("requested_by")) db.exec("ALTER TABLE deploys ADD COLUMN requested_by TEXT");
+
+  // v0.10.0: health check and automatic rollback per scope.
+  const addColumns = (table: string, columns: Record<string, string>) => {
+    const existing = columnsOf(db, table);
+    for (const [column, definition] of Object.entries(columns)) {
+      if (!existing.includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
+  };
+  addColumns("scopes", {
+    health_check: "TEXT",
+    auto_rollback: "INTEGER NOT NULL DEFAULT 0",
+    require_approval: "INTEGER",
+  });
+  addColumns("apps", { require_approval: "INTEGER NOT NULL DEFAULT 0" });
+  addColumns("deploys", {
+    health_status: "TEXT",
+    health_attempts: "INTEGER NOT NULL DEFAULT 0",
+    health_checked_at: "TEXT",
+    rollback_of: "TEXT",
+    requested_by_member_id: "TEXT",
+    approval_status: "TEXT",
+    approval_by: "TEXT",
+    approval_by_member_id: "TEXT",
+    approval_at: "TEXT",
+    approval_reason: "TEXT",
+    forced_by: "TEXT",
+    forced_reason: "TEXT",
+  });
 
   const tokenColumns = columnsOf(db, "api_tokens");
   // v0.6.0: tokens belong to a member and can be capped to a role. Tokens from before belong to the bootstrap admin.

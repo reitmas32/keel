@@ -83,6 +83,8 @@ describe.runIf(TEST_DB_ENGINE === "postgres")("scripts/sqlite-to-postgres.mjs", 
       { table: "api_tokens", rows: 1 },
       { table: "scope_locks", rows: 1 },
       { table: "audit_log", rows: 2 },
+      { table: "notification_channels", rows: 0 },
+      { table: "freeze_windows", rows: 0 },
     ]);
 
     const before = new Store(openSqliteDb(path));
@@ -162,6 +164,8 @@ describe.runIf(TEST_DB_ENGINE === "postgres")("scripts/sqlite-to-postgres.mjs", 
       { table: "api_tokens", rows: 1 },
       { table: "scope_locks", rows: 1 },
       { table: "audit_log", rows: 2 },
+      { table: "notification_channels", rows: 0 },
+      { table: "freeze_windows", rows: 0 },
     ]);
     await expectV060Data(new Store(db));
 

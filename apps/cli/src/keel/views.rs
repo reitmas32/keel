@@ -205,7 +205,11 @@ pub fn render_deploy_list(
             vec![
                 d.tag.clone(),
                 d.scope.clone(),
-                format!("{} {}", style.icon, style.label),
+                if d.awaiting_approval() {
+                    format!("{} {} · espera aprobación", style.icon, style.label)
+                } else {
+                    format!("{} {}", style.icon, style.label)
+                },
                 format_when(&d.created_at, options, false),
                 end.map_or("—".into(), |e| format_when(e, options, false)),
                 match end {
@@ -335,6 +339,28 @@ pub fn render_deploy_detail(d: &DeployDetail, options: &ViewOptions) -> String {
     ];
     if let Some(who) = &deploy.requested_by {
         fields.push(("Pedido por", who.clone()));
+    }
+    if let Some(approval) = &deploy.approval {
+        let text = match approval.status.as_str() {
+            "pending" if deploy.status.is_terminal() => "no se aprobó a tiempo".to_owned(),
+            "pending" => format!(
+                "pendiente: otro maintainer debe correr `keel approve {}`",
+                short_id(&deploy.id)
+            ),
+            status => {
+                let verb = if status == "approved" {
+                    "aprobado"
+                } else {
+                    "rechazado"
+                };
+                let by = approval.by.as_deref().unwrap_or("alguien");
+                match approval.reason.as_deref() {
+                    Some(reason) => format!("{verb} por {by}: {reason}"),
+                    None => format!("{verb} por {by}"),
+                }
+            }
+        };
+        fields.push(("Aprobación", text));
     }
     if let Some(error) = &deploy.error {
         fields.push(("Error", error.clone()));
@@ -851,7 +877,52 @@ mod tests {
             deploy_started_at: None,
             finished_at: None,
             requested_by: None,
+            forced_by: None,
+            forced_reason: None,
+            approval: None,
         }
+    }
+
+    #[test]
+    fn shows_a_pending_approval() {
+        let mut d = deploy("abcd1234-0000", "v1.0.0", DeployStatus::CiPassed);
+        d.approval = Some(crate::keel::api::Approval {
+            status: "pending".into(),
+            by: None,
+            at: None,
+            reason: None,
+        });
+        assert!(d.awaiting_approval());
+        let list = render_deploy_list(
+            &Header {
+                repo: "konectus-io/app",
+                org: "github.com:konectus-io",
+                api_url: "https://keel/api",
+            },
+            std::slice::from_ref(&d),
+            None,
+            &options(),
+        );
+        assert!(list.contains("espera aprobación"), "{list}");
+        let detail = render_deploy_detail(
+            &DeployDetail {
+                deploy: d.clone(),
+                scope_kind: None,
+                service_kind: None,
+                tag_variable: None,
+            },
+            &options(),
+        );
+        assert!(detail.contains("keel approve abcd1234"), "{detail}");
+
+        d.status = DeployStatus::DeployFailed;
+        d.approval = Some(crate::keel::api::Approval {
+            status: "rejected".into(),
+            by: Some("luis".into()),
+            at: None,
+            reason: Some("falta la migración".into()),
+        });
+        assert!(!d.awaiting_approval());
     }
 
     #[test]

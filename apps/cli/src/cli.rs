@@ -126,6 +126,11 @@ pub enum Command {
         /// (implica --wait). Sale con código 28 aunque el rollback funcione.
         #[arg(long)]
         rollback_on_failure: bool,
+        /// Despliega aunque haya una ventana de congelamiento activa, con este motivo
+        /// (queda en la auditoría y se notifica). Necesita maintainer, o admin si la
+        /// ventana es de la organización.
+        #[arg(long, value_name = "MOTIVO")]
+        force_freeze: Option<String>,
     },
     /// Vuelve un scope a la versión que tenía antes (o a --to, ya desplegada ahí).
     Rollback {
@@ -178,6 +183,22 @@ pub enum Command {
         #[arg(short = 's', long = "scope", alias = "service", value_name = "SCOPE")]
         scope: Option<String>,
         /// Motivo, visible en `keel scopes` y en el error de quien intente desplegar.
+        #[arg(short = 'm', long = "message", value_name = "MOTIVO")]
+        message: Option<String>,
+    },
+    /// Aprueba el deploy de otra persona en un scope que pide aprobación.
+    Approve {
+        /// Id del deploy (o sus primeros 4+ caracteres), como lo muestra `keel deploys`.
+        id: String,
+        /// Comentario opcional, visible en el historial.
+        #[arg(short = 'm', long = "message", value_name = "COMENTARIO")]
+        message: Option<String>,
+    },
+    /// Rechaza el deploy de otra persona: termina como deploy_failed con el motivo.
+    Reject {
+        /// Id del deploy (o sus primeros 4+ caracteres).
+        id: String,
+        /// Motivo del rechazo (obligatorio).
         #[arg(short = 'm', long = "message", value_name = "MOTIVO")]
         message: Option<String>,
     },
@@ -462,6 +483,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             latest_ready,
             wait,
             rollback_on_failure,
+            force_freeze,
         } => {
             kc::deploy(
                 &ctx,
@@ -472,6 +494,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                     latest_ready,
                     wait,
                     rollback_on_failure,
+                    force_freeze,
                 },
             )
             .await
@@ -506,6 +529,8 @@ pub async fn run(cli: Cli) -> Result<()> {
         Command::Changes { scope, version } => ops::changes(&ctx, scope, version).await,
         Command::Lock { scope, message } => ops::lock(&ctx, scope, message).await,
         Command::Unlock { scope } => ops::unlock(&ctx, scope).await,
+        Command::Approve { id, message } => ops::decide(&ctx, id, true, message).await,
+        Command::Reject { id, message } => ops::decide(&ctx, id, false, message).await,
         Command::Init {
             check,
             force,

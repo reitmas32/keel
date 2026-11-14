@@ -1,6 +1,8 @@
 import { openDb } from "./db";
 import { type DokployClient, HttpDokployClient } from "./dokploy";
 import { type Env, loadEnv } from "./env";
+import { errorFields, logger } from "./log";
+import { type Notifier, WebhookNotifier } from "./notify";
 import { Store } from "./store";
 import { DeployWorker } from "./worker";
 
@@ -9,6 +11,7 @@ export interface AppContext {
   store: Store;
   dokploy: DokployClient;
   worker: DeployWorker;
+  notifier: Notifier;
   now: () => Date;
 }
 
@@ -25,11 +28,14 @@ async function createContext(): Promise<AppContext> {
   // Opening the database also applies its pending migrations, so nothing queries an outdated schema.
   const store = new Store(await openDb(env));
   const dokploy = new HttpDokployClient(env.DOKPLOY_URL, env.DOKPLOY_API_KEY);
+  const notifier = new WebhookNotifier(store, env);
   const worker = new DeployWorker(store, dokploy, {
     ciExpiryMinutes: env.KEEL_CI_EXPIRY_MINUTES,
     deployTimeoutMinutes: env.KEEL_DEPLOY_TIMEOUT_MINUTES,
+    approvalExpiryMinutes: env.KEEL_APPROVAL_EXPIRY_MINUTES,
+    notifier,
   });
-  return { env, store, dokploy, worker, now: () => new Date() };
+  return { env, store, dokploy, worker, notifier, now: () => new Date() };
 }
 
 export function getContext(): Promise<AppContext> {
@@ -48,6 +54,6 @@ export function startWorker(): void {
   globalForKeel.keelTimer = setInterval(() => {
     getContext()
       .then(({ worker }) => worker.tick())
-      .catch((error) => console.error("[keel] worker tick falló", error));
+      .catch((error) => logger.error("worker tick falló", errorFields(error)));
   }, WORKER_INTERVAL_MS);
 }

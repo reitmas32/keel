@@ -159,9 +159,11 @@ interrupted `--wait` the deploy keeps going on the server: check
 
 ### `locked` (31)
 
-The scope was frozen with `keel lock`; the message says who, when and why.
-Report it and stop. Unlocking is the person's decision (`keel unlock -s
-<scope>`), never a workaround.
+The scope was frozen with `keel lock`, or a scheduled freeze window of the
+app or the organization is active; the message says which, until when and
+why. Report it and stop. Unlocking (`keel unlock -s <scope>`) or forcing a
+window (`keel deploy --force-freeze <reason>`) is the person's decision,
+never a workaround.
 
 ### `forbidden` (33)
 

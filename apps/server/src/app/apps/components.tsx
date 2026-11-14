@@ -1,11 +1,20 @@
 "use client";
 
-import { LOCK_REASON_MAX } from "@keel/shared";
+import { HEALTH_CHECK_LIMITS, type HealthCheck, LOCK_REASON_MAX } from "@keel/shared";
 import Link from "next/link";
 import { useActionState, useEffect, useRef } from "react";
 import { IconLock, IconPlus, IconRefresh } from "../icons";
 import { ConfirmButton, TokenNotice } from "../ui-client";
-import { addScopeAction, createAppAction, type FormState, lockScopeAction, rotateTokenAction } from "./actions";
+import {
+  addScopeAction,
+  createAppAction,
+  decideDeployAction,
+  type FormState,
+  lockScopeAction,
+  rotateTokenAction,
+  setAppApprovalAction,
+  updateScopeAction,
+} from "./actions";
 
 const SECRET_HINT = (
   <>
@@ -188,5 +197,204 @@ export function LockScopeButton({ appId, scopeId, alias }: { appId: string; scop
         </form>
       </dialog>
     </>
+  );
+}
+
+/** A scope's health check and automatic rollback. Both start off. */
+export function ScopeSettingsForm({
+  appId,
+  scopeId,
+  healthCheck,
+  autoRollback,
+  requireApproval,
+  appRequiresApproval,
+}: {
+  appId: string;
+  scopeId: string;
+  healthCheck: HealthCheck | null;
+  autoRollback: boolean;
+  requireApproval: boolean | null;
+  appRequiresApproval: boolean;
+}) {
+  const [state, action, pending] = useActionState<FormState, FormData>(
+    updateScopeAction.bind(null, appId, scopeId),
+    {},
+  );
+  const limits = HEALTH_CHECK_LIMITS;
+  return (
+    <form action={action} className="form-stack">
+      <label className="check">
+        <input type="checkbox" name="healthEnabled" defaultChecked={healthCheck?.enabled ?? false} /> Comprobar la salud
+        del servicio después de cada deploy
+      </label>
+      <div className="field">
+        <label className="label" htmlFor="health-url">
+          URL del health check
+        </label>
+        <input
+          id="health-url"
+          className="input"
+          name="healthUrl"
+          type="url"
+          defaultValue={healthCheck?.url ?? ""}
+          placeholder="https://api.example.com/healthz"
+        />
+      </div>
+      <div className="form-row">
+        <div className="field narrow">
+          <label className="label" htmlFor="health-status">
+            Código esperado
+          </label>
+          <input
+            id="health-status"
+            className="input"
+            name="healthStatus"
+            type="number"
+            min={100}
+            max={599}
+            defaultValue={healthCheck?.expectedStatus ?? ""}
+            placeholder="2xx"
+          />
+        </div>
+        <div className="field narrow">
+          <label className="label" htmlFor="health-retries">
+            Intentos
+          </label>
+          <input
+            id="health-retries"
+            className="input"
+            name="healthRetries"
+            type="number"
+            min={limits.retries.min}
+            max={limits.retries.max}
+            defaultValue={healthCheck?.retries ?? limits.retries.default}
+          />
+        </div>
+        <div className="field narrow">
+          <label className="label" htmlFor="health-interval">
+            Segundos entre intentos
+          </label>
+          <input
+            id="health-interval"
+            className="input"
+            name="healthInterval"
+            type="number"
+            min={limits.intervalSeconds.min}
+            max={limits.intervalSeconds.max}
+            defaultValue={healthCheck?.intervalSeconds ?? limits.intervalSeconds.default}
+          />
+        </div>
+        <div className="field narrow">
+          <label className="label" htmlFor="health-timeout">
+            Timeout (s)
+          </label>
+          <input
+            id="health-timeout"
+            className="input"
+            name="healthTimeout"
+            type="number"
+            min={limits.timeoutSeconds.min}
+            max={limits.timeoutSeconds.max}
+            defaultValue={healthCheck?.timeoutSeconds ?? limits.timeoutSeconds.default}
+          />
+        </div>
+      </div>
+      <label className="check">
+        <input type="checkbox" name="autoRollback" defaultChecked={autoRollback} /> Si un deploy falla, volver a
+        desplegar la versión anterior (rollback automático)
+      </label>
+      <div className="field narrow">
+        <label className="label" htmlFor="require-approval">
+          Aprobación de otro miembro
+        </label>
+        <select
+          id="require-approval"
+          className="input"
+          name="requireApproval"
+          defaultValue={requireApproval === null ? "" : requireApproval ? "1" : "0"}
+        >
+          <option value="">Como la app ({appRequiresApproval ? "obligatoria" : "no"})</option>
+          <option value="1">Obligatoria</option>
+          <option value="0">No</option>
+        </select>
+      </div>
+      <div className="inline-form">
+        <button type="submit" className="btn" disabled={pending}>
+          {pending ? "Guardando…" : "Guardar"}
+        </button>
+        {state.ok && <span className="muted small">Guardado.</span>}
+      </div>
+      <FormError error={state.error} />
+    </form>
+  );
+}
+
+/** The app-wide default for approvals; each scope can override it. */
+export function AppApprovalForm({ appId, requireApproval }: { appId: string; requireApproval: boolean }) {
+  const [state, action, pending] = useActionState<FormState, FormData>(setAppApprovalAction.bind(null, appId), {});
+  return (
+    <form action={action} className="inline-form">
+      <label className="check">
+        <input type="checkbox" name="requireApproval" defaultChecked={requireApproval} /> Cada deploy necesita la
+        aprobación de otro miembro (maintainer)
+      </label>
+      <button type="submit" className="btn btn-outline btn-sm" disabled={pending}>
+        {pending ? "Guardando…" : "Guardar"}
+      </button>
+      {state.ok && <span className="muted small">Guardado.</span>}
+      <FormError error={state.error} />
+    </form>
+  );
+}
+
+/** "Aprobar" right away, or "Rechazar" with a reason in a dialog. */
+export function ApprovalButtons({ appId, deployId, label }: { appId: string; deployId: string; label: string }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [state, action, pending] = useActionState<FormState, FormData>(
+    decideDeployAction.bind(null, appId, deployId),
+    {},
+  );
+  useEffect(() => {
+    if (state.ok) dialog.current?.close();
+  }, [state]);
+  return (
+    <div className="inline-form">
+      <form action={action}>
+        <input type="hidden" name="decision" value="approve" />
+        <button type="submit" className="btn btn-sm" disabled={pending}>
+          Aprobar
+        </button>
+      </form>
+      <button type="button" className="btn btn-outline btn-sm" onClick={() => dialog.current?.showModal()}>
+        Rechazar
+      </button>
+      {!dialog.current?.open && <FormError error={state.error} />}
+      <dialog ref={dialog} className="dialog" aria-labelledby={`reject-${deployId}`}>
+        <form action={action}>
+          <input type="hidden" name="decision" value="reject" />
+          <div className="dialog-header">
+            <h2 className="dialog-title" id={`reject-${deployId}`}>
+              Rechazar {label}
+            </h2>
+            <p className="muted">El deploy termina como deploy_failed y no se despliega.</p>
+          </div>
+          <div className="field">
+            <label className="label" htmlFor={`reject-reason-${deployId}`}>
+              Motivo
+            </label>
+            <textarea id={`reject-reason-${deployId}`} className="input" name="reason" required maxLength={500} />
+          </div>
+          <FormError error={state.error} />
+          <div className="dialog-footer">
+            <button type="button" className="btn btn-outline" onClick={() => dialog.current?.close()}>
+              Cancelar
+            </button>
+            <button type="submit" className="btn btn-destructive" disabled={pending}>
+              Rechazar deploy
+            </button>
+          </div>
+        </form>
+      </dialog>
+    </div>
   );
 }

@@ -229,6 +229,79 @@ export const POSTGRES_MIGRATIONS = [
       renameConstraints("member_grants", "member_grants", "member_grants", { service_pattern: "scope_pattern" }),
     ],
   },
+  {
+    version: 4,
+    name: "canales de notificación",
+    statements: [
+      // `url` (and `secret`) are stored as given: keel needs them to call the webhook. The admin only shows them masked.
+      `CREATE TABLE IF NOT EXISTS notification_channels (
+        id            ${TEXT} PRIMARY KEY,
+        name          ${TEXT} NOT NULL,
+        kind          ${TEXT} NOT NULL,
+        url           ${TEXT} NOT NULL,
+        secret        ${TEXT},
+        events        ${TEXT} NOT NULL DEFAULT '*',
+        repo_pattern  ${TEXT} NOT NULL DEFAULT '*',
+        scope_pattern ${TEXT} NOT NULL DEFAULT '*',
+        enabled       INTEGER NOT NULL DEFAULT 1,
+        created_at    ${TEXT} NOT NULL
+      )`,
+    ],
+  },
+  {
+    version: 5,
+    name: "health check y rollback automático por scope",
+    statements: [
+      // JSON: { enabled, url, expectedStatus, retries, intervalSeconds, timeoutSeconds }. NULL: no health check.
+      `ALTER TABLE scopes ADD COLUMN IF NOT EXISTS health_check ${TEXT}`,
+      "ALTER TABLE scopes ADD COLUMN IF NOT EXISTS auto_rollback INTEGER NOT NULL DEFAULT 0",
+      `ALTER TABLE deploys ADD COLUMN IF NOT EXISTS health_status ${TEXT}`,
+      "ALTER TABLE deploys ADD COLUMN IF NOT EXISTS health_attempts INTEGER NOT NULL DEFAULT 0",
+      `ALTER TABLE deploys ADD COLUMN IF NOT EXISTS health_checked_at ${TEXT}`,
+      `ALTER TABLE deploys ADD COLUMN IF NOT EXISTS rollback_of ${TEXT}`,
+    ],
+  },
+  {
+    version: 6,
+    name: "aprobación de deploys",
+    statements: [
+      "ALTER TABLE apps ADD COLUMN IF NOT EXISTS require_approval INTEGER NOT NULL DEFAULT 0",
+      // NULL: what the app says.
+      "ALTER TABLE scopes ADD COLUMN IF NOT EXISTS require_approval INTEGER",
+      `ALTER TABLE deploys ADD COLUMN IF NOT EXISTS requested_by_member_id ${TEXT}`,
+      `ALTER TABLE deploys ADD COLUMN IF NOT EXISTS approval_status ${TEXT}`,
+      `ALTER TABLE deploys ADD COLUMN IF NOT EXISTS approval_by ${TEXT}`,
+      `ALTER TABLE deploys ADD COLUMN IF NOT EXISTS approval_by_member_id ${TEXT}`,
+      `ALTER TABLE deploys ADD COLUMN IF NOT EXISTS approval_at ${TEXT}`,
+      `ALTER TABLE deploys ADD COLUMN IF NOT EXISTS approval_reason ${TEXT}`,
+    ],
+  },
+  {
+    version: 7,
+    name: "ventanas de congelamiento y deploys forzosos",
+    statements: [
+      // app_id NULL: the whole organization. Times are wall-clock times in \`timezone\`.
+      `CREATE TABLE IF NOT EXISTS freeze_windows (
+        id            ${TEXT} PRIMARY KEY,
+        app_id        ${TEXT} REFERENCES apps(id) ON DELETE CASCADE,
+        name          ${TEXT} NOT NULL,
+        kind          ${TEXT} NOT NULL,
+        timezone      ${TEXT} NOT NULL,
+        starts_at     ${TEXT},
+        ends_at       ${TEXT},
+        days          ${TEXT} NOT NULL DEFAULT '',
+        start_time    ${TEXT},
+        end_time      ${TEXT},
+        scope_pattern ${TEXT} NOT NULL DEFAULT '*',
+        enabled       INTEGER NOT NULL DEFAULT 1,
+        created_by    ${TEXT},
+        created_at    ${TEXT} NOT NULL
+      )`,
+      "CREATE INDEX IF NOT EXISTS freeze_windows_app ON freeze_windows (app_id)",
+      `ALTER TABLE deploys ADD COLUMN IF NOT EXISTS forced_by ${TEXT}`,
+      `ALTER TABLE deploys ADD COLUMN IF NOT EXISTS forced_reason ${TEXT}`,
+    ],
+  },
 ];
 
 /**
@@ -257,6 +330,8 @@ export const TABLES = [
   "api_tokens",
   "scope_locks",
   "audit_log",
+  "notification_channels",
+  "freeze_windows",
 ];
 
 /**

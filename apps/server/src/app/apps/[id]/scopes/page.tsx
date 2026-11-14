@@ -1,8 +1,9 @@
 import { roleAtLeast } from "@keel/shared";
+import Link from "next/link";
 import { roleOn } from "@/lib/access";
 import { getContext } from "@/lib/context";
 import { formatDate } from "@/lib/format";
-import { IconExternal, IconLock, IconUnlock } from "../../../icons";
+import { IconExternal, IconLock, IconSettings, IconUnlock } from "../../../icons";
 import { Card, StatusBadge } from "../../../ui";
 import { ConfirmButton } from "../../../ui-client";
 import { unlinkScopeAction, unlockScopeAction } from "../../actions";
@@ -73,6 +74,8 @@ export default async function ScopesPage({ params }: { params: Promise<{ id: str
                         imagen <code>:&lt;versión&gt;</code>
                       </>
                     )}
+                    {scope.healthCheck?.enabled && " · health check"}
+                    {scope.autoRollback && " · rollback automático"}
                   </span>
                 </div>
 
@@ -99,6 +102,10 @@ export default async function ScopesPage({ params }: { params: Promise<{ id: str
 
                 {scope.canMaintain && (
                   <div className="scope-actions">
+                    <Link href={`/apps/${app.id}/scopes/${scope.id}`} className="btn btn-outline btn-sm">
+                      <IconSettings />
+                      Configurar
+                    </Link>
                     {scope.lock ? (
                       <form action={unlockScopeAction}>
                         <input type="hidden" name="appId" value={app.id} />

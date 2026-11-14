@@ -4,6 +4,12 @@ import { ANONYMOUS_ROLES, ROLES } from "./roles";
 
 export const CI_STATUSES = ["success", "failure", "cancelled"] as const;
 
+/** Kinds of freeze window: a date-time range, weekdays with hours, or one date. */
+export const FREEZE_KINDS = ["range", "weekly", "date"] as const;
+export type FreezeKind = (typeof FREEZE_KINDS)[number];
+
+export const FORCE_REASON_MAX = 500;
+
 /**
  * `POST /deploys`. The deploy target is `scope`; clients before v0.7.0 send it as `service`, which is still accepted.
  * At least one is required, and when both come they must match. Parsing leaves only `scope`.
@@ -16,6 +22,11 @@ export const createDeployRequestSchema = z
     scope: z.string().min(1).optional(),
     /** Deprecated: the name of `scope` before v0.7.0. */
     service: z.string().min(1).optional(),
+    /**
+     * Deploy even inside a freeze window, with this reason (audited and notified). Needs maintainer for an app's
+     * window and admin for the organization's. Servers before v0.10.0 ignore it.
+     */
+    forceReason: z.string().trim().min(1).max(FORCE_REASON_MAX).optional(),
   })
   .superRefine((body, ctx) => {
     if (body.scope === undefined && body.service === undefined) {
@@ -71,6 +82,29 @@ export const versionSchema = z.object({
 });
 export type Version = z.infer<typeof versionSchema>;
 
+export const HEALTH_STATUSES = ["checking", "passed", "failed"] as const;
+export type HealthStatus = (typeof HEALTH_STATUSES)[number];
+
+export const APPROVAL_STATUSES = ["pending", "approved", "rejected"] as const;
+export type ApprovalStatus = (typeof APPROVAL_STATUSES)[number];
+
+/** A deploy's approval, when its scope requires one. `by` and `at` are null while it is pending. */
+export const deployApprovalSchema = z.object({
+  status: z.enum(APPROVAL_STATUSES),
+  by: z.string().nullable(),
+  at: z.string().nullable(),
+  reason: z.string().nullable(),
+});
+export type DeployApproval = z.infer<typeof deployApprovalSchema>;
+
+export const APPROVAL_REASON_MAX = 500;
+
+/** `POST …/deploys/:id/approve` and `…/reject` body. A rejection needs a reason; an approval may carry one. */
+export const approvalRequestSchema = z.object({
+  reason: z.string().trim().max(APPROVAL_REASON_MAX).optional(),
+});
+export type ApprovalRequest = z.infer<typeof approvalRequestSchema>;
+
 export const deploySchema = z.object({
   id: z.string(),
   repo: z.string(),
@@ -89,8 +123,84 @@ export const deploySchema = z.object({
   finishedAt: z.string().nullable().optional(),
   // Name of the API token that asked for it; null without a token. Optional: servers before v0.6.0 don't send it.
   requestedBy: z.string().nullable().optional(),
+  // The failed deploy this one rolls back, when keel created it on its own. Optional: servers before v0.10.0.
+  rollbackOf: z.string().nullable().optional(),
+  // The scope's health check after Dokploy finished; null when the scope has none. Optional: servers before v0.10.0.
+  healthStatus: z.enum(HEALTH_STATUSES).nullable().optional(),
+  // Null when the scope didn't require an approval. Optional: servers before v0.10.0.
+  approval: deployApprovalSchema.nullable().optional(),
+  // Set when it was forced through a freeze window: who and why. Optional: servers before v0.10.0.
+  forcedBy: z.string().nullable().optional(),
+  forcedReason: z.string().nullable().optional(),
 });
 export type Deploy = z.infer<typeof deploySchema>;
+
+/** The freeze window blocking a scope right now. `until` is a wall-clock time in `timezone`. */
+export const activeFreezeSchema = z.object({
+  name: z.string(),
+  level: z.enum(["org", "app"]),
+  until: z.string(),
+  timezone: z.string(),
+});
+export type ActiveFreezeInfo = z.infer<typeof activeFreezeSchema>;
+
+export const HEALTH_CHECK_LIMITS = {
+  retries: { min: 1, max: 30, default: 5 },
+  intervalSeconds: { min: 1, max: 300, default: 10 },
+  timeoutSeconds: { min: 1, max: 60, default: 5 },
+} as const;
+
+/**
+ * What keel calls after Dokploy finishes a deploy of the scope: `GET url` must answer `expectedStatus` (any 2xx when
+ * null) within `timeoutSeconds`; keel tries up to `retries` times, `intervalSeconds` apart, before failing the deploy.
+ */
+export const healthCheckSchema = z.object({
+  enabled: z.boolean(),
+  url: z
+    .string()
+    .trim()
+    .refine((value) => {
+      try {
+        const url = new URL(value);
+        return url.protocol === "http:" || url.protocol === "https:";
+      } catch {
+        return false;
+      }
+    }, "debe ser una URL http(s) completa, p.ej. https://api.example.com/healthz"),
+  expectedStatus: z.number().int().min(100).max(599).nullable().default(null),
+  retries: z
+    .number()
+    .int()
+    .min(HEALTH_CHECK_LIMITS.retries.min)
+    .max(HEALTH_CHECK_LIMITS.retries.max)
+    .default(HEALTH_CHECK_LIMITS.retries.default),
+  intervalSeconds: z
+    .number()
+    .int()
+    .min(HEALTH_CHECK_LIMITS.intervalSeconds.min)
+    .max(HEALTH_CHECK_LIMITS.intervalSeconds.max)
+    .default(HEALTH_CHECK_LIMITS.intervalSeconds.default),
+  timeoutSeconds: z
+    .number()
+    .int()
+    .min(HEALTH_CHECK_LIMITS.timeoutSeconds.min)
+    .max(HEALTH_CHECK_LIMITS.timeoutSeconds.max)
+    .default(HEALTH_CHECK_LIMITS.timeoutSeconds.default),
+});
+export type HealthCheck = z.infer<typeof healthCheckSchema>;
+
+/**
+ * `PATCH /repos/:owner/:name/scopes/:alias`: what keel does around a deploy of the scope. Only the fields sent
+ * change. `healthCheck: null` removes the health check.
+ */
+export const updateScopeRequestSchema = z.object({
+  healthCheck: healthCheckSchema.nullable().optional(),
+  /** After a failed deploy, deploy again the version the scope ran before. */
+  autoRollback: z.boolean().optional(),
+  /** Whether a second member must approve each deploy. Null: what the app says. */
+  requireApproval: z.boolean().nullable().optional(),
+});
+export type UpdateScopeRequest = z.infer<typeof updateScopeRequestSchema>;
 
 /** A deploy plus the scope details `keel deploys <id>` shows. */
 export interface DeployDetail extends Deploy {
@@ -170,6 +280,13 @@ export const scopeSummarySchema = z.object({
   last: deploySchema.nullable().optional(),
   // Null when the scope can be deployed. Optional: servers before v0.6.0 don't send it.
   lock: scopeLockInfoSchema.nullable().optional(),
+  // Optional: servers before v0.10.0 don't send them.
+  healthCheck: healthCheckSchema.nullable().optional(),
+  autoRollback: z.boolean().optional(),
+  /** Whether its deploys need an approval, with the app's setting applied. */
+  requireApproval: z.boolean().optional(),
+  /** The freeze window active for it now, if any. */
+  freeze: activeFreezeSchema.nullable().optional(),
 });
 export type ScopeSummary = z.infer<typeof scopeSummarySchema>;
 

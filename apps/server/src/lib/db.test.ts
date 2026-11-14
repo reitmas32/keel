@@ -219,9 +219,11 @@ describe.runIf(TEST_DB_ENGINE === "postgres")("Postgres schema", () => {
       "audit_log",
       "ci_results",
       "deploys",
+      "freeze_windows",
       "invites",
       "member_grants",
       "members",
+      "notification_channels",
       "schema_migrations",
       "scope_locks",
       "scopes",
@@ -264,7 +266,7 @@ describe.runIf(TEST_DB_ENGINE === "postgres")("Postgres schema", () => {
       db.transaction((tx) =>
         applyPostgresMigrations(async (sql, params) => ({ rows: await tx.all(sql, params as SqlValue[]) })),
       );
-    expect(await migrate()).toEqual([3]);
+    expect(await migrate()).toEqual(POSTGRES_MIGRATIONS.filter((m) => m.version >= 3).map((m) => m.version));
     const store = new Store(db);
     await expectV060Data(store);
 

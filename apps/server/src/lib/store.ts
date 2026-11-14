@@ -1,15 +1,19 @@
 import { randomUUID } from "node:crypto";
 import {
+  type ApprovalStatus,
   type CiResultRequest,
   canTransition,
   type Deploy,
   type DeployStatus,
+  type HealthCheck,
+  type HealthStatus,
   isTerminal,
   type Role,
   type Version,
   type VersionCiStatus,
 } from "@keel/shared";
 import type { Db, Row, SqlValue } from "./db";
+import type { FreezeWindow } from "./freeze";
 import { BOOTSTRAP_ADMIN } from "./postgres-schema.mjs";
 
 export interface App {
@@ -17,6 +21,8 @@ export interface App {
   name: string;
   repo: string;
   createdAt: string;
+  /** Deploys of its scopes need a second member's approval, unless a scope says otherwise. */
+  requireApproval: boolean;
 }
 
 export type ScopeKind = "application" | "compose";
@@ -31,7 +37,17 @@ export interface Scope {
   /** Compose only: env variable keel sets to the version tag before redeploying. */
   tagVariable: string | null;
   createdAt: string;
+  /** What to call after Dokploy finishes a deploy; null without one. */
+  healthCheck: HealthCheck | null;
+  /** After a failed deploy, deploy again the version the scope ran before. */
+  autoRollback: boolean;
+  /** Overrides the app's `requireApproval`; null follows it. */
+  requireApproval: boolean | null;
 }
+
+/** Whether deploys to `scope` need an approval: its own setting, or else its app's. */
+export const approvalRequired = (app: Pick<App, "requireApproval">, scope: Pick<Scope, "requireApproval">) =>
+  scope.requireApproval ?? app.requireApproval;
 
 export interface CiResult {
   repo: string;
@@ -47,6 +63,21 @@ export interface DeployRecord extends Omit<Deploy, "service"> {
   deployStartedAt: string | null;
   ciPassedAt: string | null;
   finishedAt: string | null;
+  rollbackOf: string | null;
+  healthStatus: HealthStatus | null;
+  /** Health checks made so far, and when the last one started. */
+  healthAttempts: number;
+  healthCheckedAt: string | null;
+  requestedByMemberId: string | null;
+  forcedBy: string | null;
+  forcedReason: string | null;
+  approval: {
+    status: ApprovalStatus;
+    by: string | null;
+    byMemberId: string | null;
+    at: string | null;
+    reason: string | null;
+  } | null;
 }
 
 export interface ApiToken {
@@ -123,12 +154,71 @@ export interface ScopeLockRecord {
   createdAt: string;
 }
 
+export const CHANNEL_KINDS = ["slack", "discord", "webhook"] as const;
+export type ChannelKind = (typeof CHANNEL_KINDS)[number];
+
+/** Where keel sends notifications. `url` and `secret` never leave the server unmasked. */
+export interface NotificationChannel {
+  id: string;
+  name: string;
+  kind: ChannelKind;
+  url: string;
+  /** Generic webhooks only: signs the body. */
+  secret: string | null;
+  /** Event names, or `["*"]` for all. */
+  events: string[];
+  repoPattern: string;
+  scopePattern: string;
+  enabled: boolean;
+  createdAt: string;
+}
+
+const toChannel = (r: Row): NotificationChannel => ({
+  id: r.id as string,
+  name: r.name as string,
+  kind: r.kind as ChannelKind,
+  url: r.url as string,
+  secret: (r.secret as string | null) ?? null,
+  events: (r.events as string).split(",").filter(Boolean),
+  repoPattern: r.repo_pattern as string,
+  scopePattern: r.scope_pattern as string,
+  enabled: Number(r.enabled) === 1,
+  createdAt: r.created_at as string,
+});
+
+const toFreeze = (r: Row): FreezeWindow => ({
+  id: r.id as string,
+  appId: (r.app_id as string | null) ?? null,
+  name: r.name as string,
+  kind: r.kind as FreezeWindow["kind"],
+  timezone: r.timezone as string,
+  startsAt: (r.starts_at as string | null) ?? null,
+  endsAt: (r.ends_at as string | null) ?? null,
+  days: (r.days as string).split(",").filter(Boolean).map(Number),
+  startTime: (r.start_time as string | null) ?? null,
+  endTime: (r.end_time as string | null) ?? null,
+  scopePattern: r.scope_pattern as string,
+  enabled: Number(r.enabled) === 1,
+  createdBy: (r.created_by as string | null) ?? null,
+  createdAt: r.created_at as string,
+});
+
 const toApp = (r: Row): App => ({
   id: r.id as string,
   name: r.name as string,
   repo: r.repo as string,
   createdAt: r.created_at as string,
+  requireApproval: Number(r.require_approval ?? 0) === 1,
 });
+
+function parseHealthCheck(raw: unknown): HealthCheck | null {
+  if (typeof raw !== "string" || !raw) return null;
+  try {
+    return JSON.parse(raw) as HealthCheck;
+  } catch {
+    return null;
+  }
+}
 
 const toScope = (r: Row): Scope => ({
   id: r.id as string,
@@ -139,6 +229,9 @@ const toScope = (r: Row): Scope => ({
   dokployId: r.dokploy_id as string,
   tagVariable: (r.tag_variable as string | null) ?? null,
   createdAt: r.created_at as string,
+  healthCheck: parseHealthCheck(r.health_check),
+  autoRollback: Number(r.auto_rollback ?? 0) === 1,
+  requireApproval: r.require_approval == null ? null : Number(r.require_approval) === 1,
 });
 
 const toDeploy = (r: Row): DeployRecord => ({
@@ -156,6 +249,22 @@ const toDeploy = (r: Row): DeployRecord => ({
   requestedBy: (r.requested_by as string | null) ?? null,
   createdAt: r.created_at as string,
   updatedAt: r.updated_at as string,
+  rollbackOf: (r.rollback_of as string | null) ?? null,
+  healthStatus: (r.health_status as HealthStatus | null) ?? null,
+  healthAttempts: Number(r.health_attempts ?? 0),
+  healthCheckedAt: (r.health_checked_at as string | null) ?? null,
+  requestedByMemberId: (r.requested_by_member_id as string | null) ?? null,
+  forcedBy: (r.forced_by as string | null) ?? null,
+  forcedReason: (r.forced_reason as string | null) ?? null,
+  approval: r.approval_status
+    ? {
+        status: r.approval_status as ApprovalStatus,
+        by: (r.approval_by as string | null) ?? null,
+        byMemberId: (r.approval_by_member_id as string | null) ?? null,
+        at: (r.approval_at as string | null) ?? null,
+        reason: (r.approval_reason as string | null) ?? null,
+      }
+    : null,
 });
 
 const toApiToken = (r: Row): ApiToken => ({
@@ -271,7 +380,13 @@ export class Store {
   // --- apps ---
 
   async createApp(input: { name: string; repo: string; ciTokenHash: string }, now: Date): Promise<App> {
-    const app = { id: randomUUID(), name: input.name, repo: normalizeRepo(input.repo), createdAt: now.toISOString() };
+    const app: App = {
+      id: randomUUID(),
+      name: input.name,
+      repo: normalizeRepo(input.repo),
+      createdAt: now.toISOString(),
+      requireApproval: false,
+    };
     await this.db.run("INSERT INTO apps (id, name, repo, ci_token_hash, created_at) VALUES (?, ?, ?, ?, ?)", [
       app.id,
       app.name,
@@ -305,14 +420,28 @@ export class Store {
     await this.db.run("UPDATE apps SET ci_token_hash = ? WHERE id = ?", [hash, appId]);
   }
 
+  async setAppRequireApproval(id: string, required: boolean): Promise<void> {
+    await this.db.run("UPDATE apps SET require_approval = ? WHERE id = ?", [required ? 1 : 0, id]);
+  }
+
   async deleteApp(id: string): Promise<void> {
     await this.db.run("DELETE FROM apps WHERE id = ?", [id]);
   }
 
   // --- scopes ---
 
-  async addScope(input: Omit<Scope, "id" | "createdAt">, now: Date): Promise<Scope> {
-    const scope: Scope = { ...input, id: randomUUID(), createdAt: now.toISOString() };
+  async addScope(
+    input: Omit<Scope, "id" | "createdAt" | "healthCheck" | "autoRollback" | "requireApproval">,
+    now: Date,
+  ): Promise<Scope> {
+    const scope: Scope = {
+      ...input,
+      id: randomUUID(),
+      createdAt: now.toISOString(),
+      healthCheck: null,
+      autoRollback: false,
+      requireApproval: null,
+    };
     await this.db.run(
       "INSERT INTO scopes (id, app_id, alias, dokploy_url, kind, dokploy_id, tag_variable, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
       [
@@ -349,6 +478,26 @@ export class Store {
   async getScopeByAlias(appId: string, alias: string): Promise<Scope | undefined> {
     const row = await this.db.get("SELECT * FROM scopes WHERE app_id = ? AND alias = ?", [appId, alias]);
     return row ? toScope(row) : undefined;
+  }
+
+  /** Changes only the settings given. */
+  async updateScopeSettings(
+    id: string,
+    settings: { healthCheck?: HealthCheck | null; autoRollback?: boolean; requireApproval?: boolean | null },
+  ): Promise<void> {
+    if (settings.requireApproval !== undefined) {
+      const value = settings.requireApproval === null ? null : settings.requireApproval ? 1 : 0;
+      await this.db.run("UPDATE scopes SET require_approval = ? WHERE id = ?", [value, id]);
+    }
+    if (settings.healthCheck !== undefined) {
+      await this.db.run("UPDATE scopes SET health_check = ? WHERE id = ?", [
+        settings.healthCheck ? JSON.stringify(settings.healthCheck) : null,
+        id,
+      ]);
+    }
+    if (settings.autoRollback !== undefined) {
+      await this.db.run("UPDATE scopes SET auto_rollback = ? WHERE id = ?", [settings.autoRollback ? 1 : 0, id]);
+    }
   }
 
   async deleteScope(id: string): Promise<void> {
@@ -645,6 +794,110 @@ export class Store {
     };
   }
 
+  // --- notification channels ---
+
+  async createChannel(
+    input: Omit<NotificationChannel, "id" | "createdAt" | "enabled">,
+    now: Date,
+  ): Promise<NotificationChannel> {
+    const id = randomUUID();
+    await this.db.run(
+      `INSERT INTO notification_channels (id, name, kind, url, secret, events, repo_pattern, scope_pattern, enabled, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+      [
+        id,
+        input.name,
+        input.kind,
+        input.url,
+        input.secret,
+        input.events.join(","),
+        input.repoPattern,
+        input.scopePattern,
+        now.toISOString(),
+      ],
+    );
+    return (await this.getChannel(id)) as NotificationChannel;
+  }
+
+  async listChannels(): Promise<NotificationChannel[]> {
+    return (await this.db.all("SELECT * FROM notification_channels ORDER BY created_at, name")).map(toChannel);
+  }
+
+  async getChannel(id: string): Promise<NotificationChannel | undefined> {
+    const row = await this.db.get("SELECT * FROM notification_channels WHERE id = ?", [id]);
+    return row ? toChannel(row) : undefined;
+  }
+
+  async setChannelEnabled(id: string, enabled: boolean): Promise<void> {
+    await this.db.run("UPDATE notification_channels SET enabled = ? WHERE id = ?", [enabled ? 1 : 0, id]);
+  }
+
+  async deleteChannel(id: string): Promise<void> {
+    await this.db.run("DELETE FROM notification_channels WHERE id = ?", [id]);
+  }
+
+  // --- freeze windows ---
+
+  async createFreeze(input: Omit<FreezeWindow, "id" | "enabled" | "createdAt">, now: Date): Promise<FreezeWindow> {
+    const id = randomUUID();
+    await this.db.run(
+      `INSERT INTO freeze_windows (id, app_id, name, kind, timezone, starts_at, ends_at, days, start_time, end_time,
+         scope_pattern, enabled, created_by, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+      [
+        id,
+        input.appId,
+        input.name,
+        input.kind,
+        input.timezone,
+        input.startsAt,
+        input.endsAt,
+        input.days.join(","),
+        input.startTime,
+        input.endTime,
+        input.scopePattern,
+        input.createdBy,
+        now.toISOString(),
+      ],
+    );
+    return (await this.getFreeze(id)) as FreezeWindow;
+  }
+
+  async getFreeze(id: string): Promise<FreezeWindow | undefined> {
+    const row = await this.db.get("SELECT * FROM freeze_windows WHERE id = ?", [id]);
+    return row ? toFreeze(row) : undefined;
+  }
+
+  /** The organization's windows (`appId` null), one app's, or with `all` every window. */
+  async listFreezes(filter: { appId: string | null } | { all: true }): Promise<FreezeWindow[]> {
+    const rows =
+      "all" in filter
+        ? await this.db.all("SELECT * FROM freeze_windows ORDER BY created_at, name")
+        : filter.appId === null
+          ? await this.db.all("SELECT * FROM freeze_windows WHERE app_id IS NULL ORDER BY created_at, name")
+          : await this.db.all("SELECT * FROM freeze_windows WHERE app_id = ? ORDER BY created_at, name", [
+              filter.appId,
+            ]);
+    return rows.map(toFreeze);
+  }
+
+  /** The windows that can apply to an app: the organization's and its own, enabled. */
+  async freezesFor(appId: string): Promise<FreezeWindow[]> {
+    const rows = await this.db.all(
+      "SELECT * FROM freeze_windows WHERE enabled = 1 AND (app_id IS NULL OR app_id = ?) ORDER BY created_at",
+      [appId],
+    );
+    return rows.map(toFreeze);
+  }
+
+  async setFreezeEnabled(id: string, enabled: boolean): Promise<void> {
+    await this.db.run("UPDATE freeze_windows SET enabled = ? WHERE id = ?", [enabled ? 1 : 0, id]);
+  }
+
+  async deleteFreeze(id: string): Promise<void> {
+    await this.db.run("DELETE FROM freeze_windows WHERE id = ?", [id]);
+  }
+
   // --- CI results ---
 
   async upsertCiResult(result: CiResult): Promise<void> {
@@ -771,6 +1024,12 @@ export class Store {
       status: DeployStatus;
       error?: string;
       requestedBy?: string | null;
+      requestedByMemberId?: string | null;
+      rollbackOf?: string | null;
+      /** The deploy waits for a second member's approval before it starts. */
+      needsApproval?: boolean;
+      /** Forced through an active freeze window. */
+      forced?: { by: string; reason: string } | null;
     },
     now: Date,
   ): Promise<DeployRecord> {
@@ -778,8 +1037,9 @@ export class Store {
     const ts = now.toISOString();
     await this.db.run(
       `INSERT INTO deploys (id, repo, tag, sha, scope_id, scope_alias, status, error, ci_passed_at, finished_at,
-         requested_by, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         requested_by, requested_by_member_id, rollback_of, approval_status, forced_by, forced_reason,
+         created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         normalizeRepo(input.repo),
@@ -793,6 +1053,11 @@ export class Store {
         input.status === "ci_passed" ? ts : null,
         isTerminal(input.status) ? ts : null,
         input.requestedBy ?? null,
+        input.requestedByMemberId ?? null,
+        input.rollbackOf ?? null,
+        input.needsApproval && !isTerminal(input.status) ? "pending" : null,
+        input.forced?.by ?? null,
+        input.forced?.reason ?? null,
         ts,
         ts,
       ],
@@ -824,6 +1089,25 @@ export class Store {
     return (await this.db.all(sql, [...params, limit])).map(toDeploy);
   }
 
+  /** How many deploys are in each status, for /metrics. */
+  async countDeploysByStatus(): Promise<Record<string, number>> {
+    const rows = await this.db.all("SELECT status, count(*) AS n FROM deploys GROUP BY status");
+    return Object.fromEntries(rows.map((r) => [r.status as string, Number(r.n)]));
+  }
+
+  /** Deploys still waiting for an approval. */
+  async countPendingApprovals(): Promise<number> {
+    const row = await this.db.get(
+      "SELECT count(*) AS n FROM deploys WHERE approval_status = 'pending' AND status IN ('waiting_ci', 'ci_passed')",
+    );
+    return Number(row?.n ?? 0);
+  }
+
+  /** A trivial query: throws when the database can't answer. */
+  async ping(): Promise<void> {
+    await this.db.get("SELECT 1 AS ok");
+  }
+
   /** Deploys of a repo whose id starts with `prefix`, like git's short commit hashes. */
   async findDeploysByPrefix(repo: string, prefix: string): Promise<DeployRecord[]> {
     // Without LIKE's wildcards (and Postgres's default escape character) the prefix matches literally in both engines.
@@ -843,18 +1127,20 @@ export class Store {
     id: string,
     to: DeployStatus,
     now: Date,
-    extra: { error?: string; deployStartedAt?: Date } = {},
+    extra: { error?: string; deployStartedAt?: Date; healthStatus?: HealthStatus } = {},
   ): Promise<DeployRecord | undefined> {
     const current = await this.getDeploy(id);
     if (!current || !canTransition(current.status, to)) return undefined;
     const result = await this.db.run(
       `UPDATE deploys SET status = ?, error = ?, deploy_started_at = COALESCE(?, deploy_started_at),
+         health_status = COALESCE(?, health_status),
          ci_passed_at = COALESCE(?, ci_passed_at), finished_at = COALESCE(?, finished_at), updated_at = ?
        WHERE id = ? AND status = ?`,
       [
         to,
         extra.error ?? null,
         extra.deployStartedAt?.toISOString() ?? null,
+        extra.healthStatus ?? null,
         to === "ci_passed" ? now.toISOString() : null,
         isTerminal(to) ? now.toISOString() : null,
         now.toISOString(),
@@ -863,6 +1149,37 @@ export class Store {
       ],
     );
     return result.changes === 1 ? this.getDeploy(id) : undefined;
+  }
+
+  /**
+   * Records the decision on a pending approval. Returns false when it was no longer pending (someone else decided
+   * first, or the deploy ended), so a deploy is approved or rejected exactly once.
+   */
+  async decideApproval(
+    id: string,
+    decision: { status: "approved" | "rejected"; by: string; byMemberId: string | null; reason: string | null },
+    now: Date,
+  ): Promise<boolean> {
+    const { changes } = await this.db.run(
+      `UPDATE deploys SET approval_status = ?, approval_by = ?, approval_by_member_id = ?, approval_at = ?,
+         approval_reason = ?, updated_at = ?
+       WHERE id = ? AND approval_status = 'pending' AND status IN ('waiting_ci', 'ci_passed')`,
+      [decision.status, decision.by, decision.byMemberId, now.toISOString(), decision.reason, now.toISOString(), id],
+    );
+    return changes === 1;
+  }
+
+  /**
+   * Takes the next health check of a `deploying` deploy: counts the attempt and stamps when it started. Returns false
+   * when another replica took it first (the count no longer matches), so each attempt runs once.
+   */
+  async claimHealthAttempt(id: string, attemptsSoFar: number, now: Date): Promise<boolean> {
+    const { changes } = await this.db.run(
+      `UPDATE deploys SET health_status = 'checking', health_attempts = ?, health_checked_at = ?, updated_at = ?
+       WHERE id = ? AND status = 'deploying' AND health_attempts = ?`,
+      [attemptsSoFar + 1, now.toISOString(), now.toISOString(), id, attemptsSoFar],
+    );
+    return changes === 1;
   }
 
   /**

@@ -91,7 +91,7 @@ export const LEGACY_V060_DATA = [
 /** What LEGACY_V050_DATA holds, read through the Store with the new names. */
 export async function expectV050Data(store: Store) {
   expect(await store.listApps()).toEqual([
-    { id: "s1", name: "app", repo: "konectus-io/app", createdAt: "2026-10-26T12:00:00.000Z" },
+    { id: "s1", name: "app", repo: "konectus-io/app", createdAt: "2026-10-26T12:00:00.000Z", requireApproval: false },
   ]);
   expect(await store.listScopes("s1")).toEqual([
     expect.objectContaining({ id: "sv1", appId: "s1", alias: "prod", kind: "compose", tagVariable: "DOCKER_TAG" }),
