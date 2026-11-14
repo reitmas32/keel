@@ -30,6 +30,11 @@ services:
       # Métricas en /api/metrics (apagadas sin token) y formato de logs.
       KEEL_METRICS_TOKEN: ${KEEL_METRICS_TOKEN:-}
       KEEL_LOG_FORMAT: ${KEEL_LOG_FORMAT:-json}
+      # Login con Foundathyon Accounts (v0.11.0): las tres o ninguna. Para entrar hay que ser miembro de keel.
+      ACCOUNTS_URL: ${ACCOUNTS_URL:-}
+      ACCOUNTS_PUBLISHABLE_KEY: ${ACCOUNTS_PUBLISHABLE_KEY:-}
+      ACCOUNTS_APP_ID: ${ACCOUNTS_APP_ID:-}
+      ACCOUNTS_ISSUER: ${ACCOUNTS_ISSUER:-}
       # Base de datos: SQLite en el volumen /data por defecto. Para Postgres (p.ej. varias réplicas de keel),
       # descomenta estas dos líneas y define POSTGRES_DSN en el Environment.
       # DB_ENGINE: postgres

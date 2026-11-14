@@ -240,3 +240,40 @@ export async function loginBreakGlass(store: Store, now: Date): Promise<Member |
   await audit(store, { name: member.name, memberId: member.id }, "login", { method: "KEEL_ADMIN_PASSWORD" }, now);
   return member;
 }
+
+/**
+ * The keel member behind an identity Accounts verified. Accounts only says who it is: the email must belong to a keel
+ * member who isn't disabled. An invited member is activated by its first Accounts login (its invite link stops
+ * working). Undefined when the email isn't a member or the member is disabled.
+ */
+export async function loginWithAccounts(
+  store: Store,
+  identity: { email: string; userId: string },
+  method: "accounts_password" | "accounts_email_code",
+  now: Date,
+): Promise<Member | undefined> {
+  const member = await store.getMemberByEmail(identity.email);
+  if (!member || member.status === "disabled") return undefined;
+  return store.transaction(async (tx) => {
+    if (member.status === "invited") {
+      await tx.setMemberStatus(member.id, "active");
+      await tx.deletePendingInvites(member.id);
+      await audit(
+        tx,
+        { name: member.name, memberId: member.id },
+        "member.activate",
+        { memberId: member.id, method },
+        now,
+      );
+    }
+    await tx.touchMemberLogin(member.id, now);
+    await audit(
+      tx,
+      { name: member.name, memberId: member.id },
+      "login",
+      { method, accountsUserId: identity.userId },
+      now,
+    );
+    return (await tx.getMember(member.id)) as Member;
+  });
+}

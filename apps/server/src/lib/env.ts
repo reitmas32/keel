@@ -81,6 +81,12 @@ const envSchema = z
         )
         .default("UTC"),
     ),
+    // Login through Foundathyon Accounts (the same variables as Helm). All three or none.
+    ACCOUNTS_URL: optional(z.url().optional()),
+    ACCOUNTS_PUBLISHABLE_KEY: optional(z.string().trim().min(1).optional()),
+    ACCOUNTS_APP_ID: optional(z.string().trim().min(1).optional()),
+    // The `iss` of Accounts' tokens (default foundathyon-accounts).
+    ACCOUNTS_ISSUER: optional(z.string().trim().min(1).optional()),
     // Public origin of this keel (https://keel.example.com), for links in notifications.
     KEEL_PUBLIC_URL: optional(z.url().optional()),
     // Outgoing notifications configured by environment. They add to the channels created in the admin.
@@ -93,6 +99,17 @@ const envSchema = z
     KEEL_NOTIFY_EVENTS: optional(z.string().trim().optional()),
   })
   .superRefine((env, ctx) => {
+    const accounts = ["ACCOUNTS_URL", "ACCOUNTS_PUBLISHABLE_KEY", "ACCOUNTS_APP_ID"] as const;
+    const set = accounts.filter((name) => env[name]);
+    if (set.length > 0 && set.length < accounts.length) {
+      for (const name of accounts.filter((n) => !env[n])) {
+        ctx.addIssue({
+          code: "custom",
+          path: [name],
+          message: `falta: el login con Accounts necesita ${accounts.join(", ")}.`,
+        });
+      }
+    }
     if (env.DB_ENGINE === "postgres" && !env.POSTGRES_DSN) {
       ctx.addIssue({
         code: "custom",

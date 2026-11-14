@@ -1293,3 +1293,7 @@ fieldset.field {
   border: 0;
   min-width: 0;
 }
+
+.login .filter-chips {
+  margin-bottom: 1rem;
+}
